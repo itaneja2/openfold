@@ -1,0 +1,1113 @@
+import argparse
+import logging
+import math
+import numpy as np
+import os
+import shutil
+import json
+from collections import Counter
+import re
+import glob  
+import sys
+from datetime import date
+import itertools
+import time 
+import pandas as pd 
+
+from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
+    update_timings, relax_protein
+
+logging.basicConfig()
+logger = logging.getLogger(__file__)
+logger.setLevel(level=logging.INFO)
+
+import subprocess 
+import pickle
+
+import random
+import torch
+from torch import nn
+
+from Bio.PDB import PDBParser
+from Bio.PDB.DSSP import dssp_dict_from_pdb_file
+
+torch_versions = torch.__version__.split(".")
+torch_major_version = int(torch_versions[0])
+torch_minor_version = int(torch_versions[1])
+if(
+    torch_major_version > 1 or
+    (torch_major_version == 1 and torch_minor_version >= 12)
+):
+    # Gives a large speedup on Ampere-class GPUs
+    torch.set_float32_matmul_precision("high")
+
+from openfold.config import model_config
+from openfold.data import templates, feature_pipeline, data_pipeline
+from openfold.np import residue_constants, protein
+import openfold.np.relax.relax as relax
+
+from openfold.utils.tensor_utils import (
+    tensor_tree_map,
+)
+from openfold.utils.trace_utils import (
+    pad_feature_dict_seq,
+    trace_model_,
+)
+from scripts.utils import add_data_args
+
+from random_corr_utils.random_corr_sap import gen_randcorr_sap
+from pdb_utils.pdb_utils import align_and_get_rmsd
+import rw_helper_functions
+
+finetune_openfold_path = './finetune_openfold.py'
+
+TRACING_INTERVAL = 50
+asterisk_line = '******************************************************************************'
+
+
+def eval_model(model, config, intrinsic_parameter, epsilon, epsilon_scaling_factor, feature_processor, feature_dict, processed_feature_dict, tag, output_dir, phase, args):
+
+    model.intrinsic_parameter = nn.Parameter(torch.tensor(intrinsic_parameter, dtype=torch.float).to(args.model_device))
+    model.epsilon = nn.Parameter(torch.tensor(epsilon, dtype=torch.float).to(args.model_device)) 
+    model.epsilon_scaling_factor = nn.Parameter(torch.tensor(epsilon_scaling_factor, dtype=torch.float).to(args.model_device))
+
+    print('Tag: %s' % tag)
+    os.makedirs(output_dir, exist_ok=True)
+
+    out, inference_time = run_model_w_intrinsic_dim(model, processed_feature_dict, tag, output_dir, return_inference_time=True)
+
+    # Toss out the recycling dimensions --- we don't need them anymore
+    processed_feature_dict = tensor_tree_map(
+        lambda x: np.array(x[..., -1].cpu()),
+        processed_feature_dict
+    )
+    out = tensor_tree_map(lambda x: np.array(x.cpu()), out)
+    mean_plddt = np.mean(out["plddt"])
+    ptm_score = np.squeeze(out["ptm_score"])
+    num_recycles = int(np.squeeze(out["num_recycles"])) 
+
+    if "iptm_score" in out:
+        iptm_score = np.squeeze(out["iptm_score"])
+        weighted_ptm_score = np.squeeze(out["weighted_ptm_score"])
+    else:
+        iptm_score = None
+        weighted_ptm_score = None 
+
+    unrelaxed_protein = prep_output(
+        out,
+        processed_feature_dict,
+        feature_dict,
+        feature_processor,
+        args.config_preset,
+        args.multimer_ri_gap,
+        args.subtract_plddt
+    )
+
+    output_name = 'temp'
+    model_output_dir_temp = '%s/temp' % output_dir
+    os.makedirs(model_output_dir_temp, exist_ok=True)
+
+    unrelaxed_file_suffix = "_unrelaxed.pdb"
+    if args.cif_output:
+        unrelaxed_file_suffix = "_unrelaxed.cif"
+    unrelaxed_output_path = os.path.join(
+        model_output_dir_temp, f'{output_name}{unrelaxed_file_suffix}'
+    )
+ 
+    with open(unrelaxed_output_path, 'w') as fp:
+        if args.cif_output:
+            fp.write(protein.to_modelcif(unrelaxed_protein))
+        else:
+            fp.write(protein.to_pdb(unrelaxed_protein))
+
+    disordered_percentage = rw_helper_functions.calc_disordered_percentage(unrelaxed_output_path)
+    accept_conformation = rw_helper_functions.accept_criteria(mean_plddt, disordered_percentage, args.mean_plddt_threshold, args.disordered_percentage_threshold)
+    shutil.rmtree(model_output_dir_temp)
+
+    if phase == 'initial': #i.e the initial AF prediction from the original MSA
+        output_name = tag
+        model_output_dir = output_dir
+    else:
+        if accept_conformation:
+            output_name = '%s-A' % tag  
+            model_output_dir = '%s/ACCEPTED' % (output_dir)
+            os.makedirs(model_output_dir, exist_ok=True)
+        else:
+            output_name = '%s-R' % tag 
+            model_output_dir = '%s/REJECTED' % (output_dir) 
+            os.makedirs(model_output_dir, exist_ok=True) 
+
+    unrelaxed_file_suffix = "_unrelaxed.pdb"
+    if args.cif_output:
+        unrelaxed_file_suffix = "_unrelaxed.cif"
+    unrelaxed_output_path = os.path.join(
+        model_output_dir, f'{output_name}{unrelaxed_file_suffix}'
+    )
+ 
+    with open(unrelaxed_output_path, 'w') as fp:
+        if args.cif_output:
+            fp.write(protein.to_modelcif(unrelaxed_protein))
+        else:
+            fp.write(protein.to_pdb(unrelaxed_protein))
+
+
+    logger.info(f"Output written to {unrelaxed_output_path}...")
+
+    return mean_plddt, float(weighted_ptm_score), disordered_percentage, num_recycles, inference_time, accept_conformation, unrelaxed_output_path 
+
+
+def propose_new_epsilon_vanila_rw(intrinsic_dim, cov_type, L=None, sigma=None):
+    if cov_type == 'spherical':
+        epsilon = np.random.standard_normal(intrinsic_dim)
+        epsilon = epsilon/np.linalg.norm(epsilon)
+        #intrinsic_param_proposed = intrinsic_param_curr + epsilon*epsilon_scaling_factor
+    elif cov_type == 'diagonal':
+        if sigma is None:
+            raise ValueError("Sigma is missing. It must be provided if cov_type=diagonal")
+        epsilon = np.squeeze(np.random.normal(np.zeros(intrinsic_dim), sigma, (1,intrinsic_dim)))
+        #intrinsic_param_proposed = intrinsic_param_curr + epsilon*epsilon_scaling_factor
+    elif 'full' in cov_type:
+        if L is None:
+            raise ValueError("Cholesky decomposition is missing. It must be provided if cov_type=full")
+        x = np.random.standard_normal((intrinsic_dim, 1))
+        epsilon = np.dot(L, x).squeeze()
+        #intrinsic_param_proposed = intrinsic_param_curr + epsilon*epsilon_scaling_factor 
+    
+    return epsilon
+
+
+
+def run_rw(
+    pdb_path_initial, 
+    intrinsic_dim, 
+    rw_type, 
+    rw_hp_dict, 
+    num_total_steps, 
+    L, 
+    cov_type, 
+    model, 
+    config, 
+    feature_processor, 
+    feature_dict, 
+    processed_feature_dict, 
+    output_dir, 
+    phase, 
+    save_intrinsic_param, 
+    args,
+    early_stop=False,
+):
+
+    base_tag = '%s_train-%s_rw-%s' % (args.module_config, args.train_hp_config, args.rw_hp_config)
+    base_tag = base_tag.replace('=','-')
+
+    intrinsic_param_initial = np.zeros(intrinsic_dim)
+    epsilon_initial = np.zeros(intrinsic_dim)
+    epsilon_prev = epsilon_initial
+ 
+    num_rejected_steps = 0
+    num_accepted_steps = 0  
+    iter_n = 0 
+    curr_step_iter_n = 0
+    curr_step_aggregate = 0 
+    state_history = [] 
+    conformation_info = [] 
+
+    while (num_rejected_steps+num_accepted_steps) < num_total_steps:
+
+        if rw_type == 'vanila':
+            epsilon_proposed = propose_new_epsilon_vanila_rw(intrinsic_dim, cov_type, L)
+
+        epsilon_cummulative = epsilon_prev+epsilon_proposed
+
+        curr_tag = '%s_iter%d_step-iter%d_step-agg%d' % (base_tag, iter_n, curr_step_iter_n, curr_step_aggregate) 
+        mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, inference_time, accept_conformation, pdb_path_rw = eval_model(model, config, intrinsic_param_initial, epsilon_cummulative, rw_hp_dict['epsilon_scaling_factor'], feature_processor, feature_dict, processed_feature_dict, curr_tag, output_dir, phase, args)    
+        state_history.append(accept_conformation)
+        print('pLDDT: %.3f, IPTM_PTM SCORE: %.3f, disordered percentage: %.3f, num recycles: %d, step: %d' % (mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, curr_step_aggregate)) 
+
+        if accept_conformation:
+            print('STEP %d: ACCEPTED' % curr_step_aggregate)
+            epsilon_prev = epsilon_cummulative #x_i = x_i-1 + eps_i*s --> = s*sum(eps_i)
+            curr_step_iter_n += 1
+            num_accepted_steps += 1
+            rmsd = align_and_get_rmsd(pdb_path_initial, pdb_path_rw)
+            if save_intrinsic_param:
+                conformation_info.append((pdb_path_rw, rmsd, mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, inference_time, epsilon_cummulative, rw_hp_dict['epsilon_scaling_factor']))
+            else:
+                conformation_info.append((pdb_path_rw, rmsd, mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, inference_time, None, None))
+        else:
+            print('STEP %d: REJECTED' % curr_step_aggregate)
+            if early_stop:
+                return state_history, conformation_info
+            else:
+                epsilon_prev = epsilon_initial
+                iter_n += 1
+                curr_step_iter_n = 0 
+                num_rejected_steps += 1 
+
+        curr_step_aggregate += 1
+
+    return state_history, conformation_info
+
+
+def get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data):
+
+    print('GETTING NEW SCALING FACTOR CANDIDATES GIVEN CURRENT:')
+    print(hp_acceptance_rate_dict)
+
+    num_chains = rw_hp_config_data['num_chains']
+    chains_to_update = rw_hp_config_data['chains_to_update']
+    chain_scaling_factor_type = rw_hp_config_data['chain_scaling_factor_type'] 
+
+    if chains_to_update != ['all']:
+        relevant_scaling_factor_idx = [index for index, value in enumerate(chains_to_update) if value == 1] #these correspond to the indices of the chains whose scaling factor is being tuned
+    else:
+        if chain_scaling_factor_type == 'uniform':
+            relevant_scaling_factor_idx = [0]
+        else:
+            relevant_scaling_factor_idx = list(range(0,num_chains))
+
+    curr_scaling_factor_candidates = list(hp_acceptance_rate_dict.keys())
+    curr_scaling_factor_candidates_rel_idx = [tuple(curr_scaling_factor_candidates[i][j] for j in relevant_scaling_factor_idx) for i in range(len(curr_scaling_factor_candidates))] #only looking at scaling factor candidates who are being tuned
+    print('SCALING FACTORS OF CHAINS BEING MODIFIED:')
+    print(curr_scaling_factor_candidates_rel_idx)
+
+    upper_bound_scaling_factor = None
+    lower_bound_scaling_factor = None 
+
+    #find largest eps_scaling factor (where largest defined in terms of sum) greater than target threshold 
+    for key in sorted(curr_scaling_factor_candidates,key=lambda x: sum(x), reverse=True): 
+        acceptance_rate = hp_acceptance_rate_dict[key]
+        if acceptance_rate > rw_hp_config_data['rw_tuning_acceptance_threshold']:
+            key_relevant_idx = tuple(key[i] for i in relevant_scaling_factor_idx)
+            lower_bound_scaling_factor = min(key_relevant_idx)
+            break
+
+    #find smallest eps_scaling factor (where largest defined in terms of sum) less than target threshold 
+    for key in sorted(curr_scaling_factor_candidates,key=lambda x: sum(x)): 
+        acceptance_rate = hp_acceptance_rate_dict[key]
+        if acceptance_rate < rw_hp_config_data['rw_tuning_acceptance_threshold']:
+            key_relevant_idx = tuple(key[i] for i in relevant_scaling_factor_idx)
+            upper_bound_scaling_factor = max(key_relevant_idx)
+            break
+
+    curr_scaling_factor_candidates_rel_idx_flattened = list(itertools.chain(*curr_scaling_factor_candidates_rel_idx))
+ 
+    if lower_bound_scaling_factor is None:
+        lower_bound_scaling_factor = min(curr_scaling_factor_candidates_rel_idx_flattened)/2    
+    if upper_bound_scaling_factor is None:
+        upper_bound_scaling_factor = max(curr_scaling_factor_candidates_rel_idx_flattened)*2
+
+    new_scaling_factor_candidates = list(np.linspace(lower_bound_scaling_factor, upper_bound_scaling_factor, 5))
+    new_scaling_factor_candidates = new_scaling_factor_candidates[1:-1] #exclude first and last element
+    return new_scaling_factor_candidates
+
+
+def get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data):
+
+    print('GETTING OPTIMAL HP GIVEN CURRENT:')
+    print(hp_acceptance_rate_dict)
+
+    upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
+    lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
+    
+    acceptance_rate_delta_dict = {} 
+    for key in sorted(hp_acceptance_rate_dict.keys(),key=lambda x: sum(x)): #sort by eps scaling factor (eps scaling factor is always first element in zipped list) 
+            acceptance_rate = hp_acceptance_rate_dict[key]
+            acceptance_rate_delta_dict[key] = abs(acceptance_rate - rw_hp_config_data['rw_tuning_acceptance_threshold'])
+
+    #get hyperparameters whose acceptance rate is closest to acceptance_threshold (and at least as large as the acceptance threshold) 
+    optimal_hyperparameters = None
+    min_delta = 100
+    for key in sorted(acceptance_rate_delta_dict.keys(),key=lambda x: sum(x)):  
+        acceptance_rate_delta = acceptance_rate_delta_dict[key]
+        acceptance_rate = hp_acceptance_rate_dict[key]
+        if acceptance_rate > upper_bound_acceptance_threshold or acceptance_rate < lower_bound_acceptance_threshold:
+            continue 
+        elif acceptance_rate_delta < min_delta:
+            min_delta = acceptance_rate_delta
+            optimal_hyperparameters = key
+
+    if optimal_hyperparameters is not None:
+        rw_hp_dict = populate_rw_hp_dict(rw_hp_config_data['rw_type'], optimal_hyperparameters)
+    else:
+        rw_hp_dict = {} 
+
+    return rw_hp_dict
+
+             
+def construct_grid_search_combinations(rw_hp_config_data, scaling_factor_candidates):
+
+    num_chains = rw_hp_config_data['num_chains']
+    chains_to_update = rw_hp_config_data['chains_to_update']
+    chain_scaling_factor_type = rw_hp_config_data['chain_scaling_factor_type'] 
+
+    if chain_scaling_factor_type == 'variable':
+
+        scaling_factor_candidates_all = [] 
+        for i in range(0,num_chains):
+            scaling_factor_candidates_all.append(scaling_factor_candidates)
+        grid_search_combinations = list(itertools.product(*scaling_factor_candidates_all))
+
+        if chains_to_update != ['all']: #chains_to_update is a binary vector of length num_chains
+            for i in range(0,len(grid_search_combinations)):
+                grid_search_combinations[i] = list(grid_search_combinations[i])
+                for j in range(0,len(grid_search_combinations[i])):
+                    if chains_to_update[j] == 0:
+                        grid_search_combinations[i][j] = 1. 
+                grid_search_combinations[i] = tuple(grid_search_combinations[i])
+
+        grid_search_combinations = list(set(grid_search_combinations)) #remove duplicates              
+        grid_search_combinations = sorted(grid_search_combinations, key=lambda x: sum(x))
+
+        return grid_search_combinations
+ 
+    elif chain_scaling_factor_type == 'uniform':
+
+        if chains_to_update != ['all']: #chains_to_update is a binary vector of length num_chains, so only a subset of chains are to be updated 
+            scaling_factor_candidates_all = []
+            for i in range(0,len(scaling_factor_candidates)):
+                scaling_factor_candidates_all.append(tuple([scaling_factor_candidates[i]]*num_chains))
+
+            for i in range(0,len(scaling_factor_candidates_all)):
+                scaling_factor_candidates_all[i] = list(scaling_factor_candidates_all[i])
+                for j in range(0,len(scaling_factor_candidates_all[i])):
+                    if chains_to_update[j] == 0:
+                        scaling_factor_candidates_all[i][j] = 1. #keep this scaling factor constant  
+                scaling_factor_candidates_all[i] = tuple(scaling_factor_candidates_all[i])
+        else: #only single scaling factor is being applied to all chains
+            scaling_factor_candidates_all = []
+            for i in range(0,len(scaling_factor_candidates)):
+                scaling_factor_candidates_all.append(tuple([scaling_factor_candidates[i]]))
+
+        scaling_factor_candidates_all = sorted(scaling_factor_candidates_all, key=lambda x: sum(x))
+
+        return scaling_factor_candidates_all 
+
+def populate_rw_hp_dict(rw_type, items):
+    rw_hp_dict = {} 
+    rw_hp_dict['epsilon_scaling_factor'] = list(items)
+    return rw_hp_dict
+
+
+
+def main(args):
+    # Create the output directory
+    os.makedirs(args.output_dir_base, exist_ok=True)
+    output_dir_name = args.output_dir_base.split('/')[-1]
+
+    models_to_run = ['model_1_multimer_v3', 'model_2_multimer_v3', 'model_3_multimer_v3', 'model_4_multimer_v3', 'model_5_multimer_v3']
+    jax_param_path_dict = {} 
+    for m in models_to_run:
+        jax_param_path_dict[m] = ''.join((args.jax_param_parent_path, '/params_', m, '.npz'))
+    
+    print('MODEL LIST:')
+    print(jax_param_path_dict)
+
+    output_dir = '%s/%s/%s/train-%s/rw-%s' % (args.output_dir_base, 'rw_v4', args.module_config, args.train_hp_config, args.rw_hp_config)
+    l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'rw_v4', args.module_config)
+    l2_output_dir = '%s/%s/%s/train-%s' % (args.output_dir_base, 'rw_v4', args.module_config, args.train_hp_config)
+    
+    output_dir = os.path.abspath(output_dir)
+    l1_output_dir = os.path.abspath(l1_output_dir)
+    l2_output_dir = os.path.abspath(l2_output_dir) 
+
+    print('Output Directory: %s' % output_dir)
+
+    os.makedirs(output_dir, exist_ok=True)
+    alignment_dir = args.alignment_dir
+    file_id = os.listdir(alignment_dir)
+    if len(file_id) > 1:
+        raise ValueError("should only be a single directory under %s" % alignment_dir)
+    else:
+        file_id = file_id[0] #e.g 1xyz-1xyz
+    alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+    print("alignment directory with file_id: %s" % alignment_dir_w_file_id)
+    
+    if args.fasta_file is None:
+        pattern = "%s/*.fasta" % alignment_dir_w_file_id
+        files = glob.glob(pattern, recursive=True)
+        if len(files) == 1:
+            fasta_file = files[0]
+        else: 
+            raise FileNotFoundError("Multiple .fasta files found in alignment_dir -- should only be one")
+    else:
+        fasta_file = args.fasta_file
+
+    with open(fasta_file, "r") as fp:
+        fasta_data = fp.read()
+    _, seqs = parse_fasta(fasta_data)
+    print(seqs)
+
+ 
+    random_seed = args.data_random_seed
+    if random_seed is None:
+        random_seed = random.randrange(2**32)
+
+    np.random.seed(random_seed)
+    torch.manual_seed(random_seed + 1)
+ 
+    with open('./rw_multimer_config.json') as f:
+        rw_config_data = json.load(f)
+
+    module_config_data = rw_config_data['SAID'][args.module_config]
+    rw_hp_config_data = rw_config_data['hyperparameter']['rw'][args.rw_hp_config]
+    train_hp_config_data = rw_config_data['hyperparameter']['train'][args.train_hp_config]
+    intrinsic_dim = module_config_data['intrinsic_dim']
+
+    pattern = "%s/features.pkl" % alignment_dir_w_file_id
+    files = glob.glob(pattern, recursive=True)
+    if len(files) == 1:
+        features_output_path = files[0]
+        print('features.pkl path: %s' % features_output_path)
+    else:
+        features_output_path = ''
+
+    if os.path.isfile(features_output_path):
+        feature_dict = np.load(features_output_path, allow_pickle=True) #this is used for all predictions, so this assumes you are predicting a single sequence 
+    else:
+        template_featurizer = templates.HmmsearchHitFeaturizer(
+            mmcif_dir=args.template_mmcif_dir,
+            max_template_date=args.max_template_date,
+            max_hits=4,
+            kalign_binary_path=args.kalign_binary_path,
+            release_dates_path=args.release_dates_path,
+            obsolete_pdbs_path=args.obsolete_pdbs_path
+        )
+
+        data_processor_monomer = data_pipeline.DataPipeline(
+            template_featurizer=template_featurizer,
+        )
+        data_processor_multimer = data_pipeline.DataPipelineMultimer(
+            monomer_data_pipeline=data_processor_monomer
+        )
+
+        feature_dict = data_processor_multimer.process_fasta(
+            fasta_path=fasta_file, alignment_dir=alignment_dir_w_file_id,
+        )
+
+        features_output_path = os.path.join(alignment_dir_w_file_id, 'features.pkl')
+        with open(features_output_path, 'wb') as f:
+            pickle.dump(feature_dict, f, protocol=4)
+        print('SAVED %s' % features_output_path)
+
+        #raise FileNotFoundError('%s/features.pkl not found' % alignment_dir_w_file_id)
+
+    print(feature_dict)
+    num_chains = int(feature_dict['assembly_num_chains']) 
+    module_config_data['num_chains'] = num_chains 
+    rw_hp_config_data['num_chains'] = num_chains
+    print('NUM CHAINS: %d' % num_chains)
+
+    #perform checks on config file
+    chains_to_update = rw_hp_config_data['chains_to_update']
+    chain_scaling_factor_type = rw_hp_config_data['chain_scaling_factor_type'] 
+
+    print("CHAINS TO UPDATE:")
+    print(chains_to_update)
+    print("CHAIN SCALING FACTOR TYPE:")
+    print(chain_scaling_factor_type)
+
+    if chains_to_update != ['all']:
+        if len(chains_to_update) != num_chains:
+            raise ValueError("if chains_to_update not 'all', then must be a binary vector of length num_chains")
+        for c in chains_to_update:
+            if c not in [0,1]:
+                raise ValueError("if chains_to_update not 'all', then must be a binary vector of length num_chains")
+    if chain_scaling_factor_type not in ["uniform", "variable"]:
+        raise ValueError("chain_scaling_factor_type must either be 'uniform' or 'variable'")
+    if module_config_data['layer_to_update'] == ['all'] and chain_scaling_factor_type == 'variable':
+        raise ValueError("layer_to_update cannot be 'all' when chain_scaling_factor_type is 'variable'. 'variable' is only allowed when a subset of specific layers with are being modified")
+
+    use_chainmask = False #if chains_to_update = 'all' and chain_scaling_factor_type = 'uniform' 
+    if chains_to_update != ['all']:
+        use_chainmask = True
+    else:
+        if chain_scaling_factor_type == 'variable':
+            use_chainmask = True
+
+    config_dict = {}
+    for m in models_to_run:
+        if use_chainmask:
+            config_name = 'multimer-custom_finetuning-SAID_chainmask-all-%s' % m #model with fine tuning layer 
+        else:
+            config_name = 'multimer-custom_finetuning-SAID-all-%s' % m #model with fine tuning layer  
+        config = model_config(config_name, long_sequence_inference=args.long_sequence_inference)
+
+        if args.recycle_wo_early_stopping:
+            config.model.recycle_early_stop_tolerance = -1 #do full recycling 
+            config.data.common.max_recycling_iters = args.max_recycling_iters
+            num_recycles_str = str(args.max_recycling_iters+1)
+        else:
+            num_recycles_str = 'early_stopping'
+
+        if 'chainmask' in config.custom_fine_tuning.ft_method:
+            total_seq_len = sum(len(s) for s in seqs)
+            mask_all = [] 
+            chain_mask_row_all = []
+            chain_mask_col_all = [] 
+            for i,curr_seq in enumerate(seqs):
+                mask = torch.zeros(total_seq_len)
+                mask_start_pos = sum([len(s) for s in seqs[0:i]])
+                mask_end_pos = mask_start_pos+len(curr_seq)
+                mask[mask_start_pos:mask_end_pos] = 1. 
+                mask_all.append(mask)
+                chain_mask_row = mask.unsqueeze(1).to('cuda').to(dtype=torch.bfloat16)
+                chain_mask_col = mask.reshape(mask.shape[0],1,1).to('cuda').to(dtype=torch.bfloat16) #this is for col attention (where s,r,c -> r,s,c)
+                chain_mask_row_all.append(chain_mask_row)
+                chain_mask_col_all.append(chain_mask_col)
+
+            chain_mask_row_all = torch.stack(chain_mask_row_all)
+            chain_mask_col_all = torch.stack(chain_mask_col_all)
+
+            chain_mask_row_all.requires_grad_(False)
+            chain_mask_col_all.requires_grad_(False)
+            config.model.extra_msa.extra_msa_stack.chain_mask_row = chain_mask_row_all
+            config.model.extra_msa.extra_msa_stack.chain_mask_col = chain_mask_col_all
+            config.model.evoformer_stack.chain_mask_row = chain_mask_row_all 
+            config.model.evoformer_stack.chain_mask_col = chain_mask_col_all
+        else:
+            config.model.extra_msa.extra_msa_stack.chain_mask_row = None
+            config.model.extra_msa.extra_msa_stack.chain_mask_col = None
+            config.model.evoformer_stack.chain_mask_row = None 
+            config.model.evoformer_stack.chain_mask_col = None 
+
+        if m not in config_dict:
+            config_dict[m] = config
+            if(args.trace_model):
+                if(not config.data.predict.fixed_size):
+                    raise ValueError(
+                        "Tracing requires that fixed_size mode be enabled in the config"
+                    )
+    for m in models_to_run:
+        config_dict[m].custom_fine_tuning.num_chains = num_chains
+
+    feature_processor = feature_pipeline.FeaturePipeline(config_dict[list(config_dict.keys())[0]].data)
+    intrinsic_param_zero = np.zeros(intrinsic_dim)
+ 
+    initial_pred_dir = '%s/initial_pred' %  l1_output_dir
+
+    ############################################
+
+    if args.skip_initial_pred_phase:
+
+        initial_pred_info_fname = '%s/initial_pred_info.pkl' % initial_pred_dir
+        seed_fname = '%s/seed.txt' % initial_pred_dir
+        if os.path.exists(initial_pred_info_fname) and os.path.exists(seed_fname):
+            with open(initial_pred_info_fname, 'rb') as f:
+                initial_pred_path_dict = pickle.load(f)
+            random_seed = int(np.loadtxt(seed_fname))
+            np.random.seed(random_seed)
+            torch.manual_seed(random_seed + 1)
+            print('SKIPPING INITIAL PRED PHASE')
+        else:
+            raise FileNotFoundError('%s not found' % initial_pred_info_fname)
+
+        #process features after updating seed 
+        print('PROCESSING FEATURES')
+        processed_feature_dict = feature_processor.process_features(
+            feature_dict, mode='predict', is_multimer=True
+        )
+        processed_feature_dict = {
+            k:torch.as_tensor(v, device=args.model_device)
+            for k,v in processed_feature_dict.items()
+        }
+
+    else:
+
+        #this uses the standard inference configuration with dropout for the initial prediction  
+        model_dict = {} 
+        for m in models_to_run: 
+            model = load_model_w_intrinsic_param(config_dict[m], module_config_data, args.model_device, None, jax_param_path_dict[m], intrinsic_param_zero, enable_dropout=True)
+            if m not in model_dict:
+                model_dict[m] = model
+
+        print('PROCESSING FEATURES')
+        processed_feature_dict = feature_processor.process_features(
+            feature_dict, mode='predict', is_multimer=True
+        )
+        processed_feature_dict = {
+            k:torch.as_tensor(v, device=args.model_device)
+            for k,v in processed_feature_dict.items()
+        }
+
+        t0 = time.perf_counter()
+        initial_pred_path_dict = {} 
+        conformation_info_dict = {}
+        for i in range(0,len(models_to_run)):
+            model_name = models_to_run[i]
+            initial_pred_output_dir = '%s/%s' %  (initial_pred_dir, model_name)
+            tag = 'initial_pred_model_%d' % (i+1)
+            print('RUNNING model %s' % model_name)
+            mean_plddt_initial, weighted_ptm_score_initial,  disordered_percentage_initial, _, _, _, pdb_path_initial = eval_model(model_dict[model_name], config_dict[model_name], intrinsic_param_zero, intrinsic_param_zero, [0]*num_chains, feature_processor, feature_dict, processed_feature_dict, tag, initial_pred_output_dir, 'initial', args)   
+            print('pLDDT: %.3f, IPTM_PTM SCORE: %.3f, disordered percentage: %.3f, INITIAL' % (mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial)) 
+            conformation_info_dict[model_name] = (pdb_path_initial, mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial) 
+            initial_pred_path_dict[model_name] = pdb_path_initial 
+            print(initial_pred_path_dict)   
+
+        run_time = time.perf_counter() - t0
+        timing_dict = {'initial_pred': run_time} 
+        rw_helper_functions.write_timings(timing_dict, output_dir, 'inital_pred')
+
+        initial_pred_info_fname = '%s/initial_pred_info.pkl' % initial_pred_dir
+        with open(initial_pred_info_fname, 'wb') as f:
+            pickle.dump(initial_pred_path_dict, f)
+
+        conformation_info_fname = '%s/conformation_info.pkl' % initial_pred_dir
+        with open(conformation_info_fname, 'wb') as f:
+            pickle.dump(conformation_info_dict, f)
+
+        seed_fname = '%s/seed.txt' % initial_pred_dir
+        np.savetxt(seed_fname, [random_seed], fmt='%d')
+        
+    aligned_models_list_all = [] 
+    aligned_models_dict = {} #to keep track of max rmsd between each pair of structures  
+
+    for i,model_name_i in enumerate(models_to_run):
+        pred_i_path = initial_pred_path_dict[model_name_i]
+        for j,model_name_j in enumerate(models_to_run):
+            if i != j:        
+                pred_j_path = initial_pred_path_dict[model_name_j]
+                pred_j_fname = '%s.pdb' % file_id #during training, expected filename is without chain_id (i.e 1xyz-1xyz) 
+                aligned_output_dir = '%s/%s/%s/initial_pred_aligned-%s/%s' % (args.output_dir_base, 'rw_v4', args.module_config, model_name_i, model_name_j)
+                pred_j_aligned_path = os.path.join(aligned_output_dir,pred_j_fname)
+                os.makedirs(aligned_output_dir, exist_ok=True)
+                shutil.copy(pred_j_path, pred_j_aligned_path)
+                rmsd = align_and_get_rmsd(pred_i_path, pred_j_aligned_path)
+                print('RMSD between model %d and model %d: %.3f' % (i+1, j+1, rmsd))
+                model_ij_info = (model_name_i,model_name_j,pred_i_path,pred_j_aligned_path,rmsd)
+                aligned_models_list_all.append(model_ij_info)
+
+                if i in aligned_models_dict:
+                    max_rmsd = aligned_models_dict[i][-1]
+                    if rmsd > max_rmsd:
+                        aligned_models_dict[i] = model_ij_info 
+                else:
+                    aligned_models_dict[i] = model_ij_info
+
+    aligned_models_list = [aligned_models_dict[key] for key in sorted(aligned_models_dict.keys())]
+    aligned_models_list = aligned_models_list[0:args.num_training_conformations]
+    print(aligned_models_list)
+
+    #####################################################
+    print(asterisk_line)
+
+    #this uses the standard inference configuration without dropout (unless specified otherwise by user) 
+    model_dict = {} 
+    for m in models_to_run: 
+        model = load_model_w_intrinsic_param(config_dict[m], module_config_data, args.model_device, None, jax_param_path_dict[m], intrinsic_param_zero, enable_dropout=args.enable_dropout)
+        if m not in model_dict:
+            model_dict[m] = model
+
+    if not(args.skip_gd_phase):
+ 
+        t0 = time.perf_counter()
+      
+        for i in range(0,len(aligned_models_list)): 
+           
+            model_name_source = aligned_models_list[i][0] #this is model being used for training 
+            model_name_target = aligned_models_list[i][1] 
+            source_path = aligned_models_list[i][2]
+            target_path = aligned_models_list[i][3] 
+            
+            print('ON MODEL')
+            print(aligned_models_list[i])
+            source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
+            target_str = 'target=%s' % model_name_target
+            fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
+ 
+            arg1 = '--train_data_dir=%s' % target_path[0:target_path.rindex('/')]
+            arg2 = '--train_alignment_dir=%s' % args.alignment_dir
+            arg3 = '--fine_tuning_save_dir=%s' % fine_tuning_save_dir
+            arg4 = '--template_mmcif_dir=%s' % args.template_mmcif_dir
+            arg5 = '--max_template_date=%s' % date.today().strftime("%Y-%m-%d")
+            arg6 = '--precision=bf16'
+            arg7 = '--gpus=1'
+            arg8 = '--resume_from_jax_params=%s' % jax_param_path_dict[model_name_source] 
+            arg9 = '--resume_model_weights_only=True'
+            arg10 = '--config_preset=multimer-custom_finetuning-SAID-all-%s' % model_name_source #fine tune w.r.t vanila model (i.e no chainmask) 
+            arg11 = '--module_config=%s' % args.module_config
+            arg12 = '--hp_config=%s' % args.train_hp_config
+            arg13 = '--save_structure_output'
+     
+            if args.save_training_conformations:       
+                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13]
+            else:
+                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12]
+     
+            cmd_to_run = ["python", finetune_openfold_path] + script_arguments
+            cmd_to_run_str = s = ' '.join(cmd_to_run)
+            print(asterisk_line)
+            print("RUNNING GRADIENT DESCENT WITH SOURCE %s AND TARGET %s" % (initial_pred_path_dict[model_name_source],initial_pred_path_dict[model_name_target]))
+            print(cmd_to_run_str)
+            subprocess.run(cmd_to_run)
+
+        run_time = time.perf_counter() - t0
+        timing_dict = {'gradient_descent': run_time} 
+        rw_helper_functions.write_timings(timing_dict, output_dir, 'gradient_descent')
+    
+
+    #################################################
+ 
+
+    print('generating random_corr')
+    if rw_hp_config_data['cov_type'] == 'full': 
+        random_corr = gen_randcorr_sap.randcorr(intrinsic_dim)
+    
+    rw_hp_dict = {} #aim is to populate this 
+
+    print(asterisk_line)
+    rw_hp_parent_dir = '%s/rw_hp_tuning' % output_dir
+    print('RW HYPERPARAMETER TUNING PHASE')
+    hp_acceptance_rate_dict = {}  
+    hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
+
+    skip_auto_calc = False
+    if os.path.exists(hp_acceptance_rate_fname):
+        print('LOADING %s' % hp_acceptance_rate_fname)
+        with open(hp_acceptance_rate_fname, 'rb') as f:
+            hp_acceptance_rate_dict = pickle.load(f)
+        print(hp_acceptance_rate_dict)
+        rw_hp_dict = get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data)
+        if rw_hp_dict != {}:
+            skip_auto_calc = True
+
+    if not(skip_auto_calc):
+
+        print('TUNING HYPERPARAMETERS VIA GRID SEARCH')
+
+        t0 = time.perf_counter()
+
+        upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
+        lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
+
+        scaling_factor_candidates = train_hp_config_data['initial_scaling_factor_candidate']
+        scaling_factor_candidates = list(map(float, scaling_factor_candidates))  
+        
+        while rw_hp_dict == {}:
+
+            grid_search_combinations = construct_grid_search_combinations(rw_hp_config_data, scaling_factor_candidates)
+            print('INITIAL GRID SEARCH PARAMETERS:')
+            print(grid_search_combinations)
+
+            state_history_dict = {} 
+
+            for i in range(0,len(aligned_models_list)):
+
+                model_name_source = aligned_models_list[i][0] #this is model being used for training 
+                model_name_target = aligned_models_list[i][1] 
+                source_path = aligned_models_list[i][2]
+                target_path = aligned_models_list[i][3] 
+
+                print('ON MODEL')
+                print(aligned_models_list[i])
+                source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
+                target_str = 'target=%s' % model_name_target
+                fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
+                latest_version_num = rw_helper_functions.get_latest_version_num(fine_tuning_save_dir)
+
+                model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
+                sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
+        
+                if 'full' in rw_hp_config_data['cov_type']:
+                    random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
+                    print('calculating cholesky')
+                    L = np.linalg.cholesky(random_cov)
+                else:
+                    L = None 
+
+                state_history_dict = rw_helper_functions.run_grid_search(grid_search_combinations, state_history_dict, source_str, target_str, source_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args, False)
+  
+                for key in state_history_dict: 
+                    print('FOR RW HYPERPARAMETER COMBINATION:')
+                    print(key)
+                    print('STATE HISTORY:')
+                    print(state_history_dict[key])
+                    cumm_acceptance_rate = sum(state_history_dict[key])/len(state_history_dict[key])
+                    print('ACCEPTANCE RATE= %.3f' % cumm_acceptance_rate)
+                    hp_acceptance_rate_dict[key] = cumm_acceptance_rate
+
+                    if cumm_acceptance_rate > upper_bound_acceptance_threshold or cumm_acceptance_rate < lower_bound_acceptance_threshold:
+                        if key in grid_search_combinations:
+                            print('REMOVING RW HYPERPARAMETER COMBINATION WITH ACCEPTANCE RATE %.2f' % cumm_acceptance_rate)
+                            print(key)
+                            grid_search_combinations.remove(key)
+
+                print('CURRENT GRID SEARCH PARAMETERS:')
+                print(grid_search_combinations)
+
+                if len(grid_search_combinations) == 0:
+                    print('ALL CURRENT HYPERPARAMETER COMBINATIONS HAVE BEEN ELIMINATED')
+                    break 
+                elif len(grid_search_combinations) == 1:
+                    print('ONLY SINGLE HYPERPARAMETER COMBINATION  EXISTS:')
+                    print(grid_search_combinations)
+                    break
+                elif len(grid_search_combinations) > 1:
+                    completed = False
+                    if (i+1) >= args.num_rw_hp_tuning_rounds_total:
+                        completed = True
+                    if completed:
+                        print('ALL HYPERPARAMETER COMBINATIONS HAVE BEEN RUN THE SPECIFIED NUMBER OF ROUNDS (%d)' % args.num_rw_hp_tuning_rounds_total)
+                        print(grid_search_combinations)
+                        break 
+                    
+            rw_hp_dict = get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data)
+            if rw_hp_dict == {}:
+                print('NO SCALING FACTOR CANDIDATES FOUND THAT MATCHED ACCEPTANCE CRITERIA')
+                scaling_factor_candidates = get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data)
+                print('HYPERPARAMETER TUNING WITH NEW SCALING FACTOR CANDIDATES')
+                print(scaling_factor_candidates)
+            else:
+                hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
+                with open(hp_acceptance_rate_fname, 'wb') as f:
+                    pickle.dump(hp_acceptance_rate_dict, f)
+                print(hp_acceptance_rate_dict)
+
+        run_time = time.perf_counter() - t0
+        timing_dict = {'hp_tuning': run_time} 
+        rw_helper_functions.write_timings(timing_dict, output_dir, 'hp_tuning')
+                                 
+    #################################################
+
+    print(asterisk_line)
+    print('RW PHASE')
+    print('HYPERPARAMETERS BEING USED:')
+    print(rw_hp_dict)
+
+    for i in range(0,len(aligned_models_list)):
+
+        t0 = time.perf_counter()
+
+        conformation_info_dict = {} #maps source_target to (pdb_path,plddt,disordered_percentage,rmsd)
+
+        model_name_source = aligned_models_list[i][0] #this is model being used for training 
+        model_name_target = aligned_models_list[i][1] 
+        source_path = aligned_models_list[i][2]
+        target_path = aligned_models_list[i][3] 
+        
+        print('ON MODEL')
+        print(aligned_models_list[i])
+        source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
+        target_str = 'target=%s' % model_name_target
+        fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
+        latest_version_num = rw_helper_functions.get_latest_version_num(fine_tuning_save_dir)
+
+        model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
+        sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
+
+        if 'full' in rw_hp_config_data['cov_type']:
+            random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
+            print('calculating cholesky')
+            L = np.linalg.cholesky(random_cov)
+        else:
+            L = None 
+ 
+        rw_output_dir = '%s/rw/%s/%s' % (output_dir,source_str,target_str)
+
+        pdb_files = glob.glob('%s/**/*.pdb' % rw_output_dir)
+        if len(pdb_files) >= args.num_rw_steps:
+            if args.overwrite_pred:
+                print('removing pdb files in %s' % rw_output_dir)
+                rw_helper_functions.remove_files(pdb_files)
+            else:
+                print('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))
+                continue 
+        elif len(pdb_files) > 0: #incomplete job
+            print('removing pdb files in %s' % rw_output_dir)
+            rw_helper_functions.remove_files(pdb_files)
+
+        print('BEGINNING RW FOR: %s' % rw_output_dir)
+
+        state_history, conformation_info = run_rw(source_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, early_stop=True)
+
+        key = '%s-%s' % (model_name_source, model_name_target)
+        conformation_info_dict[key] = conformation_info
+
+        acceptance_rate = sum(state_history)/len(state_history)
+        print('ACCEPTANCE RATE: %.3f' % acceptance_rate)
+
+        conformation_info_output_dir = rw_output_dir 
+        conformation_info_fname = '%s/conformation_info.pkl' % conformation_info_output_dir
+        with open(conformation_info_fname, 'wb') as f:
+            pickle.dump(conformation_info_dict, f)
+
+        print(asterisk_line)
+        print(conformation_info_dict[key])
+        print(asterisk_line)
+        rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
+        iptm_score_all = np.array([conformation_info[i][3] for i in range(0,len(conformation_info))])
+        max_rmsd = np.max(rmsd_all)
+        mean_iptm_score = np.mean(iptm_score_all)
+        max_iptm_score = np.max(iptm_score_all)
+        print('MAX RMSD: %.3f' % max_rmsd)
+        print('MEAN IPTM_PTM: %.3f' % mean_iptm_score)
+        print('MAX IPTM_PTM: %.3f' % max_iptm_score)
+
+        inference_key = 'inference_%d' % i
+        run_time = time.perf_counter() - t0
+        timing_dict = {inference_key: run_time} 
+        rw_helper_functions.write_timings(timing_dict, output_dir, inference_key)
+
+
+           
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--fasta_file", type=str, default=None,
+        help="Path to FASTA file, one sequence per file. By default assumes that .fasta file is located in alignment_dir "
+    )
+    parser.add_argument(
+        "--template_mmcif_dir", type=str, 
+        help="Directory containing mmCIF files to search for templates"
+    )
+    parser.add_argument(
+        "--alignment_dir", type=str, required=True,
+        help="""Path to alignment directory. If provided, alignment computation 
+                is skipped and database path arguments are ignored."""
+    )
+    parser.add_argument(
+        "--conformation_dir", type=str, default=None,
+        help="""Path to alignment directory. If provided, alignment computation 
+                is skipped and database path arguments are ignored."""
+    )
+
+    parser.add_argument(
+        "--output_dir_base", type=str, default=os.getcwd(),
+        help="""Name of the directory in which to output the prediction""",
+    )
+    parser.add_argument(
+        "--model_device", type=str, default="cpu",
+        help="""Name of the device on which to run the model. Any valid torch
+             device name is accepted (e.g. "cpu", "cuda:0")"""
+    )
+    parser.add_argument(
+        "--config_preset", type=str, default=None,
+        help="""Name of a model config preset defined in openfold/config.py"""
+    )
+    parser.add_argument(
+        "--jax_param_parent_path", type=str, default=None,
+        help="""Parent ath to JAX model parameters. If None, and openfold_checkpoint_path
+             is also None, parameters are selected automatically according to 
+             the model name from openfold/resources/params"""
+    )
+    parser.add_argument(
+        "--num_rw_steps", type=int, default=100
+    )
+    parser.add_argument(
+        "--num_rw_hp_tuning_steps_per_round", type=int, default=10
+    )
+    parser.add_argument(
+        "--num_rw_hp_tuning_rounds_total", type=int, default=2
+    )
+    parser.add_argument(
+        "--early_stop_rw_hp_tuning", action="store_true", default=False,
+    )
+    parser.add_argument(
+        "--num_training_conformations", type=int, default=5
+    )
+    parser.add_argument(
+        "--save_training_conformations", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--save_outputs", action="store_true", default=False,
+        help="Whether to save all model outputs, including embeddings, etc."
+    )
+    parser.add_argument(
+        "--cpus", type=int, default=4,
+        help="""Number of CPUs with which to run alignment tools"""
+    )
+    parser.add_argument(
+        "--preset", type=str, default='full_dbs',
+        choices=('reduced_dbs', 'full_dbs')
+    )
+    parser.add_argument(
+        "--output_postfix", type=str, default=None,
+        help="""Postfix for output prediction filenames"""
+    )
+    parser.add_argument(
+        "--data_random_seed", type=str, default=None
+    )
+    parser.add_argument(
+        "--skip_relaxation", action="store_true", default=False,
+    )
+    parser.add_argument(
+        "--multimer_ri_gap", type=int, default=1,
+        help="""Residue index offset between multiple sequences, if provided"""
+    )
+    parser.add_argument(
+        "--trace_model", action="store_true", default=False,
+        help="""Whether to convert parts of each model to TorchScript.
+                Significantly improves runtime at the cost of lengthy
+                'compilation.' Useful for large batch jobs."""
+    )
+    parser.add_argument(
+        "--subtract_plddt", action="store_true", default=False,
+        help=""""Whether to output (100 - pLDDT) in the B-factor column instead
+                 of the pLDDT itself"""
+    )
+    parser.add_argument(
+        "--long_sequence_inference", action="store_true", default=False,
+        help="""enable options to reduce memory usage at the cost of speed, helps longer sequences fit into GPU memory, see the README for details"""
+    )
+    parser.add_argument(
+        "--cif_output", action="store_true", default=False,
+        help="Output predicted models in ModelCIF format instead of PDB format (default)"
+    )
+    parser.add_argument(
+        "--module_config", type=str, default='model_config_0',
+        help=(
+            "module_config_x where x is a number"
+        )
+    )
+    parser.add_argument(
+        "--rw_hp_config", type=str, default='hp_config_0',
+        help=(
+            "hp_config_x where x is a number"
+        )
+    )
+    parser.add_argument(
+        "--train_hp_config", type=str, default='hp_config_2',
+        help=(
+            "hp_config_x where x is a number"
+        )
+    )
+    parser.add_argument(
+        "--skip_initial_pred_phase", action="store_true", default=False
+    )    
+    parser.add_argument(
+        "--skip_gd_phase", action="store_true", default=False
+    )    
+    parser.add_argument(
+        "--overwrite_pred", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--recycle_wo_early_stopping", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--max_recycling_iters", type=int, default=19
+    )
+    parser.add_argument(
+        "--enable_dropout", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--mean_plddt_threshold", type=int, default=70
+    )
+    parser.add_argument(
+        "--disordered_percentage_threshold", type=int, default=80
+    )
+
+
+
+
+
+    add_data_args(parser)
+    args = parser.parse_args()
+
+    if(args.model_device == "cpu" and torch.cuda.is_available()):
+        logging.warning(
+            """The model is being run on CPU. Consider specifying 
+            --model_device for better performance"""
+        )
+
+    main(args)
+
