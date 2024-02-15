@@ -56,13 +56,13 @@ def generate_features(fasta_path, alignment_dir, args):
 
     print('GENERATING features.pkl')
 
-    template_featurizer = templates.TemplateHitFeaturizer(
+    template_featurizer = templates.HhsearchHitFeaturizer(
         mmcif_dir=args.template_mmcif_dir,
         max_template_date=args.max_template_date,
         max_hits=4,
         kalign_binary_path=args.kalign_binary_path,
         release_dates_path=args.release_dates_path,
-        obsolete_pdbs_path=args.obsolete_pdbs_path
+        obsolete_pdbs_path=args.obsolete_pdbs_file_path
     )
     data_processor = data_pipeline.DataPipeline(
         template_featurizer=template_featurizer,

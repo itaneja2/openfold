@@ -165,7 +165,7 @@ def propose_new_epsilon_vanila_rw(intrinsic_dim, cov_type, L=None, sigma=None):
             raise ValueError("Sigma is missing. It must be provided if cov_type=diagonal")
         epsilon = np.squeeze(np.random.normal(np.zeros(intrinsic_dim), sigma, (1,intrinsic_dim)))
         #intrinsic_param_proposed = intrinsic_param_curr + epsilon*epsilon_scaling_factor
-    elif 'full' in cov_type:
+    elif cov_type == 'full':
         if L is None:
             raise ValueError("Cholesky decomposition is missing. It must be provided if cov_type=full")
         x = np.random.standard_normal((intrinsic_dim, 1))
@@ -629,6 +629,9 @@ def main(args):
 
     else:
 
+        logger.info('BEGINNING INITIAL PRED PHASE:') 
+        t0 = time.perf_counter()
+
         #this uses the standard inference configuration with dropout for the initial prediction  
         model_dict = {} 
         for m in models_to_run: 
@@ -645,7 +648,6 @@ def main(args):
             for k,v in processed_feature_dict.items()
         }
 
-        t0 = time.perf_counter()
         initial_pred_path_dict = {} 
         conformation_info_dict = {}
         for i in range(0,len(models_to_run)):
@@ -686,7 +688,8 @@ def main(args):
             model_dict[m] = model
 
     if not(args.skip_gd_phase):
- 
+        
+        logger.info('BEGINNING GD PHASE:') 
         t0 = time.perf_counter()
       
         for i in range(0,len(aligned_models_info)): 
@@ -734,17 +737,13 @@ def main(args):
 
     #####################################################
     logger.info(asterisk_line)
- 
 
     if rw_hp_config_data['cov_type'] == 'full': 
         logger.info('GENERATING RANDOM CORRELATION MATRIX')
         random_corr = gen_randcorr_sap.randcorr(intrinsic_dim)
     
     rw_hp_dict = {}  
-
-    logger.info(asterisk_line)
     rw_hp_parent_dir = '%s/rw_hp_tuning' % output_dir
-    logger.info('RW HYPERPARAMETER TUNING PHASE')
     hp_acceptance_rate_dict = {}  
     hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
 
@@ -760,8 +759,7 @@ def main(args):
 
     if not(skip_auto_calc):
 
-        logger.info('TUNING HYPERPARAMETERS VIA GRID SEARCH')
-
+        logger.info('BEGINNING RW HYPERPARAMETER TUNING PHASE')
         t0 = time.perf_counter()
 
         upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
@@ -795,7 +793,7 @@ def main(args):
                 model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
                 sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
         
-                if 'full' in rw_hp_config_data['cov_type']:
+                if rw_hp_config_data['cov_type'] == 'full':
                     random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
                     logger.info('calculating cholesky')
                     L = np.linalg.cholesky(random_cov)
@@ -827,7 +825,7 @@ def main(args):
     #####################################################
     logger.info(asterisk_line)
 
-    logger.info('RW PHASE')
+    logger.info('BEGINNING RW PHASE')
     logger.info('HYPERPARAMETERS BEING USED:')
     logger.info(rw_hp_dict)
 
@@ -851,7 +849,7 @@ def main(args):
         model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
         sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
 
-        if 'full' in rw_hp_config_data['cov_type']:
+        if rw_hp_config_data['cov_type'] == 'full':
             random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
             logger.info('calculating cholesky')
             L = np.linalg.cholesky(random_cov)
@@ -875,7 +873,6 @@ def main(args):
         logger.info('RW OUTPUT DIR: %s' % rw_output_dir)
 
         state_history, conformation_info = run_rw(source_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, early_stop=True)
-
         key = '%s-%s' % (model_name_source, model_name_target)
         conformation_info_dict[key] = conformation_info
 

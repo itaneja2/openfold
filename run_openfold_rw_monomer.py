@@ -67,7 +67,7 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
 
     model.intrinsic_parameter = nn.Parameter(torch.tensor(intrinsic_parameter, dtype=torch.float).to(args.model_device))
 
-    print('Tag: %s' % tag)
+    logger.info('Tag: %s' % tag)
     os.makedirs(output_dir, exist_ok=True)
 
     out, inference_time = run_model_w_intrinsic_dim(model, processed_feature_dict, tag, output_dir, return_inference_time=True)
@@ -153,7 +153,7 @@ def propose_new_state_vanila_rw(intrinsic_param_curr, intrinsic_dim, epsilon_sca
             raise ValueError("Sigma is missing. It must be provided if cov_type=diagonal")
         epsilon = np.squeeze(np.random.normal(np.zeros(intrinsic_dim), sigma, (1,intrinsic_dim)))
         intrinsic_param_proposed = intrinsic_param_curr + epsilon*epsilon_scaling_factor
-    elif 'full' in cov_type:
+    elif cov_type == 'full':
         if L is None:
             raise ValueError("Cholesky decomposition is missing. It must be provided if cov_type=full")
         x = np.random.standard_normal((intrinsic_dim, 1))
@@ -173,7 +173,7 @@ def propose_new_state_discrete_ou(intrinsic_param_curr, intrinsic_dim, epsilon_s
             raise ValueError("Sigma is missing. It must be provided if cov_type=diagonal")
         epsilon = np.squeeze(np.random.normal(np.zeros(intrinsic_dim), sigma, (1,intrinsic_dim)))
         intrinsic_param_proposed = (1-alpha)*intrinsic_param_curr + epsilon*epsilon_scaling_factor
-    elif 'full' in cov_type:
+    elif cov_type == 'full':
         if L is None:
             raise ValueError("Cholesky decomposition is missing. It must be provided if cov_type=full")
         x = np.random.standard_normal((intrinsic_dim, 1))
@@ -195,7 +195,7 @@ def propose_new_state_rw_w_momentum(intrinsic_param_curr, velocity_param_curr, i
         epsilon = np.squeeze(np.random.normal(np.zeros(intrinsic_dim), sigma, (1,intrinsic_dim)))
         v = gamma*velocity_param_curr + epsilon*epsilon_scaling_factor
         intrinsic_param_proposed = intrinsic_param_curr + v
-    elif 'full' in cov_type:
+    elif cov_type == 'full':
         if L is None:
             raise ValueError("Cholesky decomposition is missing. It must be provided if cov_type=full")
         x = np.random.standard_normal((intrinsic_dim, 1))
@@ -252,10 +252,10 @@ def run_rw(
         curr_tag = '%s_iter%d_step-iter%d_step-agg%d' % (base_tag, iter_n, curr_step_iter_n, curr_step_aggregate) 
         mean_plddt, disordered_percentage, inference_time, accept_conformation, pdb_path_rw = eval_model(model, config, intrinsic_param_proposed, feature_processor, feature_dict, processed_feature_dict, curr_tag, output_dir, phase, args)    
         state_history.append(accept_conformation)
-        print('pLDDT: %.3f, disordered percentage: %.3f, step: %d' % (mean_plddt, disordered_percentage, curr_step_aggregate)) 
+        logger.info('pLDDT: %.3f, disordered percentage: %.3f, step: %d' % (mean_plddt, disordered_percentage, curr_step_aggregate)) 
 
         if accept_conformation:
-            print('STEP %d: ACCEPTED' % curr_step_aggregate)
+            logger.info('STEP %d: ACCEPTED' % curr_step_aggregate)
             intrinsic_param_prev = intrinsic_param_proposed
             curr_step_iter_n += 1
             num_accepted_steps += 1
@@ -265,7 +265,7 @@ def run_rw(
             else:
                 conformation_info.append((pdb_path_rw, rmsd, mean_plddt, disordered_percentage, inference_time, None, None))
         else:
-            print('STEP %d: REJECTED' % curr_step_aggregate)
+            logger.info('STEP %d: REJECTED' % curr_step_aggregate)
             if early_stop:
                 return state_history, conformation_info
             else:
@@ -283,8 +283,8 @@ def run_rw(
 
 def get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data):
 
-    print('GETTING NEW SCALING FACTOR CANDIDATES GIVEN CURRENT:')
-    print(hp_acceptance_rate_dict)
+    logger.info('GETTING NEW SCALING FACTOR CANDIDATES GIVEN CURRENT:')
+    logger.info(hp_acceptance_rate_dict)
 
     upper_bound_scaling_factor = None
     lower_bound_scaling_factor = None 
@@ -330,7 +330,117 @@ def construct_grid_search_combinations(rw_type, scaling_factor_candidates, alpha
     return grid_search_combinations
 
 
+def get_scaling_factor_bootstrap(rw_hp_config_data, output_dir, model, config, feature_processor, feature_dict, processed_feature_dict, args):
+
+    logger.info(asterisk_line) 
+    logger.info('BOOTSTRAP TUNING PHASE:')
+
+    scaling_factor_candidate = 10.  
+    all_scaling_factor_candidates = [scaling_factor_candidate] #keeps track of scaling_factor_candidates used 
+    scaling_factor_bootstrap = None       
+
+    upper_bound_acceptance_threshold = round(rw_hp_config_data['bootstrap_tuning_acceptance_threshold']+rw_hp_config_data['bootstrap_tuning_threshold_ub_tolerance'],2)
+    lower_bound_acceptance_threshold = round(rw_hp_config_data['bootstrap_tuning_acceptance_threshold']-rw_hp_config_data['bootstrap_tuning_threshold_lb_tolerance'],2)
+
+    base_tag = '%s_train-%s_rw-%s' % (args.module_config, args.train_hp_config, args.rw_hp_config)
+    base_tag = base_tag.replace('=','-')
+
+
+    #run a pseudo-binary search to determine scaling_factor_bootstrap
+    while scaling_factor_bootstrap is None:
+        logger.info('TESTING SCALING FACTOR: %.3f' % scaling_factor_candidate)
+        state_history = []  
+        for i in range(0,args.num_bootstrap_hp_tuning_steps): 
+            warmup_output_dir = '%s/warmup/scaling_factor=%s' % (output_dir, rw_helper_functions.remove_trailing_zeros(scaling_factor_candidate))
+            intrinsic_param_proposed = propose_new_state_vanila_rw(intrinsic_param_zero, intrinsic_dim, scaling_factor_candidate, 'spherical')
+            curr_tag = '%s_step%d' % (base_tag,i)         
+            mean_plddt, disordered_percentage, _, accept_conformation, _ = eval_model(model, config, intrinsic_param_proposed, feature_processor, feature_dict, processed_feature_dict, curr_tag, warmup_output_dir, 'bootstrap_warmup', args)    
+            state_history.append(accept_conformation)
+            logger.info('pLDDT: %.3f, disordered percentage: %.3f, step: %d' % (mean_plddt, disordered_percentage, i)) 
+            if accept_conformation:
+                logger.info('STEP %d: ACCEPTED' % i)
+            else:
+                logger.info('STEP %d: REJECTED' % i)
+            if i == 0 and not(accept_conformation):
+                logger.info('EXITING EARLY FOR %d' % scaling_factor_candidate)
+                break 
+
+        acceptance_rate = sum(state_history)/len(state_history)
+        if acceptance_rate >= lower_bound_acceptance_threshold and acceptance_rate <= upper_bound_acceptance_threshold:
+            scaling_factor_bootstrap = scaling_factor_candidate 
+        else:
+            if acceptance_rate > upper_bound_acceptance_threshold:
+                proposed_scaling_factor_candidate = scaling_factor_candidate*2
+            elif acceptance_rate < lower_bound_acceptance_threshold:
+                proposed_scaling_factor_candidate = scaling_factor_candidate/2
+            
+            if proposed_scaling_factor_candidate not in all_scaling_factor_candidates:
+                all_scaling_factor_candidates.append(proposed_scaling_factor_candidate)
+                scaling_factor_candidate = proposed_scaling_factor_candidate
+            else:
+                #we are proposing to use a previously encountered scaling_factor_candidate (i.e 10 --> 20 --> 10, or 10 --> 5 --> 10)
+                if acceptance_rate > upper_bound_acceptance_threshold:
+                    scaling_factor_bootstrap = scaling_factor_candidate #to ensure scaling_factor_bootstrap remains higher than lower_bound_acceptance_threshold 
+                elif acceptance_rate < lower_bound_acceptance_threshold:
+                    scaling_factor_bootstrap = scaling_factor_candidate/2 #to ensure scaling_factor_bootstrap remains higher than lower_bound_acceptance_threshold
+
+    return scaling_factor_bootstrap
+
+
+def get_bootstrap_candidate_conformations(conformation_info):
+
+    bootstrap_conformations = {}
+    iter_num_list = [] 
+    for i in range(0,len(conformation_info)):
+        f = conformation_info[i][0]
+        rmsd = conformation_info[i][1]
+        match = re.search(r'_iter(\d+)', f)
+        iter_num = int(match.group(1))
+        match = re.search(r'step-iter(\d+)', f) 
+        step_num = int(match.group(1))
+        if iter_num not in bootstrap_conformations:
+            bootstrap_conformations[iter_num] = [(step_num,rmsd,f)]
+        else:
+            bootstrap_conformations[iter_num].append((step_num,rmsd,f)) 
+        iter_num_list.append(iter_num)
+
+    del bootstrap_conformations[max(iter_num_list)] #delete key corresponding to max(iter_num_list) because this iteration did not yield a rejected conformation (i.e it did not 'finish') 
+
+    for key in bootstrap_conformations:
+        bootstrap_conformations[key] = sorted(bootstrap_conformations[key], key=lambda x:x[0], reverse=True) #sort by step_num in reverse order 
+
+    bootstrap_candidate_conformations = []
+    for key in bootstrap_conformations:
+        bootstrap_candidate_conformations.append(bootstrap_conformations[key][0]) #get last conformation in each iteration (i.e last conformation prior to rejection)
+        
+    bootstrap_candidate_conformations = sorted(bootstrap_candidate_conformations, key=lambda x:x[1], reverse=True) #sort by rmsd in reverse order 
+
+    logger.debug('BOOTSTRAP CONFORMATIONS ALL:')
+    logger.debug(bootstrap_conformations)    
+
+    logger.info('BOOTSTRAP CANDIDATE CONFORMATIONS:')
+    logger.info(bootstrap_candidate_conformations)
+
+    return bootstrap_candidate_conformations
+
+
+def summarize_rw(iter_num, conformation_info):
+    logger.info(asterisk_line)
+    logger.info('RESULTS FOR CONFORMATION: %s' % iter_num)
+    logger.debug(conformation_info)
+    rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
+    max_rmsd = np.max(rmsd_all)
+    logger.info('MAX RMSD: %.3f' % max_rmsd)
+
+
+
 def main(args):
+
+    if args.log_level.lower() == 'debug':
+        logger.setLevel(level=logging.DEBUG)
+    else:
+        logger.setLevel(level=logging.INFO)
+
     # Create the output directory
     os.makedirs(args.output_dir_base, exist_ok=True)
     output_dir_name = args.output_dir_base.split('/')[-1]
@@ -351,16 +461,7 @@ def main(args):
     l1_output_dir = os.path.abspath(l1_output_dir)
     l2_output_dir = os.path.abspath(l2_output_dir) 
 
-    print('Output Directory: %s' % output_dir)
-
-    random_seed = args.data_random_seed
-    if random_seed is None:
-        random_seed = random.randrange(2**32)
-
-    np.random.seed(random_seed)
-    torch.manual_seed(random_seed + 1)
-
-    feature_processor = feature_pipeline.FeaturePipeline(config.data)
+    logger.info("OUTPUT DIRECTORY: %s" % output_dir)
 
     os.makedirs(output_dir, exist_ok=True)
     alignment_dir = args.alignment_dir
@@ -371,7 +472,7 @@ def main(args):
         file_id = file_id[0] #e.g 1xyz_A
         file_id_wo_chain = file_id.split('_')[0]
     alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
-    print("alignment directory with file_id: %s" % alignment_dir_w_file_id)
+    logger.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
 
     if args.fasta_file is None:
         pattern = "%s/*.fasta" % alignment_dir_w_file_id
@@ -386,6 +487,15 @@ def main(args):
     with open(fasta_file, "r") as fp:
         fasta_data = fp.read()
     _, seq = parse_fasta(fasta_data)
+    logger.info("PROTEIN SEQUENCE:")
+    logger.info(seq)
+
+    random_seed = args.data_random_seed
+    if random_seed is None:
+        random_seed = random.randrange(2**32)
+
+    np.random.seed(random_seed)
+    torch.manual_seed(random_seed + 1)
 
     with open('./rw_monomer_config.json') as f:
         rw_config_data = json.load(f)
@@ -399,20 +509,20 @@ def main(args):
     files = glob.glob(pattern, recursive=True)
     if len(files) == 1:
         features_output_path = files[0]
-        print('features.pkl path: %s' % features_output_path)
+        logger.info('features.pkl path: %s' % features_output_path)
     else:
         features_output_path = ''
 
     if os.path.isfile(features_output_path):
         feature_dict = np.load(features_output_path, allow_pickle=True) #this is used for all predictions, so this assumes you are predicting a single sequence 
     else:
-        template_featurizer = templates.TemplateHitFeaturizer(
+        template_featurizer = templates.HhsearchHitFeaturizer(
             mmcif_dir=args.template_mmcif_dir,
             max_template_date=args.max_template_date,
             max_hits=4,
             kalign_binary_path=args.kalign_binary_path,
             release_dates_path=args.release_dates_path,
-            obsolete_pdbs_path=args.obsolete_pdbs_path
+            obsolete_pdbs_path=args.obsolete_pdbs_file_path
         )
         data_processor = data_pipeline.DataPipeline(
             template_featurizer=template_featurizer,
@@ -423,20 +533,26 @@ def main(args):
         features_output_path = os.path.join(alignment_dir_w_file_id, 'features.pkl')
         with open(features_output_path, 'wb') as f:
             pickle.dump(feature_dict, f, protocol=4)
-        print('SAVED %s' % features_output_path)
+        logger.info('SAVED %s' % features_output_path)
 
-    initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir
-        
+    logger.debug("FEATURE DICTIONARY:")
+    logger.debug(feature_dict)
+
+    feature_processor = feature_pipeline.FeaturePipeline(config.data)
     intrinsic_param_zero = np.zeros(intrinsic_dim)
     model = load_model_w_intrinsic_param(config, module_config_data, args.model_device, args.openfold_checkpoint_path, args.jax_param_path, intrinsic_param_zero)
 
     #for m_name, module in dict(model.named_modules()).items():
-    #    print(m_name)
-    #    print('****')
+    #    logger.info(m_name)
+    #    logger.info('****')
     #    for c_name, layer in dict(module.named_children()).items():
-    #        print(c_name)
+    #        logger.info(c_name)
     
 
+    #####################################################
+    logger.info(asterisk_line)
+
+    initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir 
     bootstrap_output_dir = '%s/bootstrap' % l1_output_dir
     bootstrap_training_conformations_dir = '%s/bootstrap_training_conformations' % l2_output_dir
 
@@ -450,9 +566,9 @@ def main(args):
             random_seed = int(np.loadtxt(seed_fname))
             np.random.seed(random_seed)
             torch.manual_seed(random_seed + 1)
-            print('SKIPPING BOOTSTRAP PHASE')
+            logger.info('SKIPPING BOOTSTRAP PHASE')
         else:
-            args.skip_bootstrap_phase = False
+            raise FileNotFoundError('either %s or %s not found' % (conformation_info_fname,initial_pred_info_fname))
 
     #process features after updating seed 
     processed_feature_dict = feature_processor.process_features(
@@ -464,89 +580,30 @@ def main(args):
     } 
 
 
-    ############################################
+    if not(args.skip_bootstrap_phase):      
 
-    if not(args.skip_bootstrap_phase):       
-   
+        logger.info('BEGINNING BOOTSTRAP PHASE:') 
         t0 = time.perf_counter()
-   
+
         mean_plddt_initial, disordered_percentage_initial, _, _, pdb_path_initial = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
-        print('pLDDT: %.3f, disordered percentage: %.3f, INITIAL' % (mean_plddt_initial, disordered_percentage_initial)) 
- 
-        scaling_factor_candidate = 10.  
-        all_scaling_factor_candidates = [scaling_factor_candidate] #keeps track of scaling_factor_candidates used 
-        scaling_factor_bootstrap = None       
+        logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
 
-        upper_bound_acceptance_threshold = round(rw_hp_config_data['bootstrap_tuning_acceptance_threshold']+rw_hp_config_data['bootstrap_tuning_threshold_ub_tolerance'],2)
-        lower_bound_acceptance_threshold = round(rw_hp_config_data['bootstrap_tuning_acceptance_threshold']-rw_hp_config_data['bootstrap_tuning_threshold_lb_tolerance'],2)
+        scaling_factor_bootstrap = get_scaling_factor_bootstrap(rw_hp_config_data, l1_output_dir, model, config, feature_processor, feature_dict, processed_feature_dict, args)        
+        logger.info('SCALING FACTOR TO BE USED FOR BOOTSTRAPPING: %s' % rw_helper_functions.remove_trailing_zeros(scaling_factor_bootstrap))
 
-        print(asterisk_line) 
-        print('BOOTSTRAP TUNING PHASE:')
-
-        base_tag = '%s_train-%s_rw-%s' % (args.module_config, args.train_hp_config, args.rw_hp_config)
-        base_tag = base_tag.replace('=','-')
-
-        ##run a pseudo binary search to determine scaling_factor_bootstrap
-        while scaling_factor_bootstrap is None:
-            print(asterisk_line)
-            print('TESTING SCALING FACTOR: %.3f' % scaling_factor_candidate)
-            state_history = []  
-            for i in range(0,args.num_bootstrap_hp_tuning_steps):  
-                warmup_output_dir = '%s/warmup/scaling_factor=%s' % (l1_output_dir, rw_helper_functions.remove_trailing_zeros(scaling_factor_candidate))
-                intrinsic_param_proposed = propose_new_state_vanila_rw(intrinsic_param_zero, intrinsic_dim, scaling_factor_candidate, 'spherical')
-
-                curr_tag = '%s_step%d' % (base_tag,i)         
-                mean_plddt, disordered_percentage, _, accept_conformation, _ = eval_model(model, config, intrinsic_param_proposed, feature_processor, feature_dict, processed_feature_dict, curr_tag, warmup_output_dir, 'bootstrap_warmup', args)    
-                state_history.append(accept_conformation)
-
-                print('pLDDT: %.3f, disordered percentage: %.3f, step: %d' % (mean_plddt, disordered_percentage, i)) 
-
-                if accept_conformation:
-                    print('STEP %d: ACCEPTED' % i)
-                else:
-                    print('STEP %d: REJECTED' % i)
-
-                if i == 0 and not(accept_conformation):
-                    print('EXITING EARLY FOR %d' % scaling_factor_candidate)
-                    break 
-
-            acceptance_rate = sum(state_history)/len(state_history)
-            if acceptance_rate >= lower_bound_acceptance_threshold and acceptance_rate <= upper_bound_acceptance_threshold:
-                scaling_factor_bootstrap = scaling_factor_candidate 
-            else:
-                if acceptance_rate > upper_bound_acceptance_threshold:
-                    proposed_scaling_factor_candidate = scaling_factor_candidate*2
-                elif acceptance_rate < lower_bound_acceptance_threshold:
-                    proposed_scaling_factor_candidate = scaling_factor_candidate/2
-                
-                if proposed_scaling_factor_candidate not in all_scaling_factor_candidates:
-                    all_scaling_factor_candidates.append(proposed_scaling_factor_candidate)
-                    scaling_factor_candidate = proposed_scaling_factor_candidate
-                else:
-                    #we are proposing to use a previously encountered scaling_factor_candidate (i.e 10 --> 20 --> 10, or 10 --> 5 --> 10)
-                    if acceptance_rate > upper_bound_acceptance_threshold:
-                        scaling_factor_bootstrap = scaling_factor_candidate #to ensure scaling_factor_bootstrap remains higher than lower_bound_acceptance_threshold 
-                    elif acceptance_rate < lower_bound_acceptance_threshold:
-                        scaling_factor_bootstrap = scaling_factor_candidate/2 #to ensure scaling_factor_bootstrap remains higher than lower_bound_acceptance_threshold
-                    
-
-        print(asterisk_line)
-        print('BOOTSTRAP PHASE:')
-        print('scaling factor to be used for bootstrapping: %s' % rw_helper_functions.remove_trailing_zeros(scaling_factor_bootstrap))
-        print(asterisk_line)
-
+        logger.info('RUNNING RW') 
         rw_hp_dict = {}
         rw_hp_dict['epsilon_scaling_factor'] = scaling_factor_bootstrap 
         state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, False)
  
         bootstrap_acceptance_rate = sum(state_history)/len(state_history)
-        print('bootstrap acceptance rate: %.3f' % bootstrap_acceptance_rate)
+        logger.info('BOOTSTRAP ACCEPTANCE RATE: %.3f' % bootstrap_acceptance_rate)
 
         conformation_info_fname = '%s/conformation_info.pkl' % bootstrap_output_dir
         conformation_info = sorted(conformation_info, key=lambda x: x[0], reverse=True)
         with open(conformation_info_fname, 'wb') as f:
             pickle.dump(conformation_info, f)
-        print(conformation_info)
+        logger.info(conformation_info)
 
         run_time = time.perf_counter() - t0
         timing_dict = {'bootstrap': run_time} 
@@ -554,56 +611,25 @@ def main(args):
 
         seed_fname = '%s/seed.txt' % bootstrap_output_dir
         np.savetxt(seed_fname, [random_seed], fmt='%d')
-
-    bootstrap_conformations = {}
-    iter_num_list = [] 
-    for i in range(0,len(conformation_info)):
-        f = conformation_info[i][0]
-        rmsd = conformation_info[i][1]
-        match = re.search(r'_iter(\d+)', f)
-        iter_num = int(match.group(1))
-        match = re.search(r'step-iter(\d+)', f) 
-        step_num = int(match.group(1))
-        if iter_num not in bootstrap_conformations:
-            bootstrap_conformations[iter_num] = [(step_num,rmsd,f)]
-        else:
-            bootstrap_conformations[iter_num].append((step_num,rmsd,f)) 
-        iter_num_list.append(iter_num)
-
-    del bootstrap_conformations[max(iter_num_list)] #delete key corresponding to max(iter_num_list) because this iteration did not 'finish' 
-
-    for key in bootstrap_conformations:
-        bootstrap_conformations[key] = sorted(bootstrap_conformations[key], key=lambda x:x[0], reverse=True) #sort by step_num in reverse order 
-
-    bootstrap_candidate_conformations = []
-    for key in bootstrap_conformations:
-        bootstrap_candidate_conformations.append(bootstrap_conformations[key][0]) #get last conformation in each iteration (i.e last conformation prior to rejection)
-        
-    bootstrap_candidate_conformations = sorted(bootstrap_candidate_conformations, key=lambda x:x[1], reverse=True) #sort by rmsd in reverse order 
-
-    print('BOOTSTRAP CONFORMATIONS ALL:')
-    print(bootstrap_conformations)    
-
-    print('BOOTSTRAP CANDIDATE CONFORMATIONS:')
-    print(bootstrap_candidate_conformations)
-    
+ 
+    bootstrap_candidate_conformations = get_bootstrap_candidate_conformations(conformation_info) 
     num_conformations_to_optimize = len(bootstrap_candidate_conformations)
 
-    #optimize initial to bootstrap conformations#
 
     #####################################################
-    print(asterisk_line)
+    logger.info(asterisk_line)
 
     if not(args.skip_gd_phase):
-
+        
+        logger.info('BEGINNING GD PHASE:') 
         t0 = time.perf_counter()
 
         for iter_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
 
             if iter_num < args.num_training_conformations:
 
-                print('ON CONFORMATION %d/%d:' % (iter_num+1,min(args.num_training_conformations,num_conformations_to_optimize)))
-                print(conformation_info_i)
+                logger.info('ON CONFORMATION %d/%d:' % (iter_num+1,min(args.num_training_conformations,num_conformations_to_optimize)))
+                logger.info(conformation_info_i)
                 bootstrap_training_conformations_dir_conformation_i = '%s/conformation%d' % (bootstrap_training_conformations_dir,iter_num)
                 os.makedirs(bootstrap_training_conformations_dir_conformation_i, exist_ok=True)
                 rw_helper_functions.rw_helper_functions.remove_files_in_dir(bootstrap_training_conformations_dir_conformation_i) #this directory should contain a single conformation so we can run train_openfold on it 
@@ -636,8 +662,8 @@ def main(args):
  
                 cmd_to_run = ["python", finetune_openfold_path] + script_arguments
                 cmd_to_run_str = s = ' '.join(cmd_to_run)
-                print("RUNNING GRADIENT DESCENT WRT TO: %s" % curr_pdb_fname)
-                print(cmd_to_run_str)
+                logger.info("RUNNING GRADIENT DESCENT WRT TO: %s" % curr_pdb_fname)
+                logger.info(cmd_to_run_str)
                 subprocess.run(cmd_to_run)
 
         run_time = time.perf_counter() - t0
@@ -646,34 +672,30 @@ def main(args):
         
 
     #################################################
+    logger.info(asterisk_line)
  
-
-    print('generating random_corr')
     if rw_hp_config_data['cov_type'] == 'full': 
+        logger.info('GENERATING RANDOM CORRELATION MATRIX')
         random_corr = gen_randcorr_sap.randcorr(intrinsic_dim)
     
-    rw_hp_dict = {} #aim is to populate this 
-
-    print(asterisk_line)
+    rw_hp_dict = {}
     rw_hp_parent_dir = '%s/rw_hp_tuning' % output_dir
-    print('RW HYPERPARAMETER TUNING PHASE')
     hp_acceptance_rate_dict = {}  
     hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
 
     skip_auto_calc = False
     if os.path.exists(hp_acceptance_rate_fname):
-        print('LOADING %s' % hp_acceptance_rate_fname)
+        logger.info('LOADING %s' % hp_acceptance_rate_fname)
         with open(hp_acceptance_rate_fname, 'rb') as f:
             hp_acceptance_rate_dict = pickle.load(f)
-        print(hp_acceptance_rate_dict)
+        logger.info(hp_acceptance_rate_dict)
         rw_hp_dict = rw_helper_functions.get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False)
         if rw_hp_dict != {}:
             skip_auto_calc = True
 
     if not(skip_auto_calc):
 
-        print('TUNING HYPERPARAMETERS VIA GRID SEARCH')
-
+        logger.info('BEGINNING RW HYPERPARAMETER TUNING PHASE')
         t0 = time.perf_counter()
 
         upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
@@ -687,19 +709,18 @@ def main(args):
         while rw_hp_dict == {}:
 
             grid_search_combinations = construct_grid_search_combinations(rw_hp_config_data['rw_type'], scaling_factor_candidates, alpha_candidates, gamma_candidates)
-            print('INITIAL GRID SEARCH PARAMETERS:')
-            print(grid_search_combinations)
+            logger.info('INITIAL GRID SEARCH PARAMETERS:')
+            logger.info(grid_search_combinations)
 
             state_history_dict = {} 
 
             for iter_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
 
-                print('ON CONFORMATION %d/%d:' % (iter_num+1,min(args.num_training_conformations,num_conformations_to_optimize)))
-                print(conformation_info_i)
+                logger.info('ON CONFORMATION %d/%d:' % (iter_num+1,min(args.num_training_conformations,num_conformations_to_optimize)))
                 bootstrap_training_conformations_dir_conformation_i = '%s/conformation%d' % (bootstrap_training_conformations_dir,iter_num)
 
                 pdb_files = glob.glob('%s/*.pdb' % bootstrap_training_conformations_dir_conformation_i)
-                if len(pdb_files) == 0: #files only exist in this directory if we trained with respect to this target structure
+                if len(pdb_files) == 0: #if files do not exist in this directory, gradient descent was not run with respect to this target structure
                     continue 
 
                 target_str = 'target=conformation%d' % iter_num
@@ -709,60 +730,30 @@ def main(args):
                 model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
                 sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
         
-                if 'full' in rw_hp_config_data['cov_type']:
+                if rw_hp_config_data['cov_type'] == 'full':
                     random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
-                    print('calculating cholesky')
+                    logger.info('calculating cholesky')
                     L = np.linalg.cholesky(random_cov)
                 else:
                     L = None 
 
                 state_history_dict = rw_helper_functions.run_grid_search(grid_search_combinations, state_history_dict, None, target_str, pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args, False, False)
-  
-                for key in state_history_dict: 
-                    print('FOR RW HYPERPARAMETER COMBINATION:')
-                    print(key)
-                    print('STATE HISTORY:')
-                    print(state_history_dict[key])
-                    cumm_acceptance_rate = sum(state_history_dict[key])/len(state_history_dict[key])
-                    print('ACCEPTANCE RATE= %.3f' % cumm_acceptance_rate)
-                    hp_acceptance_rate_dict[key] = cumm_acceptance_rate
-
-                    if cumm_acceptance_rate > upper_bound_acceptance_threshold or cumm_acceptance_rate < lower_bound_acceptance_threshold:
-                        if key in grid_search_combinations:
-                            print('REMOVING RW HYPERPARAMETER COMBINATION WITH ACCEPTANCE RATE %.2f' % cumm_acceptance_rate)
-                            print(key)
-                            grid_search_combinations.remove(key)
-
-                print('CURRENT GRID SEARCH PARAMETERS:')
-                print(grid_search_combinations)
-
-                if len(grid_search_combinations) == 0:
-                    print('ALL CURRENT HYPERPARAMETER COMBINATIONS HAVE BEEN ELIMINATED')
-                    break 
-                elif len(grid_search_combinations) == 1:
-                    print('ONLY SINGLE HYPERPARAMETER COMBINATION  EXISTS:')
-                    print(grid_search_combinations)
+                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations)
+                
+                if exit_status == 1:
                     break
-                elif len(grid_search_combinations) > 1:
-                    completed = False
-                    if (i+1) >= args.num_rw_hp_tuning_rounds_total:
-                        completed = True
-                    if completed:
-                        print('ALL HYPERPARAMETER COMBINATIONS HAVE BEEN RUN THE SPECIFIED NUMBER OF ROUNDS (%d)' % args.num_rw_hp_tuning_rounds_total)
-                        print(grid_search_combinations)
-                        break 
-                    
+      
             rw_hp_dict = rw_helper_functions.get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False)
             if rw_hp_dict == {}:
-                print('NO SCALING FACTOR CANDIDATES FOUND THAT MATCHED ACCEPTANCE CRITERIA')
+                logger.info('NO SCALING FACTOR CANDIDATES FOUND THAT MATCHED ACCEPTANCE CRITERIA')
                 scaling_factor_candidates = get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data)
-                print('HYPERPARAMETER TUNING WITH NEW SCALING FACTOR CANDIDATES')
-                print(scaling_factor_candidates)
+                logger.info('HYPERPARAMETER TUNING WITH NEW SCALING FACTOR CANDIDATES')
+                logger.info(scaling_factor_candidates)
             else:
                 hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
                 with open(hp_acceptance_rate_fname, 'wb') as f:
                     pickle.dump(hp_acceptance_rate_dict, f)
-                print(hp_acceptance_rate_dict)
+                logger.info(hp_acceptance_rate_dict)
 
         run_time = time.perf_counter() - t0
         timing_dict = {'hp_tuning': run_time} 
@@ -771,11 +762,11 @@ def main(args):
                 
 
     #################################################
+    logger.info(asterisk_line)
 
-    print(asterisk_line)
-    print('RW PHASE')
-    print('HYPERPARAMETERS BEING USED:')
-    print(rw_hp_dict)
+    logger.info('BEGINNING RW PHASE')
+    logger.info('HYPERPARAMETERS BEING USED:')
+    logger.info(rw_hp_dict)
 
     for iter_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
 
@@ -783,12 +774,12 @@ def main(args):
 
         conformation_info_dict = {} #maps bootstrap_key to (pdb_path,plddt,disordered_percentage,rmsd)
 
-        print('ON CONFORMATION %d/%d:' % (iter_num+1,min(args.num_training_conformations,num_conformations_to_optimize)))
-        print(conformation_info_i)
+        logger.info('ON CONFORMATION %d/%d:' % (iter_num+1,min(args.num_training_conformations,num_conformations_to_optimize)))
+        logger.info(conformation_info_i)
         bootstrap_training_conformations_dir_conformation_i = '%s/conformation%d' % (bootstrap_training_conformations_dir,iter_num)
 
         pdb_files = glob.glob('%s/*.pdb' % bootstrap_training_conformations_dir_conformation_i)
-        if len(pdb_files) == 0: #files only exist in this directory if we trained with respect to this target structure
+        if len(pdb_files) == 0: #if files do not exist in this directory, gradient descent was not run with respect to this target structure
             continue 
 
         target_str = 'target=conformation%d' % iter_num
@@ -798,9 +789,9 @@ def main(args):
         model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
         sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
 
-        if 'full' in rw_hp_config_data['cov_type']:
+        if rw_hp_config_data['cov_type'] == 'full':
             random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
-            print('calculating cholesky')
+            logger.info('calculating cholesky')
             L = np.linalg.cholesky(random_cov)
         else:
             L = None 
@@ -810,37 +801,31 @@ def main(args):
         pdb_files = glob.glob('%s/**/*.pdb' % rw_output_dir)
         if len(pdb_files) >= args.num_rw_steps:
             if args.overwrite_pred:
-                print('removing pdb files in %s' % rw_output_dir)
+                logger.info('removing pdb files in %s' % rw_output_dir)
                 rw_helper_functions.remove_files(pdb_files)
             else:
-                print('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))
+                logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))
                 continue 
         elif len(pdb_files) > 0: #incomplete job
-            print('removing pdb files in %s' % rw_output_dir)
+            logger.info('removing pdb files in %s' % rw_output_dir)
             rw_helper_functions.remove_files(pdb_files)
 
-        print('BEGINNING RW FOR: %s' % rw_output_dir)
+        logger.info('BEGINNING RW FOR: %s' % rw_output_dir)
 
         state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, early_stop=True)
-
         conformation_info_dict[iter_num] = conformation_info
 
         acceptance_rate = sum(state_history)/len(state_history)
-        print('ACCEPTANCE RATE: %.3f' % acceptance_rate)
+        logger.info('ACCEPTANCE RATE: %.3f' % acceptance_rate)
 
         conformation_info_output_dir = rw_output_dir
         conformation_info_fname = '%s/conformation_info.pkl' % conformation_info_output_dir
         with open(conformation_info_fname, 'wb') as f:
             pickle.dump(conformation_info_dict, f)
 
-        print(asterisk_line)
-        print(conformation_info_dict[iter_num])
-        print(asterisk_line)
-        rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
-        max_rmsd = np.max(rmsd_all)
-        print('MAX RMSD: %.3f' % max_rmsd)
+        summarize_rw(iter_num, conformation_info)
 
-        inference_key = 'inference_%d' % i
+        inference_key = 'inference_%d' % iter_num
         run_time = time.perf_counter() - t0
         timing_dict = {inference_key: run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, inference_key)
@@ -995,6 +980,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--disordered_percentage_threshold", type=int, default=80
+    )
+    parser.add_argument(
+        "--log_level", type=str, default='INFO'
     )
 
 
