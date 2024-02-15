@@ -16,10 +16,6 @@ import time
 from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
 
-logging.basicConfig()
-logger = logging.getLogger(__file__)
-logger.setLevel(level=logging.INFO)
-
 import subprocess 
 import pickle
 
@@ -58,6 +54,9 @@ import pandas as pd
 from random_corr_utils.random_corr_sap import gen_randcorr_sap
 from pdb_utils.pdb_utils import align_and_get_rmsd
 import rw_helper_functions
+
+logging.basicConfig(filename='rw_monomer.log', filemode='w')
+logger = logging.getLogger(__file__)
 
 finetune_openfold_path = './finetune_openfold.py'
 
@@ -316,38 +315,6 @@ def get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data
     return new_scaling_factor_candidates
 
 
-def get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data):
-
-    print('GETTING OPTIMAL HP GIVEN CURRENT:')
-    print(hp_acceptance_rate_dict)
-
-    upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
-    lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
-    
-    acceptance_rate_delta_dict = {} 
-    for key in sorted(hp_acceptance_rate_dict.keys(),key=lambda x: x[0]): #sort by eps scaling factor (eps scaling factor is always first element in zipped list) 
-            acceptance_rate = hp_acceptance_rate_dict[key]
-            acceptance_rate_delta_dict[key] = abs(acceptance_rate - rw_hp_config_data['rw_tuning_acceptance_threshold'])
-
-    #get hyperparameters whose acceptance rate is closest to acceptance_threshold (and at least as large as the acceptance threshold) 
-    optimal_hyperparameters = None
-    min_delta = 100
-    for key in sorted(acceptance_rate_delta_dict.keys(),key=lambda x: x[0]):
-        acceptance_rate_delta = acceptance_rate_delta_dict[key]
-        acceptance_rate = hp_acceptance_rate_dict[key]
-        if acceptance_rate > upper_bound_acceptance_threshold or acceptance_rate < lower_bound_acceptance_threshold:
-            continue 
-        elif acceptance_rate_delta < min_delta:
-            min_delta = acceptance_rate_delta
-            optimal_hyperparameters = key
-
-    if optimal_hyperparameters is not None:
-        rw_hp_dict = populate_rw_hp_dict(rw_hp_config_data['rw_type'], optimal_hyperparameters)
-    else:
-        rw_hp_dict = {} 
-
-    return rw_hp_dict
-
              
 def construct_grid_search_combinations(rw_type, scaling_factor_candidates, alpha_candidates, gamma_candidates):
 
@@ -361,22 +328,6 @@ def construct_grid_search_combinations(rw_type, scaling_factor_candidates, alpha
     grid_search_combinations = sorted(grid_search_combinations, key=lambda x: x[0])
 
     return grid_search_combinations
-
-def populate_rw_hp_dict(rw_type, items):
-
-    rw_hp_dict = {} 
-
-    if rw_type == 'vanila':
-        rw_hp_dict['epsilon_scaling_factor'] = items[0]
-    elif rw_type == 'discrete_ou':
-        rw_hp_dict['epsilon_scaling_factor'] = items[0]
-        rw_hp_dict['alpha'] = items[1]
-    elif rw_type == 'rw_w_momentum':
-        rw_hp_dict['epsilon_scaling_factor'] = items[0]
-        rw_hp_dict['gamma'] = items[1]
-
-    return rw_hp_dict
-
 
 
 def main(args):
@@ -685,7 +636,6 @@ def main(args):
  
                 cmd_to_run = ["python", finetune_openfold_path] + script_arguments
                 cmd_to_run_str = s = ' '.join(cmd_to_run)
-                print(asterisk_line)
                 print("RUNNING GRADIENT DESCENT WRT TO: %s" % curr_pdb_fname)
                 print(cmd_to_run_str)
                 subprocess.run(cmd_to_run)
@@ -716,7 +666,7 @@ def main(args):
         with open(hp_acceptance_rate_fname, 'rb') as f:
             hp_acceptance_rate_dict = pickle.load(f)
         print(hp_acceptance_rate_dict)
-        rw_hp_dict = get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data)
+        rw_hp_dict = rw_helper_functions.get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False)
         if rw_hp_dict != {}:
             skip_auto_calc = True
 
@@ -766,7 +716,7 @@ def main(args):
                 else:
                     L = None 
 
-                state_history_dict = rw_helper_functions.run_grid_search(grid_search_combinations, state_history_dict, target_str, pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args, False)
+                state_history_dict = rw_helper_functions.run_grid_search(grid_search_combinations, state_history_dict, None, target_str, pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args, False, False)
   
                 for key in state_history_dict: 
                     print('FOR RW HYPERPARAMETER COMBINATION:')
@@ -802,7 +752,7 @@ def main(args):
                         print(grid_search_combinations)
                         break 
                     
-            rw_hp_dict = get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data)
+            rw_hp_dict = rw_helper_functions.get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False)
             if rw_hp_dict == {}:
                 print('NO SCALING FACTOR CANDIDATES FOUND THAT MATCHED ACCEPTANCE CRITERIA')
                 scaling_factor_candidates = get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data)

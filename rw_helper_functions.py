@@ -12,10 +12,6 @@ import pandas as pd
 from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
 
-logging.basicConfig()
-logger = logging.getLogger(__file__)
-logger.setLevel(level=logging.INFO)
-
 import subprocess 
 import pickle
 
@@ -36,6 +32,8 @@ if(
     # Gives a large speedup on Ampere-class GPUs
     torch.set_float32_matmul_precision("high")
 
+logger = logging.getLogger(__file__)
+logger.setLevel(level=logging.INFO)
 
 TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
@@ -171,7 +169,27 @@ def autopopulate_state_history_dict(state_history_dict, grid_search_combinations
     return state_history_dict
          
 
-def run_grid_search(grid_search_combinations, state_history_dict, source_str,target_str, pdb_path_initial, intrinsic_dim, rw_type, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, output_dir, phase, args, save_intrinsic_param):
+def populate_rw_hp_dict(rw_type, items, is_multimer):
+
+    rw_hp_dict = {} 
+
+    if is_multimer:
+        rw_hp_dict['epsilon_scaling_factor'] = list(items)
+    else:
+        if rw_type == 'vanila':
+            rw_hp_dict['epsilon_scaling_factor'] = items[0]
+        elif rw_type == 'discrete_ou':
+            rw_hp_dict['epsilon_scaling_factor'] = items[0]
+            rw_hp_dict['alpha'] = items[1]
+        elif rw_type == 'rw_w_momentum':
+            rw_hp_dict['epsilon_scaling_factor'] = items[0]
+            rw_hp_dict['gamma'] = items[1]
+
+    return rw_hp_dict
+
+
+
+def run_grid_search(grid_search_combinations, state_history_dict, source_str, target_str, pdb_path_initial, intrinsic_dim, rw_type, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, output_dir, phase, args, save_intrinsic_param, is_multimer=False):
 
     upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
     lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
@@ -183,13 +201,16 @@ def run_grid_search(grid_search_combinations, state_history_dict, source_str,tar
     if len(grid_search_combinations) == 1 or len(state_history_dict) > 0:
 
         for i,items in enumerate(grid_search_combinations): 
-            rw_hp_dict = populate_rw_hp_dict(rw_type, items)
+            rw_hp_dict = populate_rw_hp_dict(rw_type, items, is_multimer)
             print(asterisk_line)
             print('EVALUATING RW HYPERPARAMETERS:')
             print(rw_hp_dict)
             print(asterisk_line)
 
-            rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir,i,source_str,target_str)
+            if is_multimer:
+                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir,i,source_str,target_str)
+            else:
+                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir,i,target_str)
 
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
@@ -198,7 +219,7 @@ def run_grid_search(grid_search_combinations, state_history_dict, source_str,tar
 
             print('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, args, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, early_stop=True)
+            state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -222,7 +243,7 @@ def run_grid_search(grid_search_combinations, state_history_dict, source_str,tar
         #if the acceptance rate of max(grid_search_combinations) >= ub_threshold, we set the acceptance rate of all other combinations to 1 (because decreasing scaling factor only can increase acceptance rate)
         #if the acceptance rate of min(grid_search_combinations) <= lb_threshold, we set the acceptance rate of all other combinations to 0 (because increasing scaling factor only can decrease acceptance rate)
         
-        for i in [1,0]: #order doesn't technically matter, but we tend to undershoot scaling_factor, so we start evaluating the max_combination as opposed to the min_combination 
+        for i in reversed(range(2)): #order doesn't technically matter, but we tend to undershoot scaling_factor, so we start evaluating the max_combination as opposed to the min_combination 
             items = min_max_combination[i]
             rw_hp_dict = populate_rw_hp_dict(rw_type, items)
             print(asterisk_line)
@@ -234,7 +255,11 @@ def run_grid_search(grid_search_combinations, state_history_dict, source_str,tar
                 combo_num = i 
             else:
                 combo_num = len(grid_search_combinations)-1
-            rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir,combo_num,target_str)
+            
+            if is_multimer:
+                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir,combo_num,source_str,target_str)
+            else:
+                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir,combo_num,target_str)
 
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
@@ -243,7 +268,7 @@ def run_grid_search(grid_search_combinations, state_history_dict, source_str,tar
 
             print('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, args, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, early_stop=True)
+            state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -267,13 +292,16 @@ def run_grid_search(grid_search_combinations, state_history_dict, source_str,tar
                 
         #calculate for all other combinations if did not extrapolate 
         for i,items in enumerate(grid_search_combinations_excluding_min_max): 
-            rw_hp_dict = populate_rw_hp_dict(rw_type, items)
+            rw_hp_dict = populate_rw_hp_dict(rw_type, items, is_multimer)
             print(asterisk_line)
             print('EVALUATING RW HYPERPARAMETERS:')
             print(rw_hp_dict)
             print(asterisk_line)
 
-            rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir,i,source_str,target_str)
+            if is_multimer:
+                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir,i,source_str,target_str)
+            else:
+                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir,i,target_str)
 
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
@@ -282,7 +310,7 @@ def run_grid_search(grid_search_combinations, state_history_dict, source_str,tar
 
             print('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, args, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, early_stop=True)
+            state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -296,5 +324,83 @@ def run_grid_search(grid_search_combinations, state_history_dict, source_str,tar
                     return state_history_dict 
 
     return state_history_dict
+
+
+
+def get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False):
+
+    if is_multimer:
+        f = lambda x: sum(x)
+    else:
+        f = lambda x: x[0] #sort by eps scaling factor (eps scaling factor is always first element in zipped list) 
+
+    logger.info('GETTING OPTIMAL HP GIVEN CURRENT:')
+    logger.info(hp_acceptance_rate_dict)
+
+    upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
+    lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
+    
+    acceptance_rate_delta_dict = {} 
+    for key in sorted(hp_acceptance_rate_dict.keys(),key=f): 
+            acceptance_rate = hp_acceptance_rate_dict[key]
+            acceptance_rate_delta_dict[key] = abs(acceptance_rate - rw_hp_config_data['rw_tuning_acceptance_threshold'])
+
+    #get hyperparameters whose acceptance rate is closest to acceptance_threshold (and at least as large as the acceptance threshold) 
+    optimal_hyperparameters = None
+    min_delta = 100
+    for key in sorted(acceptance_rate_delta_dict.keys(),key=f):  
+        acceptance_rate_delta = acceptance_rate_delta_dict[key]
+        acceptance_rate = hp_acceptance_rate_dict[key]
+        if acceptance_rate > upper_bound_acceptance_threshold or acceptance_rate < lower_bound_acceptance_threshold:
+            continue 
+        elif acceptance_rate_delta < min_delta:
+            min_delta = acceptance_rate_delta
+            optimal_hyperparameters = key
+
+    if optimal_hyperparameters is not None:
+        rw_hp_dict = populate_rw_hp_dict(rw_hp_config_data['rw_type'], optimal_hyperparameters, is_multimer)
+    else:
+        rw_hp_dict = {} 
+
+    return rw_hp_dict
+
+
+def get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations):
+
+    for key in state_history_dict: 
+        logger.info('FOR RW HYPERPARAMETER COMBINATION:')
+        logger.info(key)
+        logger.info('STATE HISTORY:')
+        logger.info(state_history_dict[key])
+        cumm_acceptance_rate = sum(state_history_dict[key])/len(state_history_dict[key])
+        logger.info('ACCEPTANCE RATE= %.3f' % cumm_acceptance_rate)
+        hp_acceptance_rate_dict[key] = cumm_acceptance_rate
+
+        if cumm_acceptance_rate > upper_bound_acceptance_threshold or cumm_acceptance_rate < lower_bound_acceptance_threshold:
+            if key in grid_search_combinations:
+                logger.info('REMOVING RW HYPERPARAMETER COMBINATION WITH ACCEPTANCE RATE %.2f' % cumm_acceptance_rate)
+                logger.info(key)
+                grid_search_combinations.remove(key)
+
+    logger.info('CURRENT GRID SEARCH PARAMETERS:')
+    logger.info(grid_search_combinations)
+
+    exit_status = 0 
+
+    if len(grid_search_combinations) == 0:
+        logger.info('ALL CURRENT HYPERPARAMETER COMBINATIONS HAVE BEEN ELIMINATED')
+        exit_status = 1
+    elif len(grid_search_combinations) == 1:
+        logger.info('ONLY SINGLE HYPERPARAMETER COMBINATION  EXISTS:')
+        exit_status = 1
+    elif len(grid_search_combinations) > 1:
+        completed = False
+        if (i+1) >= args.num_rw_hp_tuning_rounds_total:
+            completed = True
+        if completed:
+            logger.info('ALL HYPERPARAMETER COMBINATIONS HAVE BEEN RUN THE SPECIFIED NUMBER OF ROUNDS (%d)' % args.num_rw_hp_tuning_rounds_total)
+            exit_status = 1 
+
+    return hp_acceptance_rate_dict, grid_search_combinations, exit_status
 
 

@@ -17,10 +17,6 @@ import pandas as pd
 from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
 
-logging.basicConfig()
-logger = logging.getLogger(__file__)
-logger.setLevel(level=logging.INFO)
-
 import subprocess 
 import pickle
 
@@ -59,6 +55,9 @@ from random_corr_utils.random_corr_sap import gen_randcorr_sap
 from pdb_utils.pdb_utils import align_and_get_rmsd
 import rw_helper_functions
 
+logging.basicConfig(filename='rw_multimer.log', filemode='w')
+logger = logging.getLogger(__file__)
+
 finetune_openfold_path = './finetune_openfold.py'
 
 TRACING_INTERVAL = 50
@@ -71,7 +70,7 @@ def eval_model(model, config, intrinsic_parameter, epsilon, epsilon_scaling_fact
     model.epsilon = nn.Parameter(torch.tensor(epsilon, dtype=torch.float).to(args.model_device)) 
     model.epsilon_scaling_factor = nn.Parameter(torch.tensor(epsilon_scaling_factor, dtype=torch.float).to(args.model_device))
 
-    print('Tag: %s' % tag)
+    logger.info('Tag: %s' % tag)
     os.makedirs(output_dir, exist_ok=True)
 
     out, inference_time = run_model_w_intrinsic_dim(model, processed_feature_dict, tag, output_dir, return_inference_time=True)
@@ -222,10 +221,10 @@ def run_rw(
         curr_tag = '%s_iter%d_step-iter%d_step-agg%d' % (base_tag, iter_n, curr_step_iter_n, curr_step_aggregate) 
         mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, inference_time, accept_conformation, pdb_path_rw = eval_model(model, config, intrinsic_param_initial, epsilon_cummulative, rw_hp_dict['epsilon_scaling_factor'], feature_processor, feature_dict, processed_feature_dict, curr_tag, output_dir, phase, args)    
         state_history.append(accept_conformation)
-        print('pLDDT: %.3f, IPTM_PTM SCORE: %.3f, disordered percentage: %.3f, num recycles: %d, step: %d' % (mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, curr_step_aggregate)) 
+        logger.info('pLDDT: %.3f, IPTM_PTM SCORE: %.3f, disordered percentage: %.3f, num recycles: %d, step: %d' % (mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, curr_step_aggregate)) 
 
         if accept_conformation:
-            print('STEP %d: ACCEPTED' % curr_step_aggregate)
+            logger.info('STEP %d: ACCEPTED' % curr_step_aggregate)
             epsilon_prev = epsilon_cummulative #x_i = x_i-1 + eps_i*s --> = s*sum(eps_i)
             curr_step_iter_n += 1
             num_accepted_steps += 1
@@ -235,7 +234,7 @@ def run_rw(
             else:
                 conformation_info.append((pdb_path_rw, rmsd, mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, inference_time, None, None))
         else:
-            print('STEP %d: REJECTED' % curr_step_aggregate)
+            logger.info('STEP %d: REJECTED' % curr_step_aggregate)
             if early_stop:
                 return state_history, conformation_info
             else:
@@ -251,8 +250,8 @@ def run_rw(
 
 def get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data):
 
-    print('GETTING NEW SCALING FACTOR CANDIDATES GIVEN CURRENT:')
-    print(hp_acceptance_rate_dict)
+    logger.info('GETTING NEW SCALING FACTOR CANDIDATES GIVEN CURRENT:')
+    logger.info(hp_acceptance_rate_dict)
 
     num_chains = rw_hp_config_data['num_chains']
     chains_to_update = rw_hp_config_data['chains_to_update']
@@ -268,8 +267,8 @@ def get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data
 
     curr_scaling_factor_candidates = list(hp_acceptance_rate_dict.keys())
     curr_scaling_factor_candidates_rel_idx = [tuple(curr_scaling_factor_candidates[i][j] for j in relevant_scaling_factor_idx) for i in range(len(curr_scaling_factor_candidates))] #only looking at scaling factor candidates who are being tuned
-    print('SCALING FACTORS OF CHAINS BEING MODIFIED:')
-    print(curr_scaling_factor_candidates_rel_idx)
+    logger.info('SCALING FACTORS OF CHAINS BEING MODIFIED:')
+    logger.info(curr_scaling_factor_candidates_rel_idx)
 
     upper_bound_scaling_factor = None
     lower_bound_scaling_factor = None 
@@ -302,39 +301,7 @@ def get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data
     return new_scaling_factor_candidates
 
 
-def get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data):
 
-    print('GETTING OPTIMAL HP GIVEN CURRENT:')
-    print(hp_acceptance_rate_dict)
-
-    upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
-    lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
-    
-    acceptance_rate_delta_dict = {} 
-    for key in sorted(hp_acceptance_rate_dict.keys(),key=lambda x: sum(x)): #sort by eps scaling factor (eps scaling factor is always first element in zipped list) 
-            acceptance_rate = hp_acceptance_rate_dict[key]
-            acceptance_rate_delta_dict[key] = abs(acceptance_rate - rw_hp_config_data['rw_tuning_acceptance_threshold'])
-
-    #get hyperparameters whose acceptance rate is closest to acceptance_threshold (and at least as large as the acceptance threshold) 
-    optimal_hyperparameters = None
-    min_delta = 100
-    for key in sorted(acceptance_rate_delta_dict.keys(),key=lambda x: sum(x)):  
-        acceptance_rate_delta = acceptance_rate_delta_dict[key]
-        acceptance_rate = hp_acceptance_rate_dict[key]
-        if acceptance_rate > upper_bound_acceptance_threshold or acceptance_rate < lower_bound_acceptance_threshold:
-            continue 
-        elif acceptance_rate_delta < min_delta:
-            min_delta = acceptance_rate_delta
-            optimal_hyperparameters = key
-
-    if optimal_hyperparameters is not None:
-        rw_hp_dict = populate_rw_hp_dict(rw_hp_config_data['rw_type'], optimal_hyperparameters)
-    else:
-        rw_hp_dict = {} 
-
-    return rw_hp_dict
-
-             
 def construct_grid_search_combinations(rw_hp_config_data, scaling_factor_candidates):
 
     num_chains = rw_hp_config_data['num_chains']
@@ -383,14 +350,104 @@ def construct_grid_search_combinations(rw_hp_config_data, scaling_factor_candida
 
         return scaling_factor_candidates_all 
 
-def populate_rw_hp_dict(rw_type, items):
-    rw_hp_dict = {} 
-    rw_hp_dict['epsilon_scaling_factor'] = list(items)
-    return rw_hp_dict
+def update_config(config, seqs, num_chains, args):
+    if args.recycle_wo_early_stopping:
+        config.model.recycle_early_stop_tolerance = -1 #do full recycling 
+        config.data.common.max_recycling_iters = args.max_recycling_iters
+        num_recycles_str = str(args.max_recycling_iters+1)
+    else:
+        num_recycles_str = 'early_stopping'
+
+    if 'chainmask' in config.custom_fine_tuning.ft_method:
+        total_seq_len = sum(len(s) for s in seqs)
+        mask_all = [] 
+        chain_mask_row_all = []
+        chain_mask_col_all = [] 
+        for i,curr_seq in enumerate(seqs):
+            mask = torch.zeros(total_seq_len)
+            mask_start_pos = sum([len(s) for s in seqs[0:i]])
+            mask_end_pos = mask_start_pos+len(curr_seq)
+            mask[mask_start_pos:mask_end_pos] = 1. 
+            mask_all.append(mask)
+            chain_mask_row = mask.unsqueeze(1).to('cuda').to(dtype=torch.bfloat16)
+            chain_mask_col = mask.reshape(mask.shape[0],1,1).to('cuda').to(dtype=torch.bfloat16) #this is for col attention (where s,r,c -> r,s,c)
+            chain_mask_row_all.append(chain_mask_row)
+            chain_mask_col_all.append(chain_mask_col)
+
+        chain_mask_row_all = torch.stack(chain_mask_row_all)
+        chain_mask_col_all = torch.stack(chain_mask_col_all)
+
+        chain_mask_row_all.requires_grad_(False)
+        chain_mask_col_all.requires_grad_(False)
+        config.model.extra_msa.extra_msa_stack.chain_mask_row = chain_mask_row_all
+        config.model.extra_msa.extra_msa_stack.chain_mask_col = chain_mask_col_all
+        config.model.evoformer_stack.chain_mask_row = chain_mask_row_all 
+        config.model.evoformer_stack.chain_mask_col = chain_mask_col_all
+    else:
+        config.model.extra_msa.extra_msa_stack.chain_mask_row = None
+        config.model.extra_msa.extra_msa_stack.chain_mask_col = None
+        config.model.evoformer_stack.chain_mask_row = None 
+        config.model.evoformer_stack.chain_mask_col = None 
+
+    config.custom_fine_tuning.num_chains = num_chains
+    
+    return config
+
+def get_aligned_models_info(model_to_run, initial_pred_path_dict, args):
+    
+    aligned_models_max_rmsd_dict = {} #maps each model to the  model with the most divergent prediction w.r.t itself   
+
+    for i,model_name_i in enumerate(models_to_run):
+        pred_i_path = initial_pred_path_dict[model_name_i]
+        for j,model_name_j in enumerate(models_to_run):
+            if i != j:        
+                pred_j_path = initial_pred_path_dict[model_name_j]
+                pred_j_fname = '%s.pdb' % file_id #during training, expected filename is without chain_id (i.e 1xyz-1xyz) 
+                aligned_output_dir = '%s/%s/%s/initial_pred_aligned-%s/%s' % (args.output_dir_base, 'rw_v4', args.module_config, model_name_i, model_name_j)
+                pred_j_aligned_path = os.path.join(aligned_output_dir,pred_j_fname)
+                os.makedirs(aligned_output_dir, exist_ok=True)
+                shutil.copy(pred_j_path, pred_j_aligned_path)
+                rmsd = align_and_get_rmsd(pred_i_path, pred_j_aligned_path)
+                logger.info('RMSD between model %d and model %d: %.3f' % (i+1, j+1, rmsd))
+                model_ij_info = (model_name_i,model_name_j,pred_i_path,pred_j_aligned_path,rmsd)
+
+                if i in aligned_models_max_rmsd_dict:
+                    max_rmsd = aligned_models_max_rmsd_dict[i][-1]
+                    if rmsd > max_rmsd:
+                        aligned_models_max_rmsd_dict[i] = model_ij_info 
+                else:
+                    aligned_models_max_rmsd_dict[i] = model_ij_info
+
+    aligned_models_info = [aligned_models_max_rmsd_dict[key] for key in sorted(aligned_models_max_rmsd_dict.keys())]
+    aligned_models_info = aligned_models_info[0:args.num_training_conformations]
+
+    logger.info('ALIGNED MODELS INFO:')    
+    logger.info(aligned_models_info)
+
+    return aligned_models_info
+
+def summarize_rw(model_name_source, conformation_info):
+    logger.info(asterisk_line)
+    logger.info('RESULTS FOR MODEL: %s' % model_name_source)
+    logger.debug(conformation_info)
+    rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
+    iptm_score_all = np.array([conformation_info[i][3] for i in range(0,len(conformation_info))])
+    max_rmsd = np.max(rmsd_all)
+    mean_iptm_score = np.mean(iptm_score_all)
+    max_iptm_score = np.max(iptm_score_all)
+    logger.info('MAX RMSD: %.3f' % max_rmsd)
+    logger.info('MEAN IPTM_PTM: %.3f' % mean_iptm_score)
+    logger.info('MAX IPTM_PTM: %.3f' % max_iptm_score)
 
 
 
 def main(args):
+
+    if args.log_level.lower() == 'debug':
+        logger.setLevel(level=logging.DEBUG)
+    else:
+        logger.setLevel(level=logging.INFO)
+
     # Create the output directory
     os.makedirs(args.output_dir_base, exist_ok=True)
     output_dir_name = args.output_dir_base.split('/')[-1]
@@ -400,8 +457,8 @@ def main(args):
     for m in models_to_run:
         jax_param_path_dict[m] = ''.join((args.jax_param_parent_path, '/params_', m, '.npz'))
     
-    print('MODEL LIST:')
-    print(jax_param_path_dict)
+    logger.info("MODEL LIST:")
+    logger.info(jax_param_path_dict)
 
     output_dir = '%s/%s/%s/train-%s/rw-%s' % (args.output_dir_base, 'rw_v4', args.module_config, args.train_hp_config, args.rw_hp_config)
     l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'rw_v4', args.module_config)
@@ -411,7 +468,7 @@ def main(args):
     l1_output_dir = os.path.abspath(l1_output_dir)
     l2_output_dir = os.path.abspath(l2_output_dir) 
 
-    print('Output Directory: %s' % output_dir)
+    logger.info("OUTPUT DIRECTORY: %s" % output_dir)
 
     os.makedirs(output_dir, exist_ok=True)
     alignment_dir = args.alignment_dir
@@ -421,7 +478,7 @@ def main(args):
     else:
         file_id = file_id[0] #e.g 1xyz-1xyz
     alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
-    print("alignment directory with file_id: %s" % alignment_dir_w_file_id)
+    logger.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
     
     if args.fasta_file is None:
         pattern = "%s/*.fasta" % alignment_dir_w_file_id
@@ -436,9 +493,9 @@ def main(args):
     with open(fasta_file, "r") as fp:
         fasta_data = fp.read()
     _, seqs = parse_fasta(fasta_data)
-    print(seqs)
+    logger.info("PROTEIN SEQUENCE:")
+    logger.info(seqs)
 
- 
     random_seed = args.data_random_seed
     if random_seed is None:
         random_seed = random.randrange(2**32)
@@ -458,12 +515,12 @@ def main(args):
     files = glob.glob(pattern, recursive=True)
     if len(files) == 1:
         features_output_path = files[0]
-        print('features.pkl path: %s' % features_output_path)
+        logger.info('features.pkl path: %s' % features_output_path)
     else:
         features_output_path = ''
 
     if os.path.isfile(features_output_path):
-        feature_dict = np.load(features_output_path, allow_pickle=True) #this is used for all predictions, so this assumes you are predicting a single sequence 
+        feature_dict = np.load(features_output_path, allow_pickle=True) 
     else:
         template_featurizer = templates.HmmsearchHitFeaturizer(
             mmcif_dir=args.template_mmcif_dir,
@@ -473,14 +530,12 @@ def main(args):
             release_dates_path=args.release_dates_path,
             obsolete_pdbs_path=args.obsolete_pdbs_path
         )
-
         data_processor_monomer = data_pipeline.DataPipeline(
             template_featurizer=template_featurizer,
         )
         data_processor_multimer = data_pipeline.DataPipelineMultimer(
             monomer_data_pipeline=data_processor_monomer
         )
-
         feature_dict = data_processor_multimer.process_fasta(
             fasta_path=fasta_file, alignment_dir=alignment_dir_w_file_id,
         )
@@ -488,25 +543,24 @@ def main(args):
         features_output_path = os.path.join(alignment_dir_w_file_id, 'features.pkl')
         with open(features_output_path, 'wb') as f:
             pickle.dump(feature_dict, f, protocol=4)
-        print('SAVED %s' % features_output_path)
+        logger.info('SAVED %s' % features_output_path)
 
-        #raise FileNotFoundError('%s/features.pkl not found' % alignment_dir_w_file_id)
-
-    print(feature_dict)
+    logger.debug("FEATURE DICTIONARY:")
+    logger.debug(feature_dict)
     num_chains = int(feature_dict['assembly_num_chains']) 
     module_config_data['num_chains'] = num_chains 
     rw_hp_config_data['num_chains'] = num_chains
-    print('NUM CHAINS: %d' % num_chains)
+    logger.info('NUM CHAINS: %d' % num_chains)
 
-    #perform checks on config file
     chains_to_update = rw_hp_config_data['chains_to_update']
     chain_scaling_factor_type = rw_hp_config_data['chain_scaling_factor_type'] 
 
-    print("CHAINS TO UPDATE:")
-    print(chains_to_update)
-    print("CHAIN SCALING FACTOR TYPE:")
-    print(chain_scaling_factor_type)
+    logger.info("CHAINS TO UPDATE:")
+    logger.info(chains_to_update)
+    logger.info("CHAIN SCALING FACTOR TYPE:")
+    logger.info(chain_scaling_factor_type)
 
+    #perform checks on config file
     if chains_to_update != ['all']:
         if len(chains_to_update) != num_chains:
             raise ValueError("if chains_to_update not 'all', then must be a binary vector of length num_chains")
@@ -518,12 +572,10 @@ def main(args):
     if module_config_data['layer_to_update'] == ['all'] and chain_scaling_factor_type == 'variable':
         raise ValueError("layer_to_update cannot be 'all' when chain_scaling_factor_type is 'variable'. 'variable' is only allowed when a subset of specific layers with are being modified")
 
-    use_chainmask = False #if chains_to_update = 'all' and chain_scaling_factor_type = 'uniform' 
-    if chains_to_update != ['all']:
-        use_chainmask = True
+    if chains_to_update == ['all'] and chain_scaling_factor_type == 'uniform':
+        use_chainmask = False
     else:
-        if chain_scaling_factor_type == 'variable':
-            use_chainmask = True
+        use_chainmask = True 
 
     config_dict = {}
     for m in models_to_run:
@@ -531,45 +583,9 @@ def main(args):
             config_name = 'multimer-custom_finetuning-SAID_chainmask-all-%s' % m #model with fine tuning layer 
         else:
             config_name = 'multimer-custom_finetuning-SAID-all-%s' % m #model with fine tuning layer  
+
         config = model_config(config_name, long_sequence_inference=args.long_sequence_inference)
-
-        if args.recycle_wo_early_stopping:
-            config.model.recycle_early_stop_tolerance = -1 #do full recycling 
-            config.data.common.max_recycling_iters = args.max_recycling_iters
-            num_recycles_str = str(args.max_recycling_iters+1)
-        else:
-            num_recycles_str = 'early_stopping'
-
-        if 'chainmask' in config.custom_fine_tuning.ft_method:
-            total_seq_len = sum(len(s) for s in seqs)
-            mask_all = [] 
-            chain_mask_row_all = []
-            chain_mask_col_all = [] 
-            for i,curr_seq in enumerate(seqs):
-                mask = torch.zeros(total_seq_len)
-                mask_start_pos = sum([len(s) for s in seqs[0:i]])
-                mask_end_pos = mask_start_pos+len(curr_seq)
-                mask[mask_start_pos:mask_end_pos] = 1. 
-                mask_all.append(mask)
-                chain_mask_row = mask.unsqueeze(1).to('cuda').to(dtype=torch.bfloat16)
-                chain_mask_col = mask.reshape(mask.shape[0],1,1).to('cuda').to(dtype=torch.bfloat16) #this is for col attention (where s,r,c -> r,s,c)
-                chain_mask_row_all.append(chain_mask_row)
-                chain_mask_col_all.append(chain_mask_col)
-
-            chain_mask_row_all = torch.stack(chain_mask_row_all)
-            chain_mask_col_all = torch.stack(chain_mask_col_all)
-
-            chain_mask_row_all.requires_grad_(False)
-            chain_mask_col_all.requires_grad_(False)
-            config.model.extra_msa.extra_msa_stack.chain_mask_row = chain_mask_row_all
-            config.model.extra_msa.extra_msa_stack.chain_mask_col = chain_mask_col_all
-            config.model.evoformer_stack.chain_mask_row = chain_mask_row_all 
-            config.model.evoformer_stack.chain_mask_col = chain_mask_col_all
-        else:
-            config.model.extra_msa.extra_msa_stack.chain_mask_row = None
-            config.model.extra_msa.extra_msa_stack.chain_mask_col = None
-            config.model.evoformer_stack.chain_mask_row = None 
-            config.model.evoformer_stack.chain_mask_col = None 
+        config = update_config(config, seqs, num_chains, args)
 
         if m not in config_dict:
             config_dict[m] = config
@@ -578,15 +594,14 @@ def main(args):
                     raise ValueError(
                         "Tracing requires that fixed_size mode be enabled in the config"
                     )
-    for m in models_to_run:
-        config_dict[m].custom_fine_tuning.num_chains = num_chains
 
     feature_processor = feature_pipeline.FeaturePipeline(config_dict[list(config_dict.keys())[0]].data)
     intrinsic_param_zero = np.zeros(intrinsic_dim)
  
+    
+    #####################################################
+    logger.info(asterisk_line)
     initial_pred_dir = '%s/initial_pred' %  l1_output_dir
-
-    ############################################
 
     if args.skip_initial_pred_phase:
 
@@ -598,12 +613,12 @@ def main(args):
             random_seed = int(np.loadtxt(seed_fname))
             np.random.seed(random_seed)
             torch.manual_seed(random_seed + 1)
-            print('SKIPPING INITIAL PRED PHASE')
+            logger.info('SKIPPING INITIAL PRED PHASE')
         else:
             raise FileNotFoundError('%s not found' % initial_pred_info_fname)
 
         #process features after updating seed 
-        print('PROCESSING FEATURES')
+        logger.debug('PROCESSING FEATURES')
         processed_feature_dict = feature_processor.process_features(
             feature_dict, mode='predict', is_multimer=True
         )
@@ -621,7 +636,7 @@ def main(args):
             if m not in model_dict:
                 model_dict[m] = model
 
-        print('PROCESSING FEATURES')
+        logger.debug('PROCESSING FEATURES')
         processed_feature_dict = feature_processor.process_features(
             feature_dict, mode='predict', is_multimer=True
         )
@@ -637,12 +652,11 @@ def main(args):
             model_name = models_to_run[i]
             initial_pred_output_dir = '%s/%s' %  (initial_pred_dir, model_name)
             tag = 'initial_pred_model_%d' % (i+1)
-            print('RUNNING model %s' % model_name)
+            logger.info('RUNNING %s' % model_name)
             mean_plddt_initial, weighted_ptm_score_initial,  disordered_percentage_initial, _, _, _, pdb_path_initial = eval_model(model_dict[model_name], config_dict[model_name], intrinsic_param_zero, intrinsic_param_zero, [0]*num_chains, feature_processor, feature_dict, processed_feature_dict, tag, initial_pred_output_dir, 'initial', args)   
-            print('pLDDT: %.3f, IPTM_PTM SCORE: %.3f, disordered percentage: %.3f, INITIAL' % (mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial)) 
+            logger.info('pLDDT: %.3f, IPTM_PTM SCORE: %.3f, disordered percentage: %.3f' % (mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial)) 
             conformation_info_dict[model_name] = (pdb_path_initial, mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial) 
             initial_pred_path_dict[model_name] = pdb_path_initial 
-            print(initial_pred_path_dict)   
 
         run_time = time.perf_counter() - t0
         timing_dict = {'initial_pred': run_time} 
@@ -658,38 +672,11 @@ def main(args):
 
         seed_fname = '%s/seed.txt' % initial_pred_dir
         np.savetxt(seed_fname, [random_seed], fmt='%d')
-        
-    aligned_models_list_all = [] 
-    aligned_models_dict = {} #to keep track of max rmsd between each pair of structures  
-
-    for i,model_name_i in enumerate(models_to_run):
-        pred_i_path = initial_pred_path_dict[model_name_i]
-        for j,model_name_j in enumerate(models_to_run):
-            if i != j:        
-                pred_j_path = initial_pred_path_dict[model_name_j]
-                pred_j_fname = '%s.pdb' % file_id #during training, expected filename is without chain_id (i.e 1xyz-1xyz) 
-                aligned_output_dir = '%s/%s/%s/initial_pred_aligned-%s/%s' % (args.output_dir_base, 'rw_v4', args.module_config, model_name_i, model_name_j)
-                pred_j_aligned_path = os.path.join(aligned_output_dir,pred_j_fname)
-                os.makedirs(aligned_output_dir, exist_ok=True)
-                shutil.copy(pred_j_path, pred_j_aligned_path)
-                rmsd = align_and_get_rmsd(pred_i_path, pred_j_aligned_path)
-                print('RMSD between model %d and model %d: %.3f' % (i+1, j+1, rmsd))
-                model_ij_info = (model_name_i,model_name_j,pred_i_path,pred_j_aligned_path,rmsd)
-                aligned_models_list_all.append(model_ij_info)
-
-                if i in aligned_models_dict:
-                    max_rmsd = aligned_models_dict[i][-1]
-                    if rmsd > max_rmsd:
-                        aligned_models_dict[i] = model_ij_info 
-                else:
-                    aligned_models_dict[i] = model_ij_info
-
-    aligned_models_list = [aligned_models_dict[key] for key in sorted(aligned_models_dict.keys())]
-    aligned_models_list = aligned_models_list[0:args.num_training_conformations]
-    print(aligned_models_list)
-
+       
+    aligned_models_info = get_aligned_models_info(model_to_run, initial_pred_path_dict, args)
+ 
     #####################################################
-    print(asterisk_line)
+    logger.info(asterisk_line)
 
     #this uses the standard inference configuration without dropout (unless specified otherwise by user) 
     model_dict = {} 
@@ -702,15 +689,15 @@ def main(args):
  
         t0 = time.perf_counter()
       
-        for i in range(0,len(aligned_models_list)): 
+        for i in range(0,len(aligned_models_info)): 
            
-            model_name_source = aligned_models_list[i][0] #this is model being used for training 
-            model_name_target = aligned_models_list[i][1] 
-            source_path = aligned_models_list[i][2]
-            target_path = aligned_models_list[i][3] 
+            model_name_source = aligned_models_info[i][0] #this is model being used for training 
+            model_name_target = aligned_models_info[i][1] 
+            source_path = aligned_models_info[i][2]
+            target_path = aligned_models_info[i][3] 
             
-            print('ON MODEL')
-            print(aligned_models_list[i])
+            logger.info('ON MODEL')
+            logger.info(aligned_models_info[i])
             source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
             target_str = 'target=%s' % model_name_target
             fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
@@ -736,9 +723,8 @@ def main(args):
      
             cmd_to_run = ["python", finetune_openfold_path] + script_arguments
             cmd_to_run_str = s = ' '.join(cmd_to_run)
-            print(asterisk_line)
-            print("RUNNING GRADIENT DESCENT WITH SOURCE %s AND TARGET %s" % (initial_pred_path_dict[model_name_source],initial_pred_path_dict[model_name_target]))
-            print(cmd_to_run_str)
+            logger.info("RUNNING GRADIENT DESCENT WITH SOURCE %s AND TARGET %s" % (initial_pred_path_dict[model_name_source],initial_pred_path_dict[model_name_target]))
+            logger.info(cmd_to_run_str)
             subprocess.run(cmd_to_run)
 
         run_time = time.perf_counter() - t0
@@ -746,34 +732,35 @@ def main(args):
         rw_helper_functions.write_timings(timing_dict, output_dir, 'gradient_descent')
     
 
-    #################################################
+    #####################################################
+    logger.info(asterisk_line)
  
 
-    print('generating random_corr')
     if rw_hp_config_data['cov_type'] == 'full': 
+        logger.info('GENERATING RANDOM CORRELATION MATRIX')
         random_corr = gen_randcorr_sap.randcorr(intrinsic_dim)
     
-    rw_hp_dict = {} #aim is to populate this 
+    rw_hp_dict = {}  
 
-    print(asterisk_line)
+    logger.info(asterisk_line)
     rw_hp_parent_dir = '%s/rw_hp_tuning' % output_dir
-    print('RW HYPERPARAMETER TUNING PHASE')
+    logger.info('RW HYPERPARAMETER TUNING PHASE')
     hp_acceptance_rate_dict = {}  
     hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
 
     skip_auto_calc = False
     if os.path.exists(hp_acceptance_rate_fname):
-        print('LOADING %s' % hp_acceptance_rate_fname)
+        logger.info('LOADING %s' % hp_acceptance_rate_fname)
         with open(hp_acceptance_rate_fname, 'rb') as f:
             hp_acceptance_rate_dict = pickle.load(f)
-        print(hp_acceptance_rate_dict)
-        rw_hp_dict = get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data)
+        logger.info(hp_acceptance_rate_dict)
+        rw_hp_dict = rw_helper_functions.get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=True)
         if rw_hp_dict != {}:
             skip_auto_calc = True
 
     if not(skip_auto_calc):
 
-        print('TUNING HYPERPARAMETERS VIA GRID SEARCH')
+        logger.info('TUNING HYPERPARAMETERS VIA GRID SEARCH')
 
         t0 = time.perf_counter()
 
@@ -786,20 +773,20 @@ def main(args):
         while rw_hp_dict == {}:
 
             grid_search_combinations = construct_grid_search_combinations(rw_hp_config_data, scaling_factor_candidates)
-            print('INITIAL GRID SEARCH PARAMETERS:')
-            print(grid_search_combinations)
+            logger.info('INITIAL GRID SEARCH PARAMETERS:')
+            logger.info(grid_search_combinations)
 
             state_history_dict = {} 
 
-            for i in range(0,len(aligned_models_list)):
+            for i in range(0,len(aligned_models_info)):
 
-                model_name_source = aligned_models_list[i][0] #this is model being used for training 
-                model_name_target = aligned_models_list[i][1] 
-                source_path = aligned_models_list[i][2]
-                target_path = aligned_models_list[i][3] 
+                model_name_source = aligned_models_info[i][0] #this is model being used for training 
+                model_name_target = aligned_models_info[i][1] 
+                source_path = aligned_models_info[i][2]
+                target_path = aligned_models_info[i][3] 
 
-                print('ON MODEL')
-                print(aligned_models_list[i])
+                logger.info('ON MODEL')
+                logger.info(aligned_models_info[i])
                 source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
                 target_str = 'target=%s' % model_name_target
                 fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
@@ -810,83 +797,52 @@ def main(args):
         
                 if 'full' in rw_hp_config_data['cov_type']:
                     random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
-                    print('calculating cholesky')
+                    logger.info('calculating cholesky')
                     L = np.linalg.cholesky(random_cov)
                 else:
                     L = None 
 
-                state_history_dict = rw_helper_functions.run_grid_search(grid_search_combinations, state_history_dict, source_str, target_str, source_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args, False)
-  
-                for key in state_history_dict: 
-                    print('FOR RW HYPERPARAMETER COMBINATION:')
-                    print(key)
-                    print('STATE HISTORY:')
-                    print(state_history_dict[key])
-                    cumm_acceptance_rate = sum(state_history_dict[key])/len(state_history_dict[key])
-                    print('ACCEPTANCE RATE= %.3f' % cumm_acceptance_rate)
-                    hp_acceptance_rate_dict[key] = cumm_acceptance_rate
+                state_history_dict = rw_helper_functions.run_grid_search(grid_search_combinations, state_history_dict, source_str, target_str, source_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args, False, True)
+                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations)
 
-                    if cumm_acceptance_rate > upper_bound_acceptance_threshold or cumm_acceptance_rate < lower_bound_acceptance_threshold:
-                        if key in grid_search_combinations:
-                            print('REMOVING RW HYPERPARAMETER COMBINATION WITH ACCEPTANCE RATE %.2f' % cumm_acceptance_rate)
-                            print(key)
-                            grid_search_combinations.remove(key)
-
-                print('CURRENT GRID SEARCH PARAMETERS:')
-                print(grid_search_combinations)
-
-                if len(grid_search_combinations) == 0:
-                    print('ALL CURRENT HYPERPARAMETER COMBINATIONS HAVE BEEN ELIMINATED')
+                if exit_status == 1:
                     break 
-                elif len(grid_search_combinations) == 1:
-                    print('ONLY SINGLE HYPERPARAMETER COMBINATION  EXISTS:')
-                    print(grid_search_combinations)
-                    break
-                elif len(grid_search_combinations) > 1:
-                    completed = False
-                    if (i+1) >= args.num_rw_hp_tuning_rounds_total:
-                        completed = True
-                    if completed:
-                        print('ALL HYPERPARAMETER COMBINATIONS HAVE BEEN RUN THE SPECIFIED NUMBER OF ROUNDS (%d)' % args.num_rw_hp_tuning_rounds_total)
-                        print(grid_search_combinations)
-                        break 
-                    
-            rw_hp_dict = get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data)
+                      
+            rw_hp_dict = rw_helper_functions.get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=True)
             if rw_hp_dict == {}:
-                print('NO SCALING FACTOR CANDIDATES FOUND THAT MATCHED ACCEPTANCE CRITERIA')
+                logger.info('NO SCALING FACTOR CANDIDATES FOUND THAT MATCHED ACCEPTANCE CRITERIA')
                 scaling_factor_candidates = get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data)
-                print('HYPERPARAMETER TUNING WITH NEW SCALING FACTOR CANDIDATES')
-                print(scaling_factor_candidates)
+                logger.info('HYPERPARAMETER TUNING WITH NEW SCALING FACTOR CANDIDATES')
+                logger.info(scaling_factor_candidates)
             else:
                 hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
                 with open(hp_acceptance_rate_fname, 'wb') as f:
                     pickle.dump(hp_acceptance_rate_dict, f)
-                print(hp_acceptance_rate_dict)
+                logger.info(hp_acceptance_rate_dict)
 
         run_time = time.perf_counter() - t0
         timing_dict = {'hp_tuning': run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, 'hp_tuning')
                                  
-    #################################################
+    #####################################################
+    logger.info(asterisk_line)
 
-    print(asterisk_line)
-    print('RW PHASE')
-    print('HYPERPARAMETERS BEING USED:')
-    print(rw_hp_dict)
+    logger.info('RW PHASE')
+    logger.info('HYPERPARAMETERS BEING USED:')
+    logger.info(rw_hp_dict)
 
-    for i in range(0,len(aligned_models_list)):
+    for i in range(0,len(aligned_models_info)):
 
         t0 = time.perf_counter()
 
         conformation_info_dict = {} #maps source_target to (pdb_path,plddt,disordered_percentage,rmsd)
 
-        model_name_source = aligned_models_list[i][0] #this is model being used for training 
-        model_name_target = aligned_models_list[i][1] 
-        source_path = aligned_models_list[i][2]
-        target_path = aligned_models_list[i][3] 
+        model_name_source = aligned_models_info[i][0] #this is model being used for training 
+        model_name_target = aligned_models_info[i][1] 
+        source_path = aligned_models_info[i][2]
+        target_path = aligned_models_info[i][3] 
         
-        print('ON MODEL')
-        print(aligned_models_list[i])
+        logger.info('ON MODEL: %s' % model_name_source)
         source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
         target_str = 'target=%s' % model_name_target
         fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
@@ -897,7 +853,7 @@ def main(args):
 
         if 'full' in rw_hp_config_data['cov_type']:
             random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
-            print('calculating cholesky')
+            logger.info('calculating cholesky')
             L = np.linalg.cholesky(random_cov)
         else:
             L = None 
@@ -907,16 +863,16 @@ def main(args):
         pdb_files = glob.glob('%s/**/*.pdb' % rw_output_dir)
         if len(pdb_files) >= args.num_rw_steps:
             if args.overwrite_pred:
-                print('removing pdb files in %s' % rw_output_dir)
+                logger.info('removing pdb files in %s' % rw_output_dir)
                 rw_helper_functions.remove_files(pdb_files)
             else:
-                print('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))
+                logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))
                 continue 
         elif len(pdb_files) > 0: #incomplete job
-            print('removing pdb files in %s' % rw_output_dir)
+            logger.info('removing pdb files in %s' % rw_output_dir)
             rw_helper_functions.remove_files(pdb_files)
 
-        print('BEGINNING RW FOR: %s' % rw_output_dir)
+        logger.info('RW OUTPUT DIR: %s' % rw_output_dir)
 
         state_history, conformation_info = run_rw(source_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, early_stop=True)
 
@@ -924,24 +880,14 @@ def main(args):
         conformation_info_dict[key] = conformation_info
 
         acceptance_rate = sum(state_history)/len(state_history)
-        print('ACCEPTANCE RATE: %.3f' % acceptance_rate)
+        logger.info('ACCEPTANCE RATE: %.3f' % acceptance_rate)
 
         conformation_info_output_dir = rw_output_dir 
         conformation_info_fname = '%s/conformation_info.pkl' % conformation_info_output_dir
         with open(conformation_info_fname, 'wb') as f:
             pickle.dump(conformation_info_dict, f)
 
-        print(asterisk_line)
-        print(conformation_info_dict[key])
-        print(asterisk_line)
-        rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
-        iptm_score_all = np.array([conformation_info[i][3] for i in range(0,len(conformation_info))])
-        max_rmsd = np.max(rmsd_all)
-        mean_iptm_score = np.mean(iptm_score_all)
-        max_iptm_score = np.max(iptm_score_all)
-        print('MAX RMSD: %.3f' % max_rmsd)
-        print('MEAN IPTM_PTM: %.3f' % mean_iptm_score)
-        print('MAX IPTM_PTM: %.3f' % max_iptm_score)
+        summarize_rw(model_name_source, conformation_info)
 
         inference_key = 'inference_%d' % i
         run_time = time.perf_counter() - t0
@@ -1095,8 +1041,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--disordered_percentage_threshold", type=int, default=80
     )
-
-
+    parser.add_argument(
+        "--log_level", type=str, default='INFO'
+    )
 
 
 
