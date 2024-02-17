@@ -45,21 +45,25 @@ def write_timings(timing_dict, output_dir_base, timing_fname):
     with open(output_file, "w") as f:
         json.dump(timing_dict, f)
 
+
 def remove_files_in_dir(path):
     file_list = glob.glob('%s/*' % path)
     for f in file_list:
-        print('removing old file: %s' % f)
+        logger.info('removing old file: %s' % f)
         os.remove(f)
+
 
 def remove_files(file_list):
     for f in file_list:
-        print('removing old file: %s' % f)
+        logger.info('removing old file: %s' % f)
         os.remove(f)
+
 
 def remove_trailing_zeros(number):
     number_str = str(number)
     number_str = number_str.rstrip('0').rstrip('.') if '.' in number_str else number_str
     return(number_str)
+
 
 def round_up_seqlen(seqlen):
     return int(math.ceil(seqlen / TRACING_INTERVAL)) * TRACING_INTERVAL
@@ -67,6 +71,7 @@ def round_up_seqlen(seqlen):
 
 def list_files_with_extensions(dir, extensions):
     return [f for f in os.listdir(dir) if f.endswith(extensions)]
+
 
 def get_latest_version_num(fine_tuning_save_dir):
     latest_version_num = -1
@@ -82,8 +87,7 @@ def get_latest_version_num(fine_tuning_save_dir):
     return latest_version_num
 
 
-def calc_disordered_percentage(pdb_path):
- 
+def calc_disordered_percentage(pdb_path): 
     dssp_tuple = dssp_dict_from_pdb_file(pdb_path)
     dssp_dict = dssp_tuple[0]
     ss_all = [] 
@@ -91,18 +95,17 @@ def calc_disordered_percentage(pdb_path):
         ss = dssp_dict[key][1]
         ss_all.append(ss)
 
-    print(ss_all)
+    logger.info(ss_all)
 
     disordered_num = 0 
     for s in ss_all:
         if s in ['-','T','S']:
             disordered_num += 1
-    disordered_percentage = (disordered_num/len(ss_all))*100
- 
+    disordered_percentage = (disordered_num/len(ss_all))*100 
     return disordered_percentage
 
-def accept_criteria(mean_plddt, disordered_percentage, mean_plddt_threshold, disordered_percentage_threshold):
 
+def accept_criteria(mean_plddt, disordered_percentage, mean_plddt_threshold, disordered_percentage_threshold):
     if (mean_plddt > mean_plddt_threshold) and (disordered_percentage < disordered_percentage_threshold):
         return 1
     else:
@@ -163,6 +166,8 @@ def get_random_cov(sigma, random_corr):
     return random_cov
 
 def autopopulate_state_history_dict(state_history_dict, grid_search_combinations, optimal_combination, num_total_steps):
+
+    #this is called to make early termination work 
     for i,items in enumerate(grid_search_combinations):
         if items != optimal_combination:
             state_history_dict[items] = [-1]*num_total_steps 
@@ -170,9 +175,7 @@ def autopopulate_state_history_dict(state_history_dict, grid_search_combinations
          
 
 def populate_rw_hp_dict(rw_type, items, is_multimer):
-
     rw_hp_dict = {} 
-
     if is_multimer:
         rw_hp_dict['epsilon_scaling_factor'] = list(items)
     else:
@@ -184,146 +187,7 @@ def populate_rw_hp_dict(rw_type, items, is_multimer):
         elif rw_type == 'rw_w_momentum':
             rw_hp_dict['epsilon_scaling_factor'] = items[0]
             rw_hp_dict['gamma'] = items[1]
-
     return rw_hp_dict
-
-
-
-def run_grid_search(grid_search_combinations, state_history_dict, source_str, target_str, pdb_path_initial, intrinsic_dim, rw_type, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, output_dir, phase, args, save_intrinsic_param, is_multimer=False):
-
-    upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
-    lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
-
-    #to speed things up when searching for scaling factors, we evaluate just the min(grid_search_combinations) and max(grid_search_combinations) when beginning a new search with parameters that have not been previously evaluated
-    ###based on the results of the min(grid_search_combinations) and max(grid_search_combinations) we may terminate the search early
-    ###if only a single combination exists in grid_search_combinations or running for combinations that have been previously evaluated, run for all combinations 
-
-    if len(grid_search_combinations) == 1 or len(state_history_dict) > 0:
-
-        for i,items in enumerate(grid_search_combinations): 
-            rw_hp_dict = populate_rw_hp_dict(rw_type, items, is_multimer)
-            print(asterisk_line)
-            print('EVALUATING RW HYPERPARAMETERS:')
-            print(rw_hp_dict)
-            print(asterisk_line)
-
-            if is_multimer:
-                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir,i,source_str,target_str)
-            else:
-                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir,i,target_str)
-
-            pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
-            if len(pdb_files) > 0: #restart
-                print('removing pdb files in %s' % rw_hp_output_dir)
-                remove_files(pdb_files)
-
-            print('BEGINNING RW FOR: %s' % rw_hp_output_dir)
-
-            state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, early_stop=True)
-
-            if items not in state_history_dict:
-                state_history_dict[items] = state_history
-            else:
-                state_history_dict[items].extend(state_history)
-
-            acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
-            if args.early_stop_rw_hp_tuning:
-                if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
-                    return state_history_dict
-
-    else: #new set of grid_searching_combinations being tested 
-
-        #precondition: grid_searching_combinations is sorted in ascending order by sum of all elements in each tuple
-        min_max_combination = [grid_search_combinations[0], grid_search_combinations[-1]]
-        grid_search_combinations_excluding_min_max = grid_search_combinations[1:-1]
-
-        extrapolated_state_history = []
-
-        #if the acceptance rate of max(grid_search_combinations) >= ub_threshold, we set the acceptance rate of all other combinations to 1 (because decreasing scaling factor only can increase acceptance rate)
-        #if the acceptance rate of min(grid_search_combinations) <= lb_threshold, we set the acceptance rate of all other combinations to 0 (because increasing scaling factor only can decrease acceptance rate)
-        
-        for i in reversed(range(2)): #order doesn't technically matter, but we tend to undershoot scaling_factor, so we start evaluating the max_combination as opposed to the min_combination 
-            items = min_max_combination[i]
-            rw_hp_dict = populate_rw_hp_dict(rw_type, items)
-            print(asterisk_line)
-            print('EVALUATING RW HYPERPARAMETERS:')
-            print(rw_hp_dict)
-            print(asterisk_line)
-
-            if i == 0:      
-                combo_num = i 
-            else:
-                combo_num = len(grid_search_combinations)-1
-            
-            if is_multimer:
-                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir,combo_num,source_str,target_str)
-            else:
-                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir,combo_num,target_str)
-
-            pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
-            if len(pdb_files) > 0: #restart
-                print('removing pdb files in %s' % rw_hp_output_dir)
-                remove_files(pdb_files)
-
-            print('BEGINNING RW FOR: %s' % rw_hp_output_dir)
-
-            state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, early_stop=True)
-
-            if items not in state_history_dict:
-                state_history_dict[items] = state_history
-            else:
-                state_history_dict[items].extend(state_history)
-
-            acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
-            if args.early_stop_rw_hp_tuning:
-                if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
-                    return state_history_dict
-                
-            if i == 0: #min_combination
-                if acceptance_rate <= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1 
-                    return state_history_dict
-            else: #max_combination
-                if acceptance_rate >= upper_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1
-                    return state_history_dict
-                
-        #calculate for all other combinations if did not extrapolate 
-        for i,items in enumerate(grid_search_combinations_excluding_min_max): 
-            rw_hp_dict = populate_rw_hp_dict(rw_type, items, is_multimer)
-            print(asterisk_line)
-            print('EVALUATING RW HYPERPARAMETERS:')
-            print(rw_hp_dict)
-            print(asterisk_line)
-
-            if is_multimer:
-                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir,i,source_str,target_str)
-            else:
-                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir,i,target_str)
-
-            pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
-            if len(pdb_files) > 0: #restart
-                print('removing pdb files in %s' % rw_hp_output_dir)
-                remove_files(pdb_files)
-
-            print('BEGINNING RW FOR: %s' % rw_hp_output_dir)
-
-            state_history, conformation_info = run_rw(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, early_stop=True)
-
-            if items not in state_history_dict:
-                state_history_dict[items] = state_history
-            else:
-                state_history_dict[items].extend(state_history)
-
-            acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
-            if args.early_stop_rw_hp_tuning:
-                if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
-                    return state_history_dict 
-
-    return state_history_dict
 
 
 
@@ -366,7 +230,6 @@ def get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False
 
 
 def get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations):
-
     for key in state_history_dict: 
         logger.info('FOR RW HYPERPARAMETER COMBINATION:')
         logger.info(key)
