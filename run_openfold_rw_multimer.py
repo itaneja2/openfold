@@ -72,7 +72,6 @@ def eval_model(model, config, intrinsic_parameter, epsilon, epsilon_scaling_fact
     model.epsilon = nn.Parameter(torch.tensor(epsilon, dtype=torch.float).to(args.model_device)) 
     model.epsilon_scaling_factor = nn.Parameter(torch.tensor(epsilon_scaling_factor, dtype=torch.float).to(args.model_device))
 
-    logger.info('Tag: %s' % tag)
     os.makedirs(output_dir, exist_ok=True)
 
     out, inference_time = run_model_w_intrinsic_dim(model, processed_feature_dict, tag, output_dir, return_inference_time=True)
@@ -232,7 +231,7 @@ def get_aligned_models_info(
             if i != j:        
                 pred_j_path = initial_pred_path_dict[model_name_j]
                 pred_j_fname = '%s.pdb' % file_id #during training, expected filename is without chain_id (i.e 1xyz-1xyz) 
-                aligned_output_dir = '%s/%s/%s/initial_pred_aligned-%s/%s' % (args.output_dir_base, 'rw_v4', args.module_config, model_name_i, model_name_j)
+                aligned_output_dir = '%s/%s/%s/initial_pred_aligned-%s/%s' % (args.output_dir_base, 'rw', args.module_config, model_name_i, model_name_j)
                 pred_j_aligned_path = os.path.join(aligned_output_dir,pred_j_fname)
                 os.makedirs(aligned_output_dir, exist_ok=True)
                 shutil.copy(pred_j_path, pred_j_aligned_path)
@@ -260,7 +259,7 @@ def propose_new_epsilon_vanila_rw(
     intrinsic_dim: int, 
     cov_type: str, 
     L: np.ndarray = None, 
-    sigma: np.ndarray = None,
+    sigma: np.ndarray = None
 ):
     """Generates an epsilon vector drawn from a normal distribution with 0 mean 
        and covariance specified according by the user. 
@@ -303,7 +302,7 @@ def run_rw_multimer(
     phase: str, 
     args: argparse.Namespace,
     save_intrinsic_param: bool = False, 
-    early_stop: bool = False,
+    early_stop: bool = False
 ):
     """Generates new conformations by modifying parameter weights via a random walk on episilon. 
     
@@ -368,7 +367,7 @@ def run_rw_multimer(
 
 def get_new_scaling_factor_candidates(
     hp_acceptance_rate_dict: Mapping[Tuple[float, ...], float],
-    rw_hp_config_data: Mapping[str, Any],
+    rw_hp_config_data: Mapping[str, Any]
 ):
     """Based on the acceptance rate of other scaling factor combinations, 
        generates new scaling factor candidates to test.
@@ -544,10 +543,7 @@ def run_grid_search_multimer(
             logger.info('EVALUATING RW HYPERPARAMETERS:')
             logger.info(rw_hp_dict)
 
-            if is_multimer:
-                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir, i, source_str, target_str)
-            else:
-                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir, i, target_str)
+            rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir, i, source_str, target_str)
 
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
@@ -587,10 +583,7 @@ def run_grid_search_multimer(
             logger.info('EVALUATING RW HYPERPARAMETERS:')
             logger.info(rw_hp_dict)
   
-            if is_multimer:
-                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir, i, source_str, target_str)
-            else:
-                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir, i, target_str)
+            rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir, i, source_str, target_str)
 
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
@@ -643,6 +636,7 @@ def summarize_rw(
     logger.info('MAX RMSD: %.3f' % max_rmsd)
     logger.info('MEAN IPTM_PTM: %.3f' % mean_iptm_score)
     logger.info('MAX IPTM_PTM: %.3f' % max_iptm_score)
+    logger.info(asterisk_line)
 
 
 
@@ -665,9 +659,9 @@ def main(args):
     logger.info("MODEL LIST:")
     logger.info(jax_param_path_dict)
 
-    output_dir = '%s/%s/%s/train-%s/rw-%s' % (args.output_dir_base, 'rw_v4', args.module_config, args.train_hp_config, args.rw_hp_config)
-    l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'rw_v4', args.module_config)
-    l2_output_dir = '%s/%s/%s/train-%s' % (args.output_dir_base, 'rw_v4', args.module_config, args.train_hp_config)
+    output_dir = '%s/%s/%s/train-%s/rw-%s' % (args.output_dir_base, 'rw', args.module_config, args.train_hp_config, args.rw_hp_config)
+    l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'rw', args.module_config)
+    l2_output_dir = '%s/%s/%s/train-%s' % (args.output_dir_base, 'rw', args.module_config, args.train_hp_config)
     
     output_dir = os.path.abspath(output_dir)
     l1_output_dir = os.path.abspath(l1_output_dir)
@@ -997,8 +991,6 @@ def main(args):
 
                 model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
                 sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
-    # Note: if grid_search_combinations have been previously evaluated, notion of a min or max 
-    # Note: if grid_search_combinations have been previously evaluated, notion of a min or max 
         
                 if rw_hp_config_data['cov_type'] == 'full':
                     random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
@@ -1008,7 +1000,7 @@ def main(args):
                     L = None 
 
                 state_history_dict = run_grid_search_multimer(grid_search_combinations, state_history_dict, source_str, target_str, source_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args)
-                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations)
+                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, args)
 
                 if exit_status == 1:
                     break 
@@ -1240,7 +1232,7 @@ if __name__ == "__main__":
         "--enable_dropout", action="store_true", default=False
     )
     parser.add_argument(
-        "--mean_plddt_threshold", type=int, default=70
+        "--mean_plddt_threshold", type=int, default=65
     )
     parser.add_argument(
         "--disordered_percentage_threshold", type=int, default=80

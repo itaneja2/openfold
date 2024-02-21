@@ -1,8 +1,8 @@
 import sys 
-sys.path.insert(0,'/gpfs/home/itaneja/protein_structure_prediction_utils')
-
 import pandas as pd 
 from pathlib import Path
+
+sys.path.insert(0, '../')
 from pdb_utils.pdb_utils import fetch_pdb, fetch_pdb_metadata_df, get_uniprot_seq
 
 def list_of_strings(arg):

@@ -30,7 +30,7 @@ from pdb_utils.pdb_utils import num_to_chain, get_uniprot_seq, get_uniprot_id
 bucket_name = 'openfold'
 s3 = boto3.resource(
     service_name='s3',
-    region_name='us-east-1',
+    region_name='us-east-1'
 )
 bucket = s3.Bucket(bucket_name)
 
@@ -62,7 +62,7 @@ def generate_features(fasta_path, alignment_dir, args):
         max_hits=4,
         kalign_binary_path=args.kalign_binary_path,
         release_dates_path=args.release_dates_path,
-        obsolete_pdbs_path=args.obsolete_pdbs_file_path
+        obsolete_pdbs_path=args.obsolete_pdbs_path
     )
     data_processor = data_pipeline.DataPipeline(
         template_featurizer=template_featurizer,
@@ -277,4 +277,4 @@ if __name__ == "__main__":
         fasta_path = write_fasta_file([msa_seq], [pdb_id], msa_dst_dir, pdb_id)
 
 
-    generate_features(args.fasta_path, msa_dst_dir, args)
+    generate_features(fasta_path, msa_dst_dir, args)

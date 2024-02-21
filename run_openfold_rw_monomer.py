@@ -69,8 +69,6 @@ asterisk_line = '***************************************************************
 def eval_model(model, config, intrinsic_parameter, feature_processor, feature_dict, processed_feature_dict, tag, output_dir, phase, args):
 
     model.intrinsic_parameter = nn.Parameter(torch.tensor(intrinsic_parameter, dtype=torch.float).to(args.model_device))
-
-    logger.info('Tag: %s' % tag)
     os.makedirs(output_dir, exist_ok=True)
 
     out, inference_time = run_model_w_intrinsic_dim(model, processed_feature_dict, tag, output_dir, return_inference_time=True)
@@ -150,8 +148,8 @@ def propose_new_intrinsic_param_vanila_rw(
     intrinsic_param: np.ndarray, 
     intrinsic_dim: int, 
     epsilon_scaling_factor: float, 
-    cov_type: str
-    L: np.ndarray = None 
+    cov_type: str,
+    L: np.ndarray = None, 
     sigma: np.ndarray = None
 ):
     """Generates a new intrinsic parameter according to a random walk process. 
@@ -183,8 +181,8 @@ def propose_new_intrinsic_param_discrete_ou(
     intrinsic_param: np.ndarray, 
     intrinsic_dim: int, 
     epsilon_scaling_factor: float, 
-    cov_type: str
-    L: np.ndarray = None 
+    cov_type: str,
+    L: np.ndarray = None, 
     sigma: np.ndarray = None
 ):
     """Generates a new intrinsic parameter according to a 
@@ -217,8 +215,8 @@ def propose_new_intrinsic_param_rw_w_momentum(
     intrinsic_param: np.ndarray, 
     intrinsic_dim: int, 
     epsilon_scaling_factor: float, 
-    cov_type: str
-    L: np.ndarray = None 
+    cov_type: str,
+    L: np.ndarray = None, 
     sigma: np.ndarray = None
 ):
     """Generates a new intrinsic parameter according to a random walk process
@@ -362,6 +360,7 @@ def get_scaling_factor_bootstrap(
 
     #run a pseudo-binary search to determine scaling_factor_bootstrap
     while scaling_factor_bootstrap is None:
+        logger.info(asterisk_line) 
         logger.info('TESTING SCALING FACTOR: %.3f' % scaling_factor_candidate)
         state_history = []  
         for i in range(0,args.num_bootstrap_hp_tuning_steps): 
@@ -408,7 +407,9 @@ def get_bootstrap_candidate_conformations(
     """Generates a set of candidate conformations to use for the gradient descent phase
        of the pipeline. 
        
-       These candidate conformations are derived from the bootstrap phase. 
+       The candidate conformations are derived from the bootstrap phase. More specifically,
+       the candidate conformations correspond to those that were outputted one step prior 
+       to a rejected conformation.   
     """ 
 
     bootstrap_conformations = {}
@@ -417,9 +418,9 @@ def get_bootstrap_candidate_conformations(
         f = conformation_info[i][0]
         rmsd = conformation_info[i][1]
         match = re.search(r'_iter(\d+)', f)
-        iter_num = int(match.group(1))
+        iter_num = int(match.group(1)) #this corresponds to a given iteration (i.e a sequence of conformations that terminates in a rejection
         match = re.search(r'step-iter(\d+)', f) 
-        step_num = int(match.group(1))
+        step_num = int(match.group(1)) #this corresponds to the step_num for a given iteration 
         if iter_num not in bootstrap_conformations:
             bootstrap_conformations[iter_num] = [(step_num,rmsd,f)]
         else:
@@ -449,7 +450,7 @@ def get_bootstrap_candidate_conformations(
 
 def get_new_scaling_factor_candidates(
     hp_acceptance_rate_dict: Mapping[Tuple[float, ...], float],
-    rw_hp_config_data: Mapping[str, Any],
+    rw_hp_config_data: Mapping[str, Any]
 ):
     """Based on the acceptance rate of other scaling factor combinations, 
        generates new scaling factor candidates to test.
@@ -572,10 +573,7 @@ def run_grid_search_monomer(
             logger.info('EVALUATING RW HYPERPARAMETERS:')
             logger.info(rw_hp_dict)
 
-            if is_multimer:
-                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir, i, source_str, target_str)
-            else:
-                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir, i, target_str)
+            rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir, i, target_str)
 
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
@@ -615,10 +613,7 @@ def run_grid_search_monomer(
             logger.info('EVALUATING RW HYPERPARAMETERS:')
             logger.info(rw_hp_dict)
   
-            if is_multimer:
-                rw_hp_output_dir = '%s/combo_num=%d/%s/%s' % (output_dir, i, source_str, target_str)
-            else:
-                rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir, i, target_str)
+            rw_hp_output_dir = '%s/combo_num=%d/%s' % (output_dir, i, target_str)
 
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
@@ -665,7 +660,7 @@ def summarize_rw(
     rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
     max_rmsd = np.max(rmsd_all)
     logger.info('MAX RMSD: %.3f' % max_rmsd)
-
+    logger.info(asterisk_line)
 
 
 def main(args):
@@ -687,9 +682,9 @@ def main(args):
                 "Tracing requires that fixed_size mode be enabled in the config"
             )
  
-    output_dir = '%s/%s/%s/train-%s/rw-%s' % (args.output_dir_base, 'rw_v5', args.module_config, args.train_hp_config, args.rw_hp_config)
-    l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'rw_v5', args.module_config)
-    l2_output_dir = '%s/%s/%s/train-%s' % (args.output_dir_base, 'rw_v5', args.module_config, args.train_hp_config)
+    output_dir = '%s/%s/%s/train-%s/rw-%s' % (args.output_dir_base, 'rw', args.module_config, args.train_hp_config, args.rw_hp_config)
+    l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'rw', args.module_config)
+    l2_output_dir = '%s/%s/%s/train-%s' % (args.output_dir_base, 'rw', args.module_config, args.train_hp_config)
     
     output_dir = os.path.abspath(output_dir)
     l1_output_dir = os.path.abspath(l1_output_dir)
@@ -968,7 +963,7 @@ def main(args):
                     L = None 
 
                 state_history_dict = run_grid_search_monomer(grid_search_combinations, state_history_dict, None, target_str, pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args)
-                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations)
+                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, args)
                 
                 if exit_status == 1:
                     break
@@ -1206,7 +1201,7 @@ if __name__ == "__main__":
         "--overwrite_pred", action="store_true", default=False
     )
     parser.add_argument(
-        "--mean_plddt_threshold", type=int, default=70
+        "--mean_plddt_threshold", type=int, default=65
     )
     parser.add_argument(
         "--disordered_percentage_threshold", type=int, default=80

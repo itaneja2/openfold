@@ -1,5 +1,6 @@
 import math
 import numpy as np
+import logging
 import os
 import shutil
 import json
@@ -7,7 +8,8 @@ import re
 import glob  
 import sys
 import itertools
-import pandas as pd 
+import pandas as pd
+from typing import List, Mapping, Optional, Sequence, Any, MutableMapping, Union 
 
 from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
@@ -95,6 +97,7 @@ def calc_disordered_percentage(pdb_path):
         ss = dssp_dict[key][1]
         ss_all.append(ss)
 
+    logger.info("SECONDARY STRUCTURE PROFILE:")
     logger.info(ss_all)
 
     disordered_num = 0 
@@ -166,7 +169,6 @@ def get_random_cov(sigma, random_corr):
     return random_cov
 
 def autopopulate_state_history_dict(state_history_dict, grid_search_combinations, optimal_combination, num_total_steps):
-
     #this is called to make early termination work 
     for i,items in enumerate(grid_search_combinations):
         if items != optimal_combination:
@@ -191,8 +193,11 @@ def populate_rw_hp_dict(rw_type, items, is_multimer):
 
 
 
-def get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False):
-
+def get_optimal_hp(
+    hp_acceptance_rate_dict: Mapping[Tuple[float, ...], float],
+    rw_hp_config_data: Mapping[str, Any],
+    is_multimer: bool = False
+):
     if is_multimer:
         f = lambda x: sum(x)
     else:
@@ -229,7 +234,12 @@ def get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False
     return rw_hp_dict
 
 
-def get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations):
+def get_rw_hp_tuning_info(
+    state_history_dict: Optional[Mapping[Tuple[float, ...], int]], 
+    hp_acceptance_rate_dict: Mapping[Tuple[float, ...], float], 
+    grid_search_combinations: List[float],
+    args: argparse.Namespace
+):
     for key in state_history_dict: 
         logger.info('FOR RW HYPERPARAMETER COMBINATION:')
         logger.info(key)

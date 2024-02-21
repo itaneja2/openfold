@@ -1,5 +1,6 @@
 #adapted from https://github.com/r-three/t-few/blob/114deced63ae722a368e06cb08ea956b20c393a6/src/models/intrinsic.py
 
+import logging
 import torch
 import numpy as np
 from torch import nn
@@ -7,7 +8,11 @@ from torch.nn import functional as F
 from typing import Tuple, Set
 from fwh.fwh_cuda import fast_walsh_hadamard_transform as fast_walsh_hadamard_transform_cuda
 import contextlib 
-import re 
+import re
+
+logger = logging.getLogger(__file__)
+logger.setLevel(level=logging.INFO)
+ 
 
 def fast_walsh_hadamard_torched(x, axis: int = 0, normalize: bool = True):
     orig_shape = x.size()
@@ -203,8 +208,8 @@ class SAID_monomer(nn.Module):
                         base = base.__getattr__(prefix) #localname corresponds to weight/bias while base corresponds to Linear/LN 
                     self.name_base_localname.append((name, base, localname))
 
-        #print('LAYERS BEING MODIFIED:')
-        #print(self.projection_params.keys())
+        #logger.info('LAYERS BEING MODIFIED:')
+        #logger.info(self.projection_params.keys())
    
         self.intrinsic_dimension = intrinsic_dimension
         self.intrinsic_parameter = nn.Parameter(torch.zeros((intrinsic_dimension), device=self.device))
@@ -227,8 +232,8 @@ class SAID_monomer(nn.Module):
 
     def forward(self, batch):
         index = 0
-        print('intrinsic param:')
-        print(self.intrinsic_parameter.data)
+        logger.info('intrinsic param:')
+        logger.info(self.intrinsic_parameter.data)
         for name, base, localname in self.name_base_localname:
             init_shape = self.initial_value[name].size()
             DD = np.prod(init_shape)
@@ -309,8 +314,8 @@ class SAID_multimer(nn.Module):
         if list(self.projection_params.keys()) != list(self.scaling_index.keys()):
             raise ValueError("keys in projection_params != keys in scaling_index")     
  
-        #print('LAYERS BEING MODIFIED:')
-        #print(self.projection_params.keys())
+        #logger.info('LAYERS BEING MODIFIED:')
+        #logger.info(self.projection_params.keys())
    
         self.intrinsic_dimension = intrinsic_dimension
         self.intrinsic_parameter = nn.Parameter(torch.zeros((intrinsic_dimension), device=self.device))
@@ -335,12 +340,12 @@ class SAID_multimer(nn.Module):
 
     def forward(self, batch):
         index = 0
-        print('intrinsic param:')
-        print(self.intrinsic_parameter.data)
-        print('epsilon:')
-        print(self.epsilon.data)
-        print('epsilon scaling factor:')
-        print(self.epsilon_scaling_factor.data)
+        logger.info('intrinsic param:')
+        logger.info(self.intrinsic_parameter.data)
+        logger.info('epsilon:')
+        logger.info(self.epsilon.data)
+        logger.info('epsilon scaling factor:')
+        logger.info(self.epsilon_scaling_factor.data)
      
         for name, base, localname in self.name_base_localname:
             init_shape = self.initial_value[name].size()
