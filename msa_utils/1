@@ -18,6 +18,8 @@ from Bio import SeqIO
 from typing import List
 
 sys.path.insert(0, '../')
+print(sys.path)
+
 from openfold.np.relax import cleanup
 from openfold.np.relax.amber_minimize import _get_pdb_string
 from openfold.np.protein import from_pdb_string, to_modelcif
