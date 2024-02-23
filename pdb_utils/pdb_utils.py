@@ -69,7 +69,29 @@ def get_uniprot_id(pdb_id):
     return uniprot_id
 
 
-def get_pdb_seq(pdb_path: str, chain_list: List[str]):
+def get_pdb_id_seq(pdb_id, uniprot_id):
+    if len(pdb_id.split('_')) > 1:
+        pdb_id_copy = pdb_id
+        pdb_id = pdb_id_copy.split('_')[0]
+        chain_id = pdb_id_copy.split('_')[1]
+    else:
+        chain_id = 'A'
+
+    pdb_metadata_df = fetch_pdb_metadata_df(pdb_id)
+    curr_uniprot_id = pdb_metadata_df.loc[0,'uniprot_id']
+    if curr_uniprot_id != uniprot_id:
+        raise ValueError('fetching pdb_id seq, but uniprot_id does not match expected')
+
+    pdb_metadata_df_relchain = pdb_metadata_df[pdb_metadata_df['chain'] == chain_id].reset_index()
+    pdb_metadata_df_relchain = pdb_metadata_df_relchain[pdb_metadata_df_relchain['pdb_resnum'] != 'null']
+    if len(pdb_metadata_df_relchain) == 0: 
+        raise ValueError("fetching pdb_id seq, but can't find pdb_id %s in SIFTS database" % pdb_id)
+
+    seq = ''.join(list(pdb_metadata_df_relchain['pdb_res']))       
+    return seq  
+
+
+def get_pdb_path_seq(pdb_path: str, chain_list: List[str]):
     parser = PDBParser()
     structure = parser.get_structure('protein', pdb_path)
     seq = '' 
