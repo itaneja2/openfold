@@ -8,24 +8,17 @@ import glob
 import pickle 
 
 from torch import nn
-
 import numpy as np
-import pytorch_lightning as pl
 
+import pytorch_lightning as pl
 from pytorch_lightning.callbacks.lr_monitor import LearningRateMonitor
 from pytorch_lightning.callbacks.model_checkpoint import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.plugins.training_type import DeepSpeedPlugin, DDPPlugin
-from pytorch_lightning.plugins.environments import SLURMEnvironment
 import torch
 
 from openfold.config import model_config
-from openfold.data.data_modules import (
-    OpenFoldDataModule,
-    OpenFoldMultimerDataModule
-)
-
-print('Loading AlphaFold')
+from openfold.data.data_modules import OpenFoldDataModule, OpenFoldMultimerDataModule
 from openfold.data import feature_pipeline
 from openfold.model.model import AlphaFold
 from openfold.model.torchscript import script_preset_
@@ -67,8 +60,6 @@ from intrinsic_ft import modify_with_intrinsic_model
 from collections import defaultdict
 
 from pdb_utils.pdb_utils import align_and_get_rmsd
-print('Loaded all libraries')
-
 
 class OpenFoldWrapper(pl.LightningModule):
     def __init__(self, config, module_config_data, hp_config_data, target_pdb_path, train_alignment_dir_w_file_id, save_structure_ouptut):
@@ -186,7 +177,7 @@ class OpenFoldWrapper(pl.LightningModule):
                 pickle.dump(conformation_info, f)
 
         for k,v in other_metrics.items(): 
-            print(k)
+            print('metric: %s' % k)
             print(v)
             self.log(
                 f"{phase}/{k}",
@@ -371,6 +362,17 @@ class OpenFoldWrapper(pl.LightningModule):
         print(n)
         return p
 
+    def resume_last_lr_step(self, lr_step):
+        self.last_lr_step = lr_step
+
+    def load_from_jax(self, jax_path):
+        model_basename = get_model_basename(args.resume_from_jax_params)
+        model_version = "_".join(model_basename.split("_")[1:])
+        import_jax_weights_(
+                self.model, jax_path, version=model_version
+        )
+
+
 
 
 def main(args):
@@ -389,7 +391,7 @@ def main(args):
     else:
         file_id = file_id[0] #e.g 1xyz-1xyz
     train_alignment_dir_w_file_id = '%s/%s' % (args.train_alignment_dir, file_id)
-    print("alignment directory with file_id: %s" % train_alignment_dir_w_file_id)
+    print("Alignment directory with file_id: %s" % train_alignment_dir_w_file_id)
 
     pattern = "%s/*.fasta" % train_alignment_dir_w_file_id
     files = glob.glob(pattern, recursive=True)
@@ -407,8 +409,13 @@ def main(args):
     _, seqs = parse_fasta(fasta_data)
     num_chains = len(seqs)
 
-    with open('./rw_config.json') as f:
-        rw_config_data = json.load(f)
+    if config.globals.is_multimer:
+        with open('./rw_multimer_config.json') as f:
+            rw_config_data = json.load(f)
+    else:
+        with open('./rw_monomer_config.json') as f:
+            rw_config_data = json.load(f)
+
     module_config_data = rw_config_data[config.custom_fine_tuning.ft_method][args.module_config]
     module_config_data['num_chains'] = num_chains
 
@@ -468,6 +475,8 @@ def main(args):
     valid_trainable_module = ['input_embedder', 'recycling_embedder', 'template_angle_embedder', 'template_pair_embedder', 
                               'template_pair_stack', 'extra_msa_stack', 'evoformer', 'structure_module', 'aux_heads', 'all']
 
+    #######
+
     if(args.openfold_checkpoint_path and not(args.resume_model_weights_only)):
         if(os.path.isdir(args.openfold_checkpoint_path)):  
             last_global_step = get_global_step_from_zero_checkpoint(args.openfold_checkpoint_path)
@@ -475,23 +484,20 @@ def main(args):
             sd = torch.load(args.openfold_checkpoint_path)
             last_global_step = int(sd['global_step'])
         model_module.resume_last_lr_step(last_global_step)
-        logging.info("Successfully loaded last lr step...")
-    if(args.openfold_checkpoint_path and args.resume_model_weights_only):
+        print("Successfully loaded last lr step...")
+    elif(args.openfold_checkpoint_path and args.resume_model_weights_only):
         if(os.path.isdir(args.openfold_checkpoint_path)):
             sd = get_fp32_state_dict_from_zero_checkpoint(args.openfold_checkpoint_path)
         else:
             sd = torch.load(args.openfold_checkpoint_path)
-        sd = {('model.'+k):v for k,v in sd.items()}
-        import_openfold_weights_(model=model_module, state_dict=sd)
-        logging.info("Successfully loaded model weights...")
-    if(args.resume_from_jax_params):
-        model_basename = get_model_basename(args.resume_from_jax_params)
-        model_version = "_".join(model_basename.split("_")[1:])
-        import_jax_weights_(
-            config, model_module.model, args.resume_from_jax_params, version=model_version
-        )
-        logging.info(f"Successfully loaded JAX parameters at {args.resume_from_jax_params}...")
+        #sd = {('model.'+k):v for k,v in sd.items()}
+        import_openfold_weights_(model=model_module.model, state_dict=sd)
+        print("Successfully loaded model weights...")
+    elif(args.resume_from_jax_params):
+        model_module.load_from_jax(args.resume_from_jax_params)
+        print(f"Successfully loaded JAX parameters at {args.resume_from_jax_params}...")
 
+    #######
     
     '''for m_name, module in dict(model_module.named_modules()).items():
         print(m_name)
@@ -499,13 +505,8 @@ def main(args):
         for c_name, layer in dict(module.named_children()).items():
             print(c_name)'''
 
-
     if config.custom_fine_tuning.ft_method == 'SAID':
         model_module.model = modify_with_intrinsic_model(model_module.model, module_config_data, config.globals.is_multimer)
-        if args.finetuning_checkpoint_path:
-            finetuning_ckpt_data = torch.load(args.finetuning_checkpoint_path)
-            intrinsic_parameter = torch.tensor(finetuning_ckpt_data['intrinsic_parameter']).to("cuda:0")
-            model_module.model.intrinsic_parameter = nn.Parameter(intrinsic_parameter)
 
     # TorchScript components of the model
     if(args.script_modules):
@@ -722,10 +723,6 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--openfold_checkpoint_path", type=str, default=None,
-        help="Path to a model checkpoint from which to restore training state"
-    )
-    parser.add_argument(
-        "--finetuning_checkpoint_path", type=str, default=None,
         help="Path to a model checkpoint from which to restore training state"
     )
     parser.add_argument(

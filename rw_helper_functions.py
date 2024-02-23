@@ -1,6 +1,8 @@
+import argparse
+import logging
 import math
 import numpy as np
-import logging
+import pandas as pd
 import os
 import shutil
 import json
@@ -8,8 +10,7 @@ import re
 import glob  
 import sys
 import itertools
-import pandas as pd
-from typing import List, Mapping, Optional, Sequence, Any, MutableMapping, Union 
+from typing import Tuple, List, Mapping, Optional, Sequence, Any, MutableMapping, Union 
 
 from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
@@ -238,8 +239,14 @@ def get_rw_hp_tuning_info(
     state_history_dict: Optional[Mapping[Tuple[float, ...], int]], 
     hp_acceptance_rate_dict: Mapping[Tuple[float, ...], float], 
     grid_search_combinations: List[float],
+    rw_hp_config_data: Mapping[str, Any],
+    round_num: int,  
     args: argparse.Namespace
 ):
+
+    upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
+    lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
+
     for key in state_history_dict: 
         logger.info('FOR RW HYPERPARAMETER COMBINATION:')
         logger.info(key)
@@ -268,7 +275,7 @@ def get_rw_hp_tuning_info(
         exit_status = 1
     elif len(grid_search_combinations) > 1:
         completed = False
-        if (i+1) >= args.num_rw_hp_tuning_rounds_total:
+        if (round_num+1) >= args.num_rw_hp_tuning_rounds_total:
             completed = True
         if completed:
             logger.info('ALL HYPERPARAMETER COMBINATIONS HAVE BEEN RUN THE SPECIFIED NUMBER OF ROUNDS (%d)' % args.num_rw_hp_tuning_rounds_total)

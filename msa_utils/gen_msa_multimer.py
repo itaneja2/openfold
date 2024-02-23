@@ -27,7 +27,7 @@ from openfold.data import (
 from openfold.data.tools import hmmsearch
 from scripts.utils import add_data_args
 
-from pdb_utils.pdb_utils import num_to_chain, get_uniprot_seq, get_uniprot_id 
+from pdb_utils.pdb_utils import num_to_chain, get_pdb_seq, get_uniprot_seq, get_uniprot_id 
 
 bucket_name = 'openfold'
 s3 = boto3.resource(
@@ -77,8 +77,7 @@ def precompute_alignments(fasta_path, alignment_dir, args):
                 no_cpus=4
             )
 
-            print('running alignments for %s' % tag)
-            print('corresponding seq: %s' % seq)
+            print("Generating alignments for pdb_id/sequence: %s:%s" % (tag,seq))
             alignment_runner.run(
                 tmp_fasta_path, local_alignment_dir
             )
@@ -144,7 +143,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--pdb_id_list", type=list_of_strings, default=None,
-        help="includes chain number",
+        help="Each entry should be of the format XXXX_Y, where XXXX is the pdb_id and Y is the chain_id",
     )
     parser.add_argument(
         "--use_openprotein_alignments", type=bool, default=True
@@ -155,9 +154,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--fasta_path", type=str, default=None
-    )
-    
-
+    ) 
 
     add_data_args(parser)
     args = parser.parse_args()
@@ -170,9 +167,11 @@ if __name__ == "__main__":
         
         multimer_pdb_wo_chain_id_str = tags[0].split('_')[0]
         print("multimer_pdb_wo_chain_id_str: %s" % multimer_pdb_wo_chain_id_str)
+        print("Generating alignments for sequences:" )
+        print(seqs)
         multimer_uniprot_str = args.fasta_path.split('/')[-1].split('.')[0]
         msa_dst_dir = '%s/%s/%s' % (args.msa_save_dir, multimer_uniprot_str, multimer_pdb_wo_chain_id_str) #subdirectories are inferred from fasta file 
-        print("saving alignments in %s" % msa_dst_dir)
+        print("Saving alignments in %s" % msa_dst_dir)
         os.makedirs(msa_dst_dir, exist_ok=True)
        
         fasta_dst_path = '%s/%s.fasta' % (msa_dst_dir, multimer_uniprot_str) 
@@ -195,7 +194,7 @@ if __name__ == "__main__":
     if pdb_id_list is not None:
         for pdb in pdb_list:
             if len(pdb.split('_')) != 2:
-                raise ValueError("Every entry in the pdb_id_list must be of format XXXX_Y where XXXX is the pdb_id and Y is the chain_id")
+                raise ValueError("Every entry in the pdb_id_list must be of format XXXX_Y, where XXXX is the pdb_id and Y is the chain_id")
         print("pdb_id list:")
         print(pdb_id_list)
     else:
@@ -205,11 +204,8 @@ if __name__ == "__main__":
     pdb_openprotein_dict = {} 
 
     if pdb_id_list is None:
-
-        #populate corresponding pdbs for each uniprot. only do this if searching openprotein for existing sequence alignments  
-
+        #populate corresponding pdbs for each uniprot.  
         pdb_id_list = [] 
-
         uniprot_pdb_df = pd.read_csv('./uniprot_pdb.csv')
         uniprot_pdb_df = uniprot_pdb_df.iloc[1:,]
         uniprot_pdb_df.columns = ['pdb_list']
@@ -230,7 +226,7 @@ if __name__ == "__main__":
 
         for i,uniprot_id in enumerate(uniprot_id_list):
             openprotein_pdb_dict[uniprot_id] = [] #mapping uniprot_id to pdb_ids in openprotein 
-            if not(args.use_openprotein_alignments):
+            if len(uniprot_pdb_dict[uniprot_id]) == 0 or not(args.use_openprotein_alignments):
                 rel_pdb_id_w_chain = 'protein%d' % i
             elif len(uniprot_pdb_dict[uniprot_id]) > 0:
                 for pdb_id in uniprot_pdb_dict[uniprot_id]:
@@ -247,21 +243,18 @@ if __name__ == "__main__":
                     print('GETTING PDB IN OPENPROTEIN WITH MAXIMUM LENGTH')
                     print(openprotein_pdb_dict) 
                     if uniprot_id not in uniprot_pdb_max_seq_len_dict:
+                        #this pdb_id corresponds to pdbs corresponding to uniprot_id present 
+                        #in openprotein_pdb_dict with the longest sequence 
                         rel_pdb_id_w_chain = get_pdb_w_max_seq_len(openprotein_pdb_dict[uniprot_id], uniprot_id)
                         uniprot_pdb_max_seq_len_dict[uniprot_id] = rel_pdb_id_w_chain
-                    else:
+                    else: #this uniprot_id already exists in uniprot_pdb_max_seq_len_dict (i.e homodimer, etc.)
                         rel_pdb_id_w_chain = uniprot_pdb_max_seq_len_dict[uniprot_id]
                 else:
                     rel_pdb_id_w_chain = 'protein%d' % i
-            else:
-                rel_pdb_id_w_chain = 'protein%d' % i
         
             pdb_id_list.append(rel_pdb_id_w_chain)
 
     elif uniprot_id_list is None:
-
-        #populate corresonding uniprot_ids for each pdb_id in pdb_id_list
-        
         uniprot_id_list = []
         for pdb_id in pdb_id_list:
             uniprot_id = get_uniprot_id(pdb_id)
@@ -300,8 +293,11 @@ if __name__ == "__main__":
         Path(chain_alignment_dir).mkdir(parents=True, exist_ok=True)
 
         if pdb_id not in pdb_openprotein_dict:
-            uniprot_seq = get_uniprot_seq(uniprot_id)
-            seq_list.append(uniprot_seq)
+            if len(uniprot_pdb_dict[uniprot_id]) == 0:
+                seq = get_uniprot_seq(uniprot_id) #use full sequence corresponding to uniprot_id
+            else:
+                seq = get_pdb_seq(pdb_id, uniprot_id) #use sequence corresponding to pdb_id
+            seq_list.append(seq)
         else:
             prefix = 'pdb/%s' % pdb_id
             objs = list(bucket.objects.filter(Prefix=prefix))

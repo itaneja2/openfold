@@ -22,6 +22,25 @@ def get_query_seq_from_bfd_msa(bfd_path: str) -> str:
         bfd_msa = f.read()
     return bfd_msa.splitlines()[1]
 
+def get_pdb_seq(pdb_id, uniprot_id):
+
+    if len(pdb_id.split('_')) > 1:
+        pdb_id_copy = pdb_id
+        pdb_id = pdb_id_copy.split('_')[0]
+        chain_id = pdb_id_copy.split('_')[1]
+    else:
+        chain_id = 'A'
+
+    pdb_metadata_df = fetch_pdb_metadata_df(pdb_id)
+    curr_uniprot_id = pdb_metadata_df.loc[0,'uniprot_id']
+    if curr_uniprot_id != uniprot_id:
+        return '' 
+
+    pdb_metadata_df_relchain = pdb_metadata_df[pdb_metadata_df['chain'] == chain_id].reset_index()
+    pdb_metadata_df_relchain = pdb_metadata_df_relchain[pdb_metadata_df_relchain['pdb_resnum'] != 'null']
+    seq = ''.join(list(pdb_metadata_df_relchain['pdb_res']))       
+    return seq  
+
 #pdb_list does not have to include chain. in that case, chain defaults to A 
 def get_pdb_w_max_seq_len(pdb_list, uniprot_id, save_pdb=False):
 

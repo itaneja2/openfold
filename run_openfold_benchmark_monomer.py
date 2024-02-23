@@ -16,10 +16,6 @@ import time
 from openfold.utils.script_utils import load_model, parse_fasta, run_model, prep_output, \
     update_timings, relax_protein
 
-logging.basicConfig()
-logger = logging.getLogger(__file__)
-logger.setLevel(level=logging.INFO)
-
 import subprocess 
 import pickle
 
@@ -59,13 +55,16 @@ import pandas as pd
 from pdb_utils.pdb_utils import align_and_get_rmsd
 from rw_helper_functions import write_timings, remove_files, calc_disordered_percentage
 
+logging.basicConfig(filename='benchmark_monomer.log', filemode='w')
+logger = logging.getLogger(__file__)
+
 TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
 
 
 def eval_model(model, args, config, feature_processor, feature_dict, processed_feature_dict, tag, output_dir):
 
-    print('Tag: %s' % tag)
+    logging.info('Tag: %s' % tag)
     os.makedirs(output_dir, exist_ok=True)
 
     out, inference_time = run_model(model, processed_feature_dict, tag, output_dir, return_inference_time=True)
@@ -135,12 +134,6 @@ def main(args):
     os.makedirs(args.output_dir_base, exist_ok=True)
     output_dir_name = args.output_dir_base.split('/')[-1]
 
-    if(args.trace_model):
-        if(not config.data.predict.fixed_size):
-            raise ValueError(
-                "Tracing requires that fixed_size mode be enabled in the config"
-            )
-
     random_seed = args.data_random_seed
     if random_seed is None:
         random_seed = random.randrange(2**32)
@@ -155,6 +148,13 @@ def main(args):
         msa_sampling_params.append(combo)
 
     config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference)
+    
+    if(args.trace_model):
+        if(not config.data.predict.fixed_size):
+            raise ValueError(
+                "Tracing requires that fixed_size mode be enabled in the config"
+            )
+
 
     #if skipping i=0
     pdb_path_initial = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d/pred_1_%d-%d_unrelaxed.pdb' % (args.output_dir_base, 'benchmark', msa_sampling_params[0][0], msa_sampling_params[0][1], msa_sampling_params[0][0], msa_sampling_params[0][1])
@@ -175,22 +175,20 @@ def main(args):
         pdb_files = glob.glob('%s/*.pdb' % output_dir)
         if len(pdb_files) >= args.num_predictions_per_model:
             if args.overwrite_pred:
-                print('removing pdb files in %s' % output_dir)
+                logging.info('removing pdb files in %s' % output_dir)
                 remove_files(pdb_files)
             else:
-                print('SKIPPING PREDICTION FOR: %s --%d files already exist--' % (output_dir, len(pdb_files)))
+                logging.info('SKIPPING PREDICTION FOR: %s --%d files already exist--' % (output_dir, len(pdb_files)))
                 continue 
         elif len(pdb_files) > 0: #incomplete job
-            print('removing pdb files in %s' % output_dir)
+            logging.info('removing pdb files in %s' % output_dir)
             remove_files(pdb_files)
           
         output_dir = os.path.abspath(output_dir)
-        print('Output Directory: %s' % output_dir)
+        logging.info('Output Directory: %s' % output_dir)
 
         np.random.seed(random_seed)
         torch.manual_seed(random_seed + 1)
-
-        feature_processor = feature_pipeline.FeaturePipeline(config.data)
 
         os.makedirs(output_dir, exist_ok=True)
         alignment_dir = args.alignment_dir
@@ -201,7 +199,7 @@ def main(args):
             file_id = file_id[0] #e.g 1xyz_A
             file_id_wo_chain = file_id.split('_')[0]
         alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
-        print("alignment directory with file_id: %s" % alignment_dir_w_file_id)
+        logging.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
 
         if args.fasta_file is None:
             pattern = "%s/*.fasta" % alignment_dir_w_file_id
@@ -216,26 +214,27 @@ def main(args):
         with open(fasta_file, "r") as fp:
             fasta_data = fp.read()
         _, seq = parse_fasta(fasta_data)
-
+        logger.info("PROTEIN SEQUENCE:")
+        logger.info(seq)
  
         pattern = "%s/features.pkl" % alignment_dir_w_file_id
         files = glob.glob(pattern, recursive=True)
         if len(files) == 1:
             features_output_path = files[0]
-            print('features.pkl path: %s' % features_output_path)
+            logging.info('features.pkl path: %s' % features_output_path)
         else:
             features_output_path = ''
 
         if os.path.isfile(features_output_path):
             feature_dict = np.load(features_output_path, allow_pickle=True) #this is used for all predictions, so this assumes you are predicting a single sequence 
         else:
-            template_featurizer = templates.TemplateHitFeaturizer(
+            template_featurizer = templates.HhsearchHitFeaturizer(
                 mmcif_dir=args.template_mmcif_dir,
                 max_template_date=args.max_template_date,
                 max_hits=4,
                 kalign_binary_path=args.kalign_binary_path,
                 release_dates_path=args.release_dates_path,
-                obsolete_pdbs_path=args.obsolete_pdbs_path
+                obsolete_pdbs_path=args.obsolete_pdbs_file_path
             )
             data_processor = data_pipeline.DataPipeline(
                 template_featurizer=template_featurizer,
@@ -246,8 +245,9 @@ def main(args):
             features_output_path = os.path.join(alignment_dir_w_file_id, 'features.pkl')
             with open(features_output_path, 'wb') as f:
                 pickle.dump(feature_dict, f, protocol=4)
-            print('SAVED %s' % features_output_path)
+            logging.info('SAVED %s' % features_output_path)
 
+        feature_processor = feature_pipeline.FeaturePipeline(config.data)
         model = load_model(config, args.model_device, args.openfold_checkpoint_path, args.jax_param_path)
 
         conformation_info_dict = {}
@@ -265,10 +265,10 @@ def main(args):
             } 
 
             tag = 'pred_%d_%d-%d' % (j+1,max_extra_msa,max_msa_clusters)
-            print('RUNNING model %s, pred %d' % (model_name,j))
+            logging.info('RUNNING model %s, pred %d' % (model_name,j))
 
             mean_plddt, disordered_percentage, inference_time, pdb_path = eval_model(model, args, config, feature_processor, feature_dict, processed_feature_dict, tag, output_dir)    
-            print('pLDDT: %.3f, disordered percentage: %.3f' % (mean_plddt, disordered_percentage)) 
+            logging.info('pLDDT: %.3f, disordered percentage: %.3f' % (mean_plddt, disordered_percentage)) 
 
             if i == 0 and j == 0:
                 rmsd = 0 

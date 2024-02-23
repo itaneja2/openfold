@@ -5,6 +5,8 @@ import logging
 import os
 import pickle
 from typing import Optional, Sequence, Any, Union
+import numpy as np
+import sys
 
 import ml_collections as mlc
 import pytorch_lightning as pl
@@ -194,7 +196,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
             chain_id=chain_id,
             alignment_index=alignment_index,
             seqemb_mode=self.config.seqemb_mode.enabled,
-            fasta_feature_dict
+            fasta_feature_dict=fasta_feature_dict
         )
 
         return data
@@ -243,7 +245,9 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                 if os.path.isfile(features_output_path):
                     fasta_feature_dict = np.load(features_output_path, allow_pickle=True)                  
                 else:
-                    fasta_feature_dict = None  
+                    fasta_feature_dict = None 
+            else:
+                fasta_feature_dict = None  
 
             path += ext
             if ext == ".cif":
@@ -267,7 +271,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                     alignment_index=alignment_index,
                     _structure_index=structure_index,
                     seqemb_mode=self.config.seqemb_mode.enabled,
-                    fasta_feature_dict,
+                    fasta_feature_dict=fasta_feature_dict,
                 )
             else:
                 raise ValueError("Extension branch missing")
@@ -940,6 +944,8 @@ class OpenFoldDataModule(pl.LightningDataModule):
         self.batch_seed = batch_seed
         self.train_epoch_len = train_epoch_len
 
+        self.config_preset = kwargs['config_preset']
+
         if self.train_data_dir is None and self.predict_data_dir is None:
             raise ValueError(
                 'At least one of train_data_dir or predict_data_dir must be '
@@ -978,7 +984,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
             with open(distillation_alignment_index_path, "r") as fp:
                 self.distillation_alignment_index = json.load(fp)
 
-    def setup(self):
+    def setup(self, stage=None):
         # Most of the arguments are the same for the three datasets 
         dataset_gen = partial(OpenFoldSingleDataset,
                               template_mmcif_dir=self.template_mmcif_dir,
@@ -1002,7 +1008,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
                 max_template_hits=self.config.train.max_template_hits,
                 shuffle_top_k_prefiltered=self.config.train.shuffle_top_k_prefiltered,
                 treat_pdb_as_distillation=False,
-                mode="train",
+                mode=training_mode_type,
                 alignment_index=self.alignment_index,
             )
 
@@ -1140,7 +1146,7 @@ class OpenFoldMultimerDataModule(OpenFoldDataModule):
         self.training_mode = self.train_data_dir is not None
         self.val_mmcif_data_cache_path = val_mmcif_data_cache_path
 
-    def setup(self):
+    def setup(self, stage=None):
         # Most of the arguments are the same for the three datasets 
         dataset_gen = partial(OpenFoldSingleMultimerDataset,
                               template_mmcif_dir=self.template_mmcif_dir,
@@ -1164,7 +1170,7 @@ class OpenFoldMultimerDataModule(OpenFoldDataModule):
                 max_template_hits=self.config.train.max_template_hits,
                 shuffle_top_k_prefiltered=self.config.train.shuffle_top_k_prefiltered,
                 treat_pdb_as_distillation=False,
-                mode="train",
+                mode=training_mode_type,
                 alignment_index=self.alignment_index,
             )
 

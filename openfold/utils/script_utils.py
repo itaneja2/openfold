@@ -6,6 +6,7 @@ import time
 
 import numpy
 import torch
+from torch import nn
 
 from openfold.model.model import AlphaFold
 from openfold.np import residue_constants, protein
@@ -34,14 +35,12 @@ def count_models_to_evaluate(openfold_checkpoint_path, jax_param_path):
         model_count += len(jax_param_path.split(","))
     return model_count
 
-
 def get_model_basename(model_path):
     return os.path.splitext(
                 os.path.basename(
                     os.path.normpath(model_path)
                 )
             )[0]
-
 
 def make_output_directory(output_dir, model_name, multiple_model_mode):
     if multiple_model_mode:
@@ -120,7 +119,7 @@ def load_models_from_command_line(config, model_device, openfold_checkpoint_path
 def load_model(config, model_device, openfold_checkpoint_path, jax_param_path, enable_dropout=False):
  
     if enable_dropout:
-        print('LOADING MODEL WITH DROPOUT IN EVOFORMER MODEL ENABLED')
+        logger.info('Loading model with dropout enabled in evoformer module')
         config.model.structure_module.dropout_rate=0.0
         af_model = AlphaFold(config)
         af_model = af_model.eval()
@@ -133,16 +132,14 @@ def load_model(config, model_device, openfold_checkpoint_path, jax_param_path, e
    
     if openfold_checkpoint_path: 
         ckpt_path = openfold_checkpoint_path
-        checkpoint_basename = get_model_basename(ckpt_path)
-        if 'finetuning_ptm_2' in ckpt_path: 
-            af_d = torch.load(ckpt_path)
-        else:
-            af_d = torch.load(ckpt_path)['state_dict']
-            af_d = {k[len('model.'):]:v for k,v in d.items()}
-        if "ema" in af_d:
+        d = torch.load(ckpt_path)
+        if "ema" in d:
             # The public weights have had this done to them already
-            af_d = af_d["ema"]["params"]
-        af_model.load_state_dict(af_d)
+            d = d["ema"]["params"]
+        import_openfold_weights_(model=af_model, state_dict=d)
+        logger.info(
+            f"Loaded OpenFold parameters at {ckpt_path}..."
+        )
     elif jax_param_path:
         ckpt_path = jax_param_path
         checkpoint_basename = get_model_basename(ckpt_path)
@@ -150,6 +147,10 @@ def load_model(config, model_device, openfold_checkpoint_path, jax_param_path, e
         import_jax_weights_(
             config, af_model, ckpt_path, version=model_version
         )
+        logger.info(
+            f"Successfully loaded JAX parameters at {ckpt_path}..."
+        )
+
 
     af_model = af_model.to(model_device)
 
@@ -160,7 +161,7 @@ def load_model_w_intrinsic_param(config, module_config_data, model_device, openf
  
     intrinsic_parameter = torch.tensor(intrinsic_parameter).to(model_device)
     if enable_dropout:
-        print('LOADING MODEL WITH DROPOUT IN EVOFORMER MODEL ENABLED')
+        logger.info('Loading model with dropout enabled in evoformer module')
         config.model.structure_module.dropout_rate=0.0
         af_model = AlphaFold(config)
         af_model = af_model.eval()
@@ -173,16 +174,14 @@ def load_model_w_intrinsic_param(config, module_config_data, model_device, openf
    
     if openfold_checkpoint_path: 
         ckpt_path = openfold_checkpoint_path
-        checkpoint_basename = get_model_basename(ckpt_path)
-        if 'finetuning_ptm_2' in ckpt_path: 
-            af_d = torch.load(ckpt_path)
-        else:
-            af_d = torch.load(ckpt_path)['state_dict']
-            af_d = {k[len('model.'):]:v for k,v in d.items()}
-        if "ema" in af_d:
+        d = torch.load(ckpt_path)
+        if "ema" in d:
             # The public weights have had this done to them already
-            af_d = af_d["ema"]["params"]
-        af_model.load_state_dict(af_d)
+            d = d["ema"]["params"]
+        import_openfold_weights_(model=af_model, state_dict=d)
+        logger.info(
+            f"Loaded OpenFold parameters at {ckpt_path}..."
+        )
     elif jax_param_path:
         ckpt_path = jax_param_path
         checkpoint_basename = get_model_basename(ckpt_path)
@@ -190,13 +189,16 @@ def load_model_w_intrinsic_param(config, module_config_data, model_device, openf
         import_jax_weights_(
             config, af_model, ckpt_path, version=model_version
         )
+        logger.info(
+            f"Successfully loaded JAX parameters at {ckpt_path}..."
+        )
+
 
     af_model_w_intrinsic_param = modify_with_intrinsic_model(af_model, module_config_data, config.globals.is_multimer)
     af_model_w_intrinsic_param.intrinsic_parameter = nn.Parameter(intrinsic_parameter)
     af_model_w_intrinsic_param = af_model_w_intrinsic_param.to(model_device)
 
     return af_model_w_intrinsic_param
-
 
 
 

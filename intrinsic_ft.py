@@ -173,7 +173,7 @@ class SAID_monomer(nn.Module):
         projection="fastfood",
         device="cuda",
     ):
-        super(SAID, self).__init__()
+        super(SAID_monomer, self).__init__()
 
         if projection_index not in ['layer','size']:
             raise ValueError("projection_index must be either layer or size")
@@ -267,7 +267,7 @@ class SAID_multimer(nn.Module):
         projection="fastfood",
         device="cuda",
     ):
-        super(SAID, self).__init__()
+        super(SAID_multimer, self).__init__()
 
         if projection_index not in ['layer','size']:
             raise ValueError("projection_index must be either layer or size")

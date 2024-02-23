@@ -1,3 +1,4 @@
+import logging
 import os 
 import io 
 import subprocess 
@@ -38,6 +39,9 @@ import urllib.request
 
 from pymol import cmd
 
+logger = logging.getLogger(__file__)
+logger.setLevel(level=logging.INFO)
+
 sifts_script = './parse_sifts.py'
 pdb_fixinsert_path = './pdb_fixinsert.py' 
 
@@ -53,6 +57,8 @@ def get_uniprot_seq(uniprot_id):
     return str(parsed_seq.seq)
 
 def get_uniprot_id(pdb_id):
+    if len(pdb_id.split('_')) > 1:
+        pdb_id = pdb_id.split('_')[0]
     base_url = "https://www.ebi.ac.uk/pdbe/api/mappings/uniprot"
     full_url = "%s/%s" % (base_url, pdb_id)
     response = requests.get(full_url)
@@ -94,7 +100,7 @@ def clean_pdb(pdb_path: str, pdb_str: str):
 def renumber_chain_wrt_reference(pdb_modify_path, pdb_ref_path):
     # Parse the PDB files
     parser = PDBParser()
-    print('RENUMBERING CHAINS OF %s TO MATCH %s' % (pdb_modify_path, pdb_ref_path))
+    logger.info('Renumbering chains of %s to match %s' % (pdb_modify_path, pdb_ref_path))
     structure_to_modify = parser.get_structure('renumber', pdb_modify_path)
     reference_structure = parser.get_structure('reference', pdb_ref_path)
 
@@ -173,14 +179,14 @@ def align_and_get_rmsd(pdb1_path, pdb2_path, pdb1_chain=None, pdb2_chain=None):
     s1 = get_pymol_cmd_superimpose(pdb1_model_name, pdb1_chain)
     s2 = get_pymol_cmd_superimpose(pdb2_model_name, pdb2_chain)
 
-    print('super %s,%s' % (s2,s1))
+    logger.info('super %s,%s' % (s2,s1))
 
     out = cmd.super(s2,s1) #this superimposes s2 onto s1
     rmsd = out[0]*10 #convert to angstrom
-    print('RMSD: %.3f' % rmsd)
+    logger.info('RMSD: %.3f' % rmsd)
 
     if rmsd < 0:
-        print("RMSD < 0")
+        logger.info("RMSD < 0")
         rmsd = 0 
 
     s2 = get_pymol_cmd_save(pdb2_model_name)
@@ -238,8 +244,8 @@ def fetch_af_pdb(uniprot_id, save_dir):
     if response.status_code == 200:
         data = response.json()
     else:
-        print("Failed to retreive AF metadata")
-        print(response.raise_for_status())
+        logger.info("Failed to retreive AF metadata")
+        logger.info(response.raise_for_status())
         return None  
 
     af_id = data[0]['entryId']
@@ -263,7 +269,7 @@ def get_pdb_str(pdb_id: str, pdb_path: str) -> str:
         pdb_path: e.g ./pdb_raw_structures_folder/pdb1xf2.cif
     """ 
 
-    print('getting pdb_str for %s,%s' % (pdb_id,pdb_path))
+    logger.info('Getting pdb_str for %s,%s' % (pdb_id,pdb_path))
 
     if '.cif' in pdb_path:
         parser = MMCIFParser()
@@ -274,7 +280,7 @@ def get_pdb_str(pdb_id: str, pdb_path: str) -> str:
         pdb_io.save(new_pdb)
         return new_pdb.getvalue()
     else:
-        print('.cif must be in %s' % pdb_path)
+        raise ValueError('.cif must be in %s' % pdb_path)
 
 
 def get_mean_bfactor(pdb_id, pdb_path):
@@ -348,11 +354,11 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
         pdb2_path: path to second protein structure (if None, then retrieve pdb)
     """ 
  
-    print('pdb1_source is %s and pdb2_source is %s' % (pdb1_source, pdb2_source))
+    logger.info('pdb1_source is %s and pdb2_source is %s' % (pdb1_source, pdb2_source))
 
     if 'pred' in pdb1_source:
-        print('ERROR: pdb1_source is %s and pdb2_source is %s' % (pdb1_source, pdb2_source))
-        raise ValueError('because we are superimposing pdb2 on pdb1, pdb1 should be from PDB while pdb2 should be a predicted structure or from PDB')
+        logger.info('ERROR: pdb1_source is %s and pdb2_source is %s' % (pdb1_source, pdb2_source))
+        raise ValueError('Because we are superimposing pdb2 on pdb1, pdb1 should be from PDB while pdb2 should be a predicted structure or from PDB')
 
     if pdb1_source == 'pdb':
         pdb1_id = pdb1_full_id.split('_')[0]
@@ -409,11 +415,11 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
     pdb2_path_clean = pdb2_path.replace('.pdb', '_clean.pdb')
 
     if (pdb1_path is not None) and (pdb1_source == 'pdb'): 
-        print('CLEANING PDB FILE %s' % pdb1_path)
+        logger.info('Cleaning pdb file %s' % pdb1_path)
         clean_pdb(pdb1_path_clean, pdb1_str)
         pdb1_input_path = pdb1_path_clean
     if (pdb2_path is not None) and (pdb2_source == 'pdb'):
-        print('CLEANING PDB FILE %s' % pdb2_path)
+        logger.info('Cleaning pdb file %s' % pdb2_path)
         clean_pdb(pdb2_path_clean, pdb2_str)
         pdb2_input_path = pdb2_path_clean
     
@@ -421,7 +427,7 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
     shutil.copyfile(pdb2_input_path, pdb2_output_path)
 
     rmsd = align_and_get_rmsd(pdb1_input_path, pdb2_output_path, pdb1_chain, pdb2_chain)
-    print('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
+    logger.info('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
 
     return rmsd, pdb1_path, pdb2_path
 
@@ -438,10 +444,10 @@ def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, p
         pdb2_path: path to second protein structure (if None, then retrieve pdb)
     """ 
  
-    print('pdb1_source is %s and pdb2_source is %s' % (pdb1_source, pdb2_source))
+    logger.info('pdb1_source is %s and pdb2_source is %s' % (pdb1_source, pdb2_source))
 
     if 'pred' in pdb1_source:
-        print('ERROR: pdb1_source is %s and pdb2_source is %s' % (pdb1_source, pdb2_source))
+        logger.info('ERROR: pdb1_source is %s and pdb2_source is %s' % (pdb1_source, pdb2_source))
         raise ValueError('because we are superimposing pdb2 on pdb1, pdb1 should be from PDB while pdb2 should be a predicted structure or from PDB')
 
     if pdb1_source == 'pred' and pdb2_source == 'pdb':
@@ -465,9 +471,6 @@ def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, p
         if (pdb2_path is not None) and (pdb2_source == 'pdb'):
             shutil.copyfile(pdb2_path, '%s/%s.pdb' % (pdb_ref_struc_folder,pdb2_id))
 
-    print(pdb1_path)
-    print(pdb2_path)
-
     pdb1_model_name = get_model_name(pdb1_path)
     pdb2_model_name = get_model_name(pdb2_path)
     
@@ -483,11 +486,11 @@ def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, p
     pdb2_path_clean = pdb2_path.replace('.pdb', '_clean.pdb')
 
     if (pdb1_path is not None) and (pdb1_source == 'pdb'): 
-        print('CLEANING PDB FILE %s' % pdb1_path)
+        logger.info('Cleaning pdb file %s' % pdb1_path)
         clean_pdb(pdb1_path_clean, pdb1_str)
         pdb1_input_path = pdb1_path_clean
     if (pdb2_path is not None) and (pdb2_source == 'pdb'):
-        print('CLEANING PDB FILE %s' % pdb2_path)
+        logger.info('Cleaning pdb file %s' % pdb2_path)
         clean_pdb(pdb2_path_clean, pdb2_str)
         pdb2_input_path = pdb2_path_clean
  
@@ -497,7 +500,7 @@ def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, p
     pdb1_chain = None
     pdb2_chain = None 
     rmsd = align_and_get_rmsd(pdb1_input_path, pdb2_output_path, pdb1_chain, pdb2_chain)
-    print('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
+    logger.info('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
 
     return rmsd, pdb1_path, pdb2_path
 
@@ -544,7 +547,7 @@ def convert_pdb_to_mmcif(pdb_path: str, pdb_id: str, model_type: str, pdb_source
         return mmcif_output_path
     else:
         #remove insertion code if file is sourced from pdb
-        print('converting %s to %s' % (pdb_path, mmcif_output_path)) 
+        logger.info('converting %s to %s' % (pdb_path, mmcif_output_path)) 
         if pdb_source == 'pdb':
             pdb_outpath = pdb_path.replace('.','_icrmv.')
             python_cmd = f'python {pdb_fixinsert_path} {pdb_path} > {pdb_outpath}' 

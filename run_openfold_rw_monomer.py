@@ -2,6 +2,7 @@ import argparse
 import logging
 import math
 import numpy as np
+import pandas as pd 
 import os
 import shutil
 import json
@@ -12,7 +13,8 @@ import sys
 from datetime import date
 import itertools
 import time 
-from typing import List, Mapping, Optional, Sequence, Any, MutableMapping, Union
+import ml_collections as mlc
+from typing import Tuple, List, Mapping, Optional, Sequence, Any, MutableMapping, Union
 
 from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
@@ -50,9 +52,8 @@ from openfold.utils.trace_utils import (
     trace_model_,
 )
 from scripts.utils import add_data_args
-import pandas as pd 
 
-from random_corr_utils.random_corr_sap import gen_randcorr_sap
+from random_corr_sap import gen_randcorr_sap
 from pdb_utils.pdb_utils import align_and_get_rmsd
 import rw_helper_functions
 
@@ -137,7 +138,6 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
             fp.write(protein.to_modelcif(unrelaxed_protein))
         else:
             fp.write(protein.to_pdb(unrelaxed_protein))
-
 
     logger.info(f"Output written to {unrelaxed_output_path}...")
 
@@ -257,7 +257,7 @@ def run_rw_monomer(
     L: np.ndarray, 
     cov_type: str, 
     model: nn.Module, 
-    config: ml_collections.ConfigDict, 
+    config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
     feature_dict: FeatureDict, 
     processed_feature_dict: FeatureDict, 
@@ -332,13 +332,14 @@ def run_rw_monomer(
 
 
 def get_scaling_factor_bootstrap(
+    intrinsic_dim: int,
     rw_hp_config_data: Mapping[str, Any], 
-    output_dir: str, 
     model: nn.Module, 
-    config: ml_collections.ConfigDict, 
+    config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
     feature_dict: FeatureDict, 
     processed_feature_dict: FeatureDict, 
+    output_dir: str, 
     args: argparse.Namespace
 ):
     """Generates a scaling factor for the random walk process used to generate the 
@@ -347,7 +348,8 @@ def get_scaling_factor_bootstrap(
 
     logger.info(asterisk_line) 
     logger.info('BOOTSTRAP TUNING PHASE:')
-
+    
+    intrinsic_param_zero = np.zeros(intrinsic_dim)
     scaling_factor_candidate = 10.  
     all_scaling_factor_candidates = [scaling_factor_candidate] #keeps track of scaling_factor_candidates used 
     scaling_factor_bootstrap = None       
@@ -502,8 +504,10 @@ def get_new_scaling_factor_candidates(
 
              
 def construct_grid_search_combinations(
-    rw_hp_config_data: Mapping[str, Any], 
-    scaling_factor_candidates: List[float]
+    rw_type: str, 
+    scaling_factor_candidates: List[float],
+    alpha_candidates:  List[float],
+    gamma_candidates: List[float]
 ):
     """Based on the scaling factor candidates, constructs the relevant 
        combination of hyperparameters to explore. 
@@ -541,7 +545,7 @@ def run_grid_search_monomer(
     L: np.ndarray, 
     cov_type: str, 
     model: nn.Module, 
-    config: ml_collections.ConfigDict, 
+    config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
     feature_dict: FeatureDict, 
     processed_feature_dict: FeatureDict, 
@@ -569,7 +573,7 @@ def run_grid_search_monomer(
 
         for i,items in enumerate(grid_search_combinations): 
 
-            rw_hp_dict = populate_rw_hp_dict(rw_type, items, is_multimer)
+            rw_hp_dict = rw_helper_functions.populate_rw_hp_dict(rw_type, items, is_multimer=False)
             logger.info('EVALUATING RW HYPERPARAMETERS:')
             logger.info(rw_hp_dict)
 
@@ -578,11 +582,11 @@ def run_grid_search_monomer(
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
                 logger.info('removing pdb files in %s' % rw_hp_output_dir)
-                remove_files(pdb_files)
+                rw_helper_functions.remove_files(pdb_files)
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -592,7 +596,7 @@ def run_grid_search_monomer(
             acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
                     return state_history_dict
 
     else:
@@ -600,7 +604,8 @@ def run_grid_search_monomer(
         # Precondition: grid_searching_combinations is sorted in ascending order by first element (i.e epsilon scaling factor) in each tuple
         min_max_combination = [grid_search_combinations[0], grid_search_combinations[-1]]
         grid_search_combinations_excluding_min_max = grid_search_combinations[1:-1]
-        grid_search_combinations_reordered = min_max_combination.extend(grid_search_combinations_excluding_min_max)
+        grid_search_combinations_reordered = min_max_combination
+        grid_search_combinations_reordered.extend(grid_search_combinations_excluding_min_max)
 
         # If the acceptance rate of max(grid_search_combinations) >= ub_threshold, we set the acceptance rate of all 
         # other combinations to 1 (because decreasing scaling factor should only increase acceptance rate). If the acceptance
@@ -609,7 +614,7 @@ def run_grid_search_monomer(
  
         for i,items in enumerate(grid_search_combinations_reordered): 
 
-            rw_hp_dict = populate_rw_hp_dict(rw_type, items)
+            rw_hp_dict = rw_helper_functions.populate_rw_hp_dict(rw_type, items, is_multimer=False)
             logger.info('EVALUATING RW HYPERPARAMETERS:')
             logger.info(rw_hp_dict)
   
@@ -618,11 +623,11 @@ def run_grid_search_monomer(
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
                 logger.info('removing pdb files in %s' % rw_hp_output_dir)
-                remove_files(pdb_files)
+                rw_helper_functions.remove_files(pdb_files)
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -632,16 +637,16 @@ def run_grid_search_monomer(
             acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
                     return state_history_dict
                 
             if i == 0: #min_combination
                 if acceptance_rate <= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1 
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1 
                     return state_history_dict
             elif i == 1: #max_combination
                 if acceptance_rate >= upper_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1
                     return state_history_dict
                 
     return state_history_dict
@@ -814,13 +819,15 @@ def main(args):
         logger.info('BEGINNING BOOTSTRAP PHASE:') 
         t0 = time.perf_counter()
 
+        logger.info('PREDICTING INITIAL STRUCTURE FROM ORIGINAL MODEL') 
         mean_plddt_initial, disordered_percentage_initial, _, _, pdb_path_initial = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
         logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
 
-        scaling_factor_bootstrap = get_scaling_factor_bootstrap(rw_hp_config_data, l1_output_dir, model, config, feature_processor, feature_dict, processed_feature_dict, args)        
+        scaling_factor_bootstrap = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
+        logger.info(asterisk_line)  
         logger.info('SCALING FACTOR TO BE USED FOR BOOTSTRAPPING: %s' % rw_helper_functions.remove_trailing_zeros(scaling_factor_bootstrap))
-
-        logger.info('RUNNING RW') 
+        logger.info(asterisk_line)  
+        logger.info('RUNNING RW TO GENERATE CONFORMATIONS FOR BOOTSTRAP PHASE') 
         rw_hp_dict = {}
         rw_hp_dict['epsilon_scaling_factor'] = scaling_factor_bootstrap 
         state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
@@ -832,7 +839,6 @@ def main(args):
         conformation_info = sorted(conformation_info, key=lambda x: x[0], reverse=True)
         with open(conformation_info_fname, 'wb') as f:
             pickle.dump(conformation_info, f)
-        logger.info(conformation_info)
 
         run_time = time.perf_counter() - t0
         timing_dict = {'bootstrap': run_time} 
@@ -857,7 +863,7 @@ def main(args):
             logger.info(conformation_info_i)
             bootstrap_training_conformations_dir_conformation_i = '%s/conformation%d' % (bootstrap_training_conformations_dir,iter_num)
             os.makedirs(bootstrap_training_conformations_dir_conformation_i, exist_ok=True)
-            rw_helper_functions.rw_helper_functions.remove_files_in_dir(bootstrap_training_conformations_dir_conformation_i) #this directory should contain a single conformation so we can run train_openfold on it 
+            rw_helper_functions.remove_files_in_dir(bootstrap_training_conformations_dir_conformation_i) #this directory should contain a single conformation so we can run train_openfold on it 
             curr_pdb_path = conformation_info_i[2]
             curr_pdb_fname = '%s.pdb' % file_id_wo_chain #during training, expected filename is without chain_id (i.e 1xyz)
             dst_path = '%s/%s' % (bootstrap_training_conformations_dir_conformation_i,curr_pdb_fname)
@@ -963,7 +969,7 @@ def main(args):
                     L = None 
 
                 state_history_dict = run_grid_search_monomer(grid_search_combinations, state_history_dict, None, target_str, pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args)
-                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, args)
+                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, iter_num, args)
                 
                 if exit_status == 1:
                     break

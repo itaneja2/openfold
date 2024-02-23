@@ -25,7 +25,7 @@ from openfold.data import (
 )
 from scripts.utils import add_data_args
 
-from pdb_utils.pdb_utils import num_to_chain, get_uniprot_seq, get_uniprot_id 
+from pdb_utils.pdb_utils import num_to_chain, get_pdb_seq, get_uniprot_seq, get_uniprot_id 
 
 bucket_name = 'openfold'
 s3 = boto3.resource(
@@ -88,7 +88,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--pdb_id", type=str, default=None,
-        help="includes chain number",
+        help="Each entry should be of the format XXXX_Y, where XXXX is the pdb_id and Y is the chain_id",
     )
     parser.add_argument(
         "--use_openprotein_alignments", type=bool, default=True
@@ -101,20 +101,19 @@ if __name__ == "__main__":
         "--fasta_path", type=str, default=None
     )
 
-
     add_data_args(parser)
     args = parser.parse_args()
 
     if args.fasta_path:
-        #assumes fasta_path is formatted as protein1_A
+        #assumes fasta_path is formatted as >protein1_A
         #assumes fasta_path is named as uniprot1.fasta
         with open(args.fasta_path) as fasta_file:
             seqs, tags = parsers.parse_fasta(fasta_file.read())
         pdb_id = tags[0]
-        print("pdb_id: %s" % pdb_id)
+        print("Generating alignments for pdb_id/sequence: %s:%s" % (pdb_id,seqs[0]))
         uniprot_str = args.fasta_path.split('/')[-1].split('.')[0]
         msa_dst_dir = '%s/%s/%s' % (args.msa_save_dir, uniprot_str, pdb_id) #subdirectories are inferred from fasta file 
-        print("saving alignments in %s" % msa_dst_dir)
+        print("Saving alignments in %s" % msa_dst_dir)
         os.makedirs(msa_dst_dir, exist_ok=True)
 
         fasta_dst_path = '%s/%s.fasta' % (msa_dst_dir, uniprot_str) 
@@ -124,7 +123,6 @@ if __name__ == "__main__":
         generate_features(args.fasta_path, msa_dst_dir, args)
 
         sys.exit() 
-
 
     uniprot_id = args.uniprot_id
     pdb_id = args.pdb_id
@@ -136,14 +134,12 @@ if __name__ == "__main__":
     
     if pdb_id is not None:
         if len(pdb_id.split('_')) != 2:
-            raise ValueError("Every entry in the pdb_id_list must be of format XXXX_Y where XXXX is the pdb_id and Y is the chain_id")
+            raise ValueError("pdb_id must be of format XXXX_Y where XXXX is the pdb_id and Y is the chain_id")
 
     pdb_openprotein_dict = {} 
 
     if pdb_id is None:
-
-        #populate corresponding pdbs for each uniprot. only do this if searching openprotein for existing sequence alignments  
-
+        #populate corresponding pdbs for each uniprot
         uniprot_pdb_df = pd.read_csv('./uniprot_pdb.csv')
         uniprot_pdb_df = uniprot_pdb_df.iloc[1:,]
         uniprot_pdb_df.columns = ['pdb_list']
@@ -159,11 +155,10 @@ if __name__ == "__main__":
         print(uniprot_pdb_dict)
 
         openprotein_pdb_dict = {}
-        i = 0 
-
         openprotein_pdb_dict[uniprot_id] = [] #mapping uniprot_id to pdb_ids in openprotein 
-        if not(args.use_openprotein_alignments):
-            rel_pdb_id_w_chain = 'protein%d' % i
+
+        if len(uniprot_pdb_dict[uniprot_id]) == 0 or not(args.use_openprotein_alignments):
+            rel_pdb_id_w_chain = 'protein0'
         elif len(uniprot_pdb_dict[uniprot_id]) > 0:
             for pdb_id in uniprot_pdb_dict[uniprot_id]:
                 prefix = 'pdb/%s' % pdb_id
@@ -175,37 +170,37 @@ if __name__ == "__main__":
                     curr_pdb_wo_chain_id = curr_pdb_id_w_chain.split('_')[0]
                     pdb_openprotein_dict[curr_pdb_id_w_chain] = 1 
                     openprotein_pdb_dict[uniprot_id].append(curr_pdb_id_w_chain)
-            if len(openprotein_pdb_dict[uniprot_id]) > 0:           
+            if len(openprotein_pdb_dict[uniprot_id]) > 0:          
+                #this pdb_id corresponds to pdbs corresponding to uniprot_id present 
+                #in openprotein_pdb_dict with the longest sequence 
                 rel_pdb_id_w_chain = get_pdb_w_max_seq_len(openprotein_pdb_dict[uniprot_id], uniprot_id)
             else:
                 rel_pdb_id_w_chain = 'protein%d' % i
-        else:
-            rel_pdb_id_w_chain = 'protein%d' % i
     
         pdb_id = rel_pdb_id_w_chain
 
     elif uniprot_id is None:
-
-        #populate corresonding uniprot_ids for each pdb_id in pdb_id_list
-    
         uniprot_id = get_uniprot_id(pdb_id)
         prefix = 'pdb/%s' % pdb_id
         objs = list(bucket.objects.filter(Prefix=prefix))
         if len(objs) > 0:
             pdb_openprotein_dict[pdb_id] = 1
 
-    print("pdb_id:")
-    print(pdb_id)
+    print("pdb_id: %s" % pdb_id)
     print('************')
-    print("uniprot_id")
-    print(uniprot_id)
+    print("uniprot_id: %s" % uniprot_id)
     print('************')
 
     if pdb_id not in pdb_openprotein_dict:
+        print('MSA for uniprot_id %s not found in OpenProteinSet' % uniprot_id)
 
-        print('MSA for uniprot_id %s not found in OpenProteinSet' % uniprot_id)    
-        uniprot_seq = get_uniprot_seq(uniprot_id)
+        if len(uniprot_pdb_dict[uniprot_id]) == 0:
+            seq = get_uniprot_seq(uniprot_id) #use full sequence corresponding to uniprot_id
+        else:
+            seq = get_pdb_seq(pdb_id, uniprot_id) #use sequence corresponding to pdb_id
 
+        print("Generating alignments for pdb_id/sequence: %s:%s" % (pdb_id,seq))
+ 
         msa_dst_dir = '%s/%s/%s' % (args.msa_save_dir,uniprot_id,pdb_id)
         Path(msa_dst_dir).mkdir(parents=True, exist_ok=True)
 
@@ -215,7 +210,7 @@ if __name__ == "__main__":
         hhr_dst_path = '%s/pdb70_hits.hhr' % msa_dst_dir
 
         msa_file_list = [bfd_dst_path,mgnify_dst_path,uniref90_dst_path,hhr_dst_path]
-        fasta_path = write_fasta_file([uniprot_seq], [pdb_id], msa_dst_dir, pdb_id)
+        fasta_path = write_fasta_file([seq], [pdb_id], msa_dst_dir, pdb_id)
 
         print(msa_file_list)
 
@@ -223,12 +218,10 @@ if __name__ == "__main__":
             print('ALIGNMENTS ALREADY PRESENT')
             pass 
         else:
-            print('COMPUTING ALIGNMENTS')
             precompute_alignments(fasta_path, msa_dst_dir, args)
             print('ALIGNMENTS COMPUTED')
 
     else:
-
         print('MSA for uniprot_id %s found in OpenProteinSet' % uniprot_id)    
         print("PDB_ID selected: %s" % pdb_id)
 

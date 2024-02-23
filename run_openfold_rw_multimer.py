@@ -2,6 +2,7 @@ import argparse
 import logging
 import math
 import numpy as np
+import pandas as pd 
 import os
 import shutil
 import json
@@ -12,8 +13,8 @@ import sys
 from datetime import date
 import itertools
 import time 
-import pandas as pd 
-from typing import List, Mapping, Optional, Sequence, Any, MutableMapping, Union
+import ml_collections as mlc
+from typing import Tuple, List, Mapping, Optional, Sequence, Any, MutableMapping, Union
 
 from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
@@ -52,7 +53,7 @@ from openfold.utils.trace_utils import (
 )
 from scripts.utils import add_data_args
 
-from random_corr_utils.random_corr_sap import gen_randcorr_sap
+from random_corr_sap import gen_randcorr_sap
 from pdb_utils.pdb_utils import align_and_get_rmsd
 
 FeatureDict = MutableMapping[str, np.ndarray]
@@ -157,7 +158,7 @@ def eval_model(model, config, intrinsic_parameter, epsilon, epsilon_scaling_fact
 
 
 def update_config(
-    config: ml_collections.ConfigDict, 
+    config: mlc.ConfigDict, 
     seqs: List[str], 
     num_chains: int, 
     args: argparse.Namespace,
@@ -294,7 +295,7 @@ def run_rw_multimer(
     L: np.ndarray, 
     cov_type: str, 
     model: nn.Module, 
-    config: ml_collections.ConfigDict, 
+    config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
     feature_dict: FeatureDict, 
     processed_feature_dict: FeatureDict, 
@@ -511,7 +512,7 @@ def run_grid_search_multimer(
     L: np.ndarray, 
     cov_type: str, 
     model: nn.Module, 
-    config: ml_collections.ConfigDict, 
+    config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
     feature_dict: FeatureDict, 
     processed_feature_dict: FeatureDict, 
@@ -539,7 +540,7 @@ def run_grid_search_multimer(
 
         for i,items in enumerate(grid_search_combinations): 
 
-            rw_hp_dict = populate_rw_hp_dict(rw_type, items, is_multimer)
+            rw_hp_dict = rw_helper_functions.populate_rw_hp_dict(rw_type, items, is_multimer=True)
             logger.info('EVALUATING RW HYPERPARAMETERS:')
             logger.info(rw_hp_dict)
 
@@ -548,11 +549,11 @@ def run_grid_search_multimer(
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
                 logger.info('removing pdb files in %s' % rw_hp_output_dir)
-                remove_files(pdb_files)
+                rw_helper_functions.remove_files(pdb_files)
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_multimer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_multimer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -562,7 +563,7 @@ def run_grid_search_multimer(
             acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
                     return state_history_dict
 
     else:
@@ -570,7 +571,8 @@ def run_grid_search_multimer(
         # Precondition: grid_searching_combinations is sorted in ascending order by sum of all elements in each tuple
         min_max_combination = [grid_search_combinations[0], grid_search_combinations[-1]]
         grid_search_combinations_excluding_min_max = grid_search_combinations[1:-1]
-        grid_search_combinations_reordered = min_max_combination.extend(grid_search_combinations_excluding_min_max)
+        grid_search_combinations_reordered = min_max_combination
+        grid_search_combinations_reordered.extend(grid_search_combinations_excluding_min_max)
 
         # If the acceptance rate of max(grid_search_combinations) >= ub_threshold, we set the acceptance rate of all 
         # other combinations to 1 (because decreasing scaling factor should only increase acceptance rate). If the acceptance
@@ -579,7 +581,7 @@ def run_grid_search_multimer(
  
         for i,items in enumerate(grid_search_combinations_reordered): 
 
-            rw_hp_dict = populate_rw_hp_dict(rw_type, items)
+            rw_hp_dict = rw_helper_functions.populate_rw_hp_dict(rw_type, items, is_multimer=True)
             logger.info('EVALUATING RW HYPERPARAMETERS:')
             logger.info(rw_hp_dict)
   
@@ -588,11 +590,11 @@ def run_grid_search_multimer(
             pdb_files = glob.glob('%s/**/*.pdb' % rw_hp_output_dir)
             if len(pdb_files) > 0: #restart
                 logger.info('removing pdb files in %s' % rw_hp_output_dir)
-                remove_files(pdb_files)
+                rw_helper_functions.remove_files(pdb_files)
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_multimer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', save_intrinsic_param, args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_multimer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -602,16 +604,16 @@ def run_grid_search_multimer(
             acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
                     return state_history_dict
                 
             if i == 0: #min_combination
                 if acceptance_rate <= lower_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1 
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1 
                     return state_history_dict
             elif i == 1: #max_combination
                 if acceptance_rate >= upper_bound_acceptance_threshold:
-                    state_history_dict = autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1
                     return state_history_dict
                 
     return state_history_dict
@@ -1000,7 +1002,7 @@ def main(args):
                     L = None 
 
                 state_history_dict = run_grid_search_multimer(grid_search_combinations, state_history_dict, source_str, target_str, source_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args)
-                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, args)
+                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, i, args)
 
                 if exit_status == 1:
                     break 

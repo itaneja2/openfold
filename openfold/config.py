@@ -465,6 +465,22 @@ config = mlc.ConfigDict(
                 "supervised": True,
                 "uniform_recycling": False,
             },
+            "custom_train": { #same as predict except for supervised 
+                "fixed_size": True,
+                "subsample_templates": False,  # We want top templates.
+                "block_delete_msa": False,
+                "masked_msa_replace_fraction": 0.15,
+                "max_msa_clusters": 512,
+                "max_extra_msa": 1024,
+                "max_template_hits": 4,
+                "max_templates": 4,
+                "crop": False,
+                "crop_size": None,
+                "spatial_crop_prob": None,
+                "interface_threshold": None,
+                "supervised": True,
+                "uniform_recycling": False,
+            },
             "train": {
                 "fixed_size": True,
                 "subsample_templates": True,
@@ -854,6 +870,10 @@ multimer_config_update = mlc.ConfigDict({
             "max_extra_msa": 2048
         },
         "eval": {
+            "max_msa_clusters": 508,
+            "max_extra_msa": 2048
+        },
+        "custom_train": {
             "max_msa_clusters": 508,
             "max_extra_msa": 2048
         },
