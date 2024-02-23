@@ -68,10 +68,6 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    '''cluster_representative_conformation_info_fname = '%s/cluster_representative_conformation_info.pkl' % args.conformation_dir
-    with open(cluster_representative_conformation_info_fname, 'rb') as f:
-        s = pickle.load(f)''' 
-
     pattern = "%s/**/conformation_info.pkl" % args.conformation_dir
     files = glob.glob(pattern, recursive=True)
     if len(files) == 0:
@@ -140,7 +136,7 @@ if __name__ == "__main__":
     for cluster_num in cluster_representative_conformation_info_dict:
         pdb_source_path = cluster_representative_conformation_info_dict[cluster_num][0]
         plddt = cluster_representative_conformation_info_dict[cluster_num][2]
-        pdb_target_path = '%s/cluster_%d_plddt_%s.pdb' % (cluster_dir, cluster_num, str(round(plddt,2)))
+        pdb_target_path = '%s/cluster_%d_plddt_%s.pdb' % (cluster_dir, cluster_num, str(round(plddt)))
         shutil.copyfile(pdb_source_path, pdb_target_path)
         #add this path to cluster_representative_conformation_info_dict[clsuter_num]
         cluster_representative_conformation_info_dict[cluster_num].append(pdb_target_path)

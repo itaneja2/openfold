@@ -37,6 +37,7 @@ s3 = boto3.resource(
 bucket = s3.Bucket(bucket_name)
 
 perl_script = './reformat.pl' 
+asterisk_line = '******************************************************************************'
 
 def precompute_alignments(fasta_path, alignment_dir, args):
 
@@ -159,6 +160,8 @@ if __name__ == "__main__":
     add_data_args(parser)
     args = parser.parse_args()
 
+    print(asterisk_line)
+
     if args.fasta_path:
         #assumes fasta_path is formatted as protein1-protein2_A, protein1-protein2_B
         #assumes fasta_path is named as uniprot1-uniprot2.fasta
@@ -234,10 +237,12 @@ if __name__ == "__main__":
                     if len(objs) == 0:
                         continue
                     else:
-                        curr_pdb_id_w_chain = objs[0].key.split('/')[1]
-                        curr_pdb_wo_chain_id = curr_pdb_id_w_chain.split('_')[0]
-                        pdb_openprotein_dict[curr_pdb_id_w_chain] = 1 
-                        openprotein_pdb_dict[uniprot_id].append(curr_pdb_id_w_chain)
+                        curr_pdb_id_w_chain_id = objs[0].key.split('/')[1]
+                        curr_pdb_wo_chain_id = curr_pdb_id_w_chain_id.split('_')[0]
+                        curr_chain_id = curr_pdb_id_w_chain_id.split('_')[1]
+                        if curr_chain_id == 'A':
+                            pdb_openprotein_dict[curr_pdb_id_w_chain_id] = 1 
+                            openprotein_pdb_dict[uniprot_id].append(curr_pdb_id_w_chain_id)
                 if len(openprotein_pdb_dict[uniprot_id]) > 0:          
                     print('GETTING PDB IN OPENPROTEIN WITH MAXIMUM LENGTH')
                     print(openprotein_pdb_dict) 
@@ -292,10 +297,7 @@ if __name__ == "__main__":
         Path(chain_alignment_dir).mkdir(parents=True, exist_ok=True)
 
         if pdb_id not in pdb_openprotein_dict:
-            if len(uniprot_pdb_dict[uniprot_id]) == 0:
-                seq = get_uniprot_seq(uniprot_id) #use full sequence corresponding to uniprot_id
-            else:
-                seq = get_pdb_id_seq(pdb_id, uniprot_id) #use sequence corresponding to pdb_id
+            seq = get_pdb_id_seq(pdb_id, uniprot_id) #use sequence corresponding to pdb_id
             seq_list.append(seq)
         else:
             prefix = 'pdb/%s' % pdb_id

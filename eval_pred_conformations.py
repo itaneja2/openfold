@@ -151,7 +151,7 @@ pdb_ref_path = None
 save_metrics(pdb_ref_id, pdb_ref_path, conformation_info_path_list, pred_type)'''
 
 
-pred_type = 'multimer'
+'''pred_type = 'multimer'
 home_dir = '/gpfs/home/itaneja/af_conformational_states_multimer/openfold_multimer_experimental'
 module_config_str = 'module_config_1'
 train_hp_config_str = 'train-hp_config_1'
@@ -166,5 +166,26 @@ conformation_info_path_list.append(conformation_info_path)
 
 pdb_ref_id = 'H1140'
 pdb_ref_path = './casp15/H1140/H1140_wallner.pdb'
+save_metrics(pdb_ref_id, pdb_ref_path, conformation_info_path_list, pred_type)''' 
+
+
+pred_type = 'monomer'
+home_dir = '/gpfs/home/itaneja/openfold'
+num_clusters = 20 
+
+conformation_info_path_list = []
+conformation_info_path = '%s/P69441/rw/module_config_0/train-hp_config_1/rw-hp_config_1-0/rw/cluster_representative_structures/num_clusters=%d' % (home_dir, num_clusters)
+conformation_info_path_list.append(conformation_info_path)
+conformation_info_path = '%s/P69441/rw/module_config_0/train-hp_config_1/rw-hp_config_0-0/rw/cluster_representative_structures/num_clusters=%d' % (home_dir, num_clusters)
+conformation_info_path_list.append(conformation_info_path)
+
+
+
+pdb_ref_id = '1ake_A'
+pdb_ref_path = None
+save_metrics(pdb_ref_id, pdb_ref_path, conformation_info_path_list, pred_type)
+
+pdb_ref_id = '4ake_A'
+pdb_ref_path = None
 save_metrics(pdb_ref_id, pdb_ref_path, conformation_info_path_list, pred_type)
 

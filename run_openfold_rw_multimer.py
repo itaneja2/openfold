@@ -1234,7 +1234,7 @@ if __name__ == "__main__":
         "--enable_dropout", action="store_true", default=False
     )
     parser.add_argument(
-        "--mean_plddt_threshold", type=int, default=65
+        "--mean_plddt_threshold", type=int, default=60
     )
     parser.add_argument(
         "--disordered_percentage_threshold", type=int, default=80

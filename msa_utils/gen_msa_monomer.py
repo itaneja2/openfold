@@ -23,6 +23,7 @@ from openfold.data import (
     templates,
     parsers
 )
+from openfold.data.tools import hhsearch, hmmsearch
 from scripts.utils import add_data_args
 
 from pdb_utils.pdb_utils import num_to_chain, get_pdb_id_seq, get_uniprot_seq, get_uniprot_id 
@@ -35,19 +36,28 @@ s3 = boto3.resource(
 bucket = s3.Bucket(bucket_name)
 
 perl_script = './reformat.pl' 
+asterisk_line = '******************************************************************************'
 
 def precompute_alignments(fasta_path, alignment_dir, args):
+    template_searcher = hhsearch.HHSearch(
+        binary_path=args.hhsearch_binary_path,
+        databases=[args.pdb70_database_path],
+    )
+
     alignment_runner = data_pipeline.AlignmentRunner(
         jackhmmer_binary_path=args.jackhmmer_binary_path,
         hhblits_binary_path=args.hhblits_binary_path,
-        hhsearch_binary_path=args.hhsearch_binary_path,
         uniref90_database_path=args.uniref90_database_path,
         mgnify_database_path=args.mgnify_database_path,
         bfd_database_path=args.bfd_database_path,
+        uniref30_database_path=args.uniref30_database_path,
         uniclust30_database_path=args.uniclust30_database_path,
-        pdb70_database_path=args.pdb70_database_path,
-        no_cpus=4,
+        uniprot_database_path=args.uniprot_database_path,
+        template_searcher=template_searcher,
+        use_small_bfd=args.bfd_database_path is None,
+        no_cpus=4
     )
+
     alignment_runner.run(
         fasta_path, alignment_dir
     )
@@ -103,6 +113,8 @@ if __name__ == "__main__":
 
     add_data_args(parser)
     args = parser.parse_args()
+
+    print(asterisk_line)
 
     if args.fasta_path:
         #assumes fasta_path is formatted as >protein1_A
@@ -165,10 +177,12 @@ if __name__ == "__main__":
                 if len(objs) == 0:
                     continue
                 else:
-                    curr_pdb_id_w_chain = objs[0].key.split('/')[1]
-                    curr_pdb_wo_chain_id = curr_pdb_id_w_chain.split('_')[0]
-                    pdb_openprotein_dict[curr_pdb_id_w_chain] = 1 
-                    openprotein_pdb_dict[uniprot_id].append(curr_pdb_id_w_chain)
+                    curr_pdb_id_w_chain_id = objs[0].key.split('/')[1]
+                    curr_pdb_wo_chain_id = curr_pdb_id_w_chain_id.split('_')[0]
+                    curr_chain_id = curr_pdb_id_w_chain_id.split('_')[1]
+                    if curr_chain_id == 'A':
+                        pdb_openprotein_dict[curr_pdb_id_w_chain_id] = 1 
+                        openprotein_pdb_dict[uniprot_id].append(curr_pdb_id_w_chain_id)
             if len(openprotein_pdb_dict[uniprot_id]) > 0:          
                 #this pdb_id corresponds to pdbs corresponding to uniprot_id present 
                 #in openprotein_pdb_dict with the longest sequence 
@@ -182,8 +196,20 @@ if __name__ == "__main__":
         uniprot_id = get_uniprot_id(pdb_id)
         prefix = 'pdb/%s' % pdb_id
         objs = list(bucket.objects.filter(Prefix=prefix))
+
         if len(objs) > 0:
             pdb_openprotein_dict[pdb_id] = 1
+        else:
+            print("pdb_id %s not found in OpenProteinSet" % pdb_id)
+            user_input = input("Do you want to continue? (y/n): If yes, then alignments will be computed from scratch. \n")
+
+        if user_input.lower() == 'n':
+            print("Exiting...")
+            sys.exit()
+        elif user_input.lower() == 'y':
+            print("Continuing...")
+        else:
+            print("Invalid input. Please enter 'y' to continue or 'n' to exit.")
 
     print("pdb_id: %s" % pdb_id)
     print('************')
@@ -192,11 +218,7 @@ if __name__ == "__main__":
 
     if pdb_id not in pdb_openprotein_dict:
         print('MSA for uniprot_id %s not found in OpenProteinSet' % uniprot_id)
-
-        if len(uniprot_pdb_dict[uniprot_id]) == 0:
-            seq = get_uniprot_seq(uniprot_id) #use full sequence corresponding to uniprot_id
-        else:
-            seq = get_pdb_id_seq(pdb_id, uniprot_id) #use sequence corresponding to pdb_id
+        seq = get_pdb_id_seq(pdb_id, uniprot_id) #use sequence corresponding to pdb_id
 
         print("Generating alignments for pdb_id/sequence: %s:%s" % (pdb_id,seq))
  

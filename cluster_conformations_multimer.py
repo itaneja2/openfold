@@ -176,7 +176,7 @@ if __name__ == "__main__":
     for cluster_num in cluster_representative_conformation_info_dict:
         pdb_source_path = cluster_representative_conformation_info_dict[cluster_num][0]
         ptm_iptm = cluster_representative_conformation_info_dict[cluster_num][3]
-        pdb_target_path = '%s/cluster_%d_ptm_iptm_%s.pdb' % (cluster_dir, cluster_num, str(round(ptm_iptm,2)))
+        pdb_target_path = '%s/cluster_%d_ptm_iptm_%s.pdb' % (cluster_dir, cluster_num, str(round(ptm_iptm)))
         shutil.copyfile(pdb_source_path, pdb_target_path)
         #add this path to cluster_representative_conformation_info_dict[clsuter_num]
         cluster_representative_conformation_info_dict[cluster_num].append(pdb_target_path)
