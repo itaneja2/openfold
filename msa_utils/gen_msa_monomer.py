@@ -25,7 +25,7 @@ from openfold.data import (
 )
 from scripts.utils import add_data_args
 
-from pdb_utils.pdb_utils import num_to_chain, get_pdb_seq, get_uniprot_seq, get_uniprot_id 
+from pdb_utils.pdb_utils import num_to_chain, get_pdb_id_seq, get_uniprot_seq, get_uniprot_id 
 
 bucket_name = 'openfold'
 s3 = boto3.resource(
@@ -121,7 +121,6 @@ if __name__ == "__main__":
 
         precompute_alignments(args.fasta_path, msa_dst_dir, args)
         generate_features(args.fasta_path, msa_dst_dir, args)
-
         sys.exit() 
 
     uniprot_id = args.uniprot_id
@@ -197,7 +196,7 @@ if __name__ == "__main__":
         if len(uniprot_pdb_dict[uniprot_id]) == 0:
             seq = get_uniprot_seq(uniprot_id) #use full sequence corresponding to uniprot_id
         else:
-            seq = get_pdb_seq(pdb_id, uniprot_id) #use sequence corresponding to pdb_id
+            seq = get_pdb_id_seq(pdb_id, uniprot_id) #use sequence corresponding to pdb_id
 
         print("Generating alignments for pdb_id/sequence: %s:%s" % (pdb_id,seq))
  
