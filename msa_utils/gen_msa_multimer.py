@@ -14,7 +14,7 @@ import io
 import json 
 
 from msa_processing import format_sto 
-from msa_helper_functions import list_of_strings, write_fasta_file, get_pdb_w_max_seq_len, get_query_seq_from_bfd_msa 
+from msa_helper_functions import list_of_strings, write_fasta_file, get_pdb_w_max_seq_len, get_query_seq_from_msa
 
 sys.path.insert(0,'../')
 from openfold.data import (
@@ -325,8 +325,10 @@ if __name__ == "__main__":
             mgnify_tmp_path = '%s/mgnify_hits.a3m' % chain_alignment_dir
             uniref90_tmp_path = '%s/uniref90_hits.a3m' % chain_alignment_dir
 
-            shutil.copyfile(mgnify_src_path, mgnify_tmp_path)
-            shutil.copyfile(uniref90_src_path, uniref90_tmp_path)
+            if os.path.exists(mgnify_src_path):
+                shutil.copyfile(mgnify_src_path, mgnify_tmp_path)
+            if os.path.exists(uniref90_src_path):
+                shutil.copyfile(uniref90_src_path, uniref90_tmp_path)
 
             bfd_dst_path = '%s/bfd_uniref_hits.a3m' % chain_alignment_dir 
             mgnify_dst_path = '%s/mgnify_hits.sto' % chain_alignment_dir
@@ -337,24 +339,30 @@ if __name__ == "__main__":
             #print(uniref90_dst_path)
 
             #copy bfd to appropriate directory 
-            shutil.copyfile(bfd_src_path, bfd_dst_path)
+
+            if os.path.exists(bfd_src_path):
+                shutil.copyfile(bfd_src_path, bfd_dst_path)
          
             #convert a3m to sto
-            print('converting a3m to sto') 
-            subprocess.run(['perl', perl_script, mgnify_tmp_path, mgnify_dst_path])
-            subprocess.run(['perl', perl_script, uniref90_tmp_path, uniref90_dst_path])
-
             #reformat .sto so that it is compatible with openfold pipeline and save in appropriate directory 
-            format_sto(mgnify_dst_path)
-            format_sto(uniref90_dst_path)
- 
-            os.remove(mgnify_tmp_path)
-            os.remove(uniref90_tmp_path)               
+            print('converting a3m to sto') 
+            if os.path.exists(mgnify_tmp_path):
+                subprocess.run(['perl', perl_script, mgnify_tmp_path, mgnify_dst_path])
+                format_sto(mgnify_dst_path)
+                os.remove(mgnify_tmp_path)
+            if os.path.exists(uniref90_tmp_path):
+                subprocess.run(['perl', perl_script, uniref90_tmp_path, uniref90_dst_path])
+                format_sto(uniref90_dst_path)
+                os.remove(uniref90_tmp_path)               
 
             shutil.rmtree('%s/%s/%s' % (args.msa_save_dir, multimer_uniprot_str, 'pdb'))
 
             #this is the sequence for which the msa was generated 
-            msa_seq = get_query_seq_from_bfd_msa(bfd_dst_path)
+            if os.path.exists(bfd_src_path):
+                msa_seq = get_query_seq_from_msa(bfd_dst_path)
+            elif os.path.exists(uniref90_dst_path):
+                msa_seq = get_query_seq_from_msa(uniref90_dst_path)
+
             seq_list.append(msa_seq)
 
         multimer_chain_info_dict[multimer_pdb_id] = {}

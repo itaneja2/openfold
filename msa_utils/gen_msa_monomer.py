@@ -13,7 +13,7 @@ from datetime import date
 import io 
 
 from msa_processing import format_sto
-from msa_helper_functions import list_of_strings, write_fasta_file, get_pdb_w_max_seq_len, get_query_seq_from_bfd_msa 
+from msa_helper_functions import list_of_strings, write_fasta_file, get_pdb_w_max_seq_len, get_query_seq_from_msa 
 
 sys.path.insert(0, '../')
 from openfold.data import (
@@ -202,14 +202,13 @@ if __name__ == "__main__":
         else:
             print("pdb_id %s not found in OpenProteinSet" % pdb_id)
             user_input = input("Do you want to continue? (y/n): If yes, then alignments will be computed from scratch. \n")
-
-        if user_input.lower() == 'n':
-            print("Exiting...")
-            sys.exit()
-        elif user_input.lower() == 'y':
-            print("Continuing...")
-        else:
-            print("Invalid input. Please enter 'y' to continue or 'n' to exit.")
+            if user_input.lower() == 'n':
+                print("Exiting...")
+                sys.exit()
+            elif user_input.lower() == 'y':
+                print("Continuing...")
+            else:
+                print("Invalid input. Please enter 'y' to continue or 'n' to exit.")
 
     print("pdb_id: %s" % pdb_id)
     print('************')
@@ -280,14 +279,22 @@ if __name__ == "__main__":
         uniref90_dst_path = '%s/uniref90_hits.a3m' % msa_dst_dir
         hhr_dst_path = '%s/pdb70_hits.hhr' % msa_dst_dir
 
-        shutil.copyfile(bfd_src_path, bfd_dst_path)
-        shutil.copyfile(mgnify_src_path, mgnify_dst_path)
-        shutil.copyfile(uniref90_src_path, uniref90_dst_path)
-        shutil.copyfile(hhr_src_path, hhr_dst_path)
+        if os.path.exists(bfd_src_path):
+            shutil.copyfile(bfd_src_path, bfd_dst_path)
+        if os.path.exists(mgnify_src_path):
+            shutil.copyfile(mgnify_src_path, mgnify_dst_path)
+        if os.path.exists(uniref90_src_path):
+            shutil.copyfile(uniref90_src_path, uniref90_dst_path)
+        if os.path.exists(hhr_src_path):
+            shutil.copyfile(hhr_src_path, hhr_dst_path)
 
         shutil.rmtree('%s/%s/%s' % (args.msa_save_dir, uniprot_id, 'pdb'))
 
-        msa_seq = get_query_seq_from_bfd_msa(bfd_dst_path)
+        if os.path.exists(bfd_src_path):
+            msa_seq = get_query_seq_from_msa(bfd_dst_path)
+        elif os.path.exists(uniref90_dst_path):
+            msa_seq = get_query_seq_from_msa(uniref90_dst_path)
+            
         fasta_path = write_fasta_file([msa_seq], [pdb_id], msa_dst_dir, pdb_id)
 
 

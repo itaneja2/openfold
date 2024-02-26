@@ -897,8 +897,8 @@ def main(args):
            
             model_name_source = aligned_models_info[i][0] #this is model being used for training 
             model_name_target = aligned_models_info[i][1] 
-            source_path = aligned_models_info[i][2]
-            target_path = aligned_models_info[i][3] 
+            source_pdb_path = aligned_models_info[i][2]
+            target_pdb_path = aligned_models_info[i][3] 
             
             logger.info('ON MODEL')
             logger.info(aligned_models_info[i])
@@ -906,7 +906,7 @@ def main(args):
             target_str = 'target=%s' % model_name_target
             fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
  
-            arg1 = '--train_data_dir=%s' % target_path[0:target_path.rindex('/')]
+            arg1 = '--train_data_dir=%s' % target_pdb_path[0:target_pdb_path.rindex('/')]
             arg2 = '--train_alignment_dir=%s' % args.alignment_dir
             arg3 = '--fine_tuning_save_dir=%s' % fine_tuning_save_dir
             arg4 = '--template_mmcif_dir=%s' % args.template_mmcif_dir
@@ -981,8 +981,7 @@ def main(args):
 
                 model_name_source = aligned_models_info[i][0] #this is model being used for training 
                 model_name_target = aligned_models_info[i][1] 
-                source_path = aligned_models_info[i][2]
-                target_path = aligned_models_info[i][3] 
+                source_pdb_path = aligned_models_info[i][2]
 
                 logger.info('ON MODEL')
                 logger.info(aligned_models_info[i])
@@ -1001,7 +1000,7 @@ def main(args):
                 else:
                     L = None 
 
-                state_history_dict = run_grid_search_multimer(grid_search_combinations, state_history_dict, source_str, target_str, source_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args)
+                state_history_dict = run_grid_search_multimer(grid_search_combinations, state_history_dict, source_str, target_str, source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args)
                 hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, i, args)
 
                 if exit_status == 1:
@@ -1038,8 +1037,7 @@ def main(args):
 
         model_name_source = aligned_models_info[i][0] #this is model being used for training 
         model_name_target = aligned_models_info[i][1] 
-        source_path = aligned_models_info[i][2]
-        target_path = aligned_models_info[i][3] 
+        source_pdb_path = aligned_models_info[i][2]
         
         logger.info('ON MODEL: %s' % model_name_source)
         source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
@@ -1073,7 +1071,7 @@ def main(args):
 
         logger.info('RW OUTPUT DIR: %s' % rw_output_dir)
 
-        state_history, conformation_info = run_rw_multimer(source_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+        state_history, conformation_info = run_rw_multimer(source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
         key = '%s-%s' % (model_name_source, model_name_target)
         conformation_info_dict[key] = conformation_info
 

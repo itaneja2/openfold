@@ -61,6 +61,11 @@ if __name__ == "__main__":
         "--num_clusters", type=int, default=10,
         help="",
     )
+    parser.add_argument(
+        "--plddt_threshold", type=float, default=None,
+        help="only clusters conformations whose plddt score is greater than this threshold (which is a value between 0-100)",
+    )
+
     '''parser.add_argument(
         "--output_dir_base", type=str, default=os.getcwd(),
         help="""Name of the directory in which to output the prediction""",
@@ -95,9 +100,16 @@ if __name__ == "__main__":
             pdb_path = val[0]
             rmsd = val[1]
             mean_plddt = val[2]
-            conformation_info_all.append([pdb_path,rmsd,mean_plddt])
-            ca_coords = get_structure_ca_coords(pdb_path)
-            ca_coords_all.append(ca_coords)
+
+            if args.plddt_threshold is None:
+                conformation_info_all.append([pdb_path,rmsd,mean_plddt])
+                ca_coords = get_structure_ca_coords(pdb_path)
+                ca_coords_all.append(ca_coords)
+            else:
+                if mean_plddt >= args.plddt_threshold:
+                    conformation_info_all.append([pdb_path,rmsd,mean_plddt])
+                    ca_coords = get_structure_ca_coords(pdb_path)
+                    ca_coords_all.append(ca_coords)
         
     ca_coords_all = np.array(ca_coords_all)
     ca_coords_all = np.reshape(ca_coords_all,(ca_coords_all.shape[0],ca_coords_all.shape[1]*ca_coords_all.shape[2])) 
@@ -128,7 +140,10 @@ if __name__ == "__main__":
 
     print(cluster_representative_conformation_info_dict)
 
-    cluster_dir = '%s/cluster_representative_structures/num_clusters=%d' % (args.conformation_dir, args.num_clusters)
+    if args.plddt_threshold is None:
+        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (args.conformation_dir, args.num_clusters)
+    else:
+        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=%s' % (args.conformation_dir, args.num_clusters, str(args.plddt_threshold))
 
     os.makedirs(cluster_dir, exist_ok=True)
     remove_files_in_dir(cluster_dir)
@@ -138,7 +153,7 @@ if __name__ == "__main__":
         plddt = cluster_representative_conformation_info_dict[cluster_num][2]
         pdb_target_path = '%s/cluster_%d_plddt_%s.pdb' % (cluster_dir, cluster_num, str(round(plddt)))
         shutil.copyfile(pdb_source_path, pdb_target_path)
-        #add this path to cluster_representative_conformation_info_dict[clsuter_num]
+        #add this path to cluster_representative_conformation_info_dict[cluster_num]
         cluster_representative_conformation_info_dict[cluster_num].append(pdb_target_path)
 
 

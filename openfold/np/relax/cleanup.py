@@ -133,11 +133,15 @@ def _replace_met_se(pdb_structure, alterations_info):
     for res in pdb_structure.iter_residues():
         name = res.get_name_with_spaces().strip()
         if name == "MET":
-            s_atom = res.get_atom("SD")
-            if s_atom.element_symbol == "Se":
-                s_atom.element_symbol = "S"
-                s_atom.element = element.get_by_symbol("S")
-                modified_met_residues.append(s_atom.residue_number)
+            try:
+                s_atom = res.get_atom("SD")
+                if s_atom.element_symbol == "Se":
+                    s_atom.element_symbol = "S"
+                    s_atom.element = element.get_by_symbol("S")
+                    modified_met_residues.append(s_atom.residue_number)
+            except KeyError as e:
+                print(e)
+
     alterations_info["Se_in_MET"] = modified_met_residues
 
 

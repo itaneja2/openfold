@@ -126,6 +126,7 @@ if __name__ == "__main__":
             rmsd = val[1]
             mean_plddt = val[2]
             ptm_iptm = float(val[3])
+
             if args.ptm_iptm_threshold is None:
                 conformation_info_all.append([pdb_path,rmsd,mean_plddt,ptm_iptm])
                 ca_coords = get_structure_ca_coords(pdb_path)
@@ -168,7 +169,7 @@ if __name__ == "__main__":
     if args.ptm_iptm_threshold is None:
         cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/ptm_iptm_threshold=None' % (args.conformation_dir, args.num_clusters)
     else:
-        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/ptm_iptm_threshold=%s' % (args.conformation_dir, args.num_clusters, str(round(args.ptm_iptm_threshold,2)))
+        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/ptm_iptm_threshold=%s' % (args.conformation_dir, args.num_clusters, str(round(args.ptm_iptm_threshold,2)*100))
 
     os.makedirs(cluster_dir, exist_ok=True)
     remove_files_in_dir(cluster_dir)

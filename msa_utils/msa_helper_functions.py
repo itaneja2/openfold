@@ -17,10 +17,11 @@ def write_fasta_file(sequence_list, unique_id_list, save_dir, output_fname) -> s
             fasta_file.write('\n')
     return filename 
 
-def get_query_seq_from_bfd_msa(bfd_path: str) -> str:   
-    with open(bfd_path, 'r') as f:
-        bfd_msa = f.read()
-    return bfd_msa.splitlines()[1]
+#msa_bath corresponds to either bfd or uniref90
+def get_query_seq_from_msa(msa_path: str) -> str:   
+    with open(msa_path, 'r') as f:
+        msa = f.read()
+    return msa.splitlines()[1]
 
 #pdb_list does not have to include chain. in that case, chain defaults to A 
 def get_pdb_w_max_seq_len(pdb_list, uniprot_id, save_pdb=False):

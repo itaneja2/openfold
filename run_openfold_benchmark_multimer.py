@@ -313,7 +313,7 @@ def main(args):
         t0 = time.perf_counter()
 
         model_name = models_to_run[i]
-        pred_output_dir = '%s/pred_w_dropout/source=%s' %  (output_dir, model_name)   
+        pred_output_dir = '%s/source=%s' %  (output_dir, model_name)   
         pdb_path_initial = initial_pred_path_dict[model_name] 
 
         pdb_files = glob.glob('%s/*.pdb' % pred_output_dir)
