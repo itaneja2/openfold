@@ -439,7 +439,8 @@ def get_bootstrap_candidate_conformations(
         bootstrap_candidate_conformations.append(bootstrap_conformations[key][0]) #get last conformation in each iteration (i.e last conformation prior to rejection)
         
     bootstrap_candidate_conformations = sorted(bootstrap_candidate_conformations, key=lambda x:x[1], reverse=True) #sort by rmsd in reverse order 
-    bootstrap_candidate_conformations = bootstrap_candidate_conformations[0:args.num_training_conformations]    
+    if len(bootstrap_candidate_conformations) >= args.num_training_conformations:
+        bootstrap_candidate_conformations = bootstrap_candidate_conformations[0:args.num_training_conformations]    
     
     logger.debug('BOOTSTRAP CONFORMATIONS ALL:')
     logger.debug(bootstrap_conformations)    
@@ -714,7 +715,7 @@ def main(args):
         if len(files) == 1:
             fasta_file = files[0]
         else: 
-            raise FileNotFoundError("Multiple .fasta files found in alignment_dir -- should only be one")
+            raise FileNotFoundError("Either >1 or 0 .fasta files found in alignment_dir -- should only be one")
     else:
         fasta_file = args.fasta_file
 
@@ -756,7 +757,7 @@ def main(args):
             max_hits=4,
             kalign_binary_path=args.kalign_binary_path,
             release_dates_path=args.release_dates_path,
-            obsolete_pdbs_path=args.obsolete_pdbs_file_path
+            obsolete_pdbs_path=args.obsolete_pdbs_path
         )
         data_processor = data_pipeline.DataPipeline(
             template_featurizer=template_featurizer,

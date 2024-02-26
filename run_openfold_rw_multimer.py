@@ -687,7 +687,7 @@ def main(args):
         if len(files) == 1:
             fasta_file = files[0]
         else: 
-            raise FileNotFoundError("Multiple .fasta files found in alignment_dir -- should only be one")
+            raise FileNotFoundError("Either >1 or 0 .fasta files found in alignment_dir -- should only be one")
     else:
         fasta_file = args.fasta_file
 
