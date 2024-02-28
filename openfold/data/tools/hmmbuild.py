@@ -58,7 +58,7 @@ class Hmmbuild(object):
     """
     return self._build_profile(sto, model_construction=model_construction)
 
-  def build_profile_from_a3m(self, a3m: str) -> str:
+  def build_profile_from_a3m(self, a3m: str, model_construction='fast') -> str:
     """Builds a HHM for the aligned sequences given as an A3M string.
 
     Args:

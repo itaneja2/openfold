@@ -80,6 +80,15 @@ class Hmmsearch(object):
         )
         return self.query_with_hmm(hmm, output_dir)
 
+    def query_a3m(self, msa_a3m: str, output_dir: Optional[str] = None) -> str:
+        """Queries the database using hmmsearch using a given a3m msa."""
+        hmm = self.hmmbuild_runner.build_profile_from_a3m(
+            msa_a3m,
+            model_construction='hand'
+        )
+        return self.query_with_hmm(hmm, output_dir)
+
+
     def query_with_hmm(self, 
         hmm: str, 
         output_dir: Optional[str] = None

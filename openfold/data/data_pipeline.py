@@ -256,17 +256,32 @@ def run_msa_tool(
     max_sto_sequences: Optional[int] = None,
 ) -> Mapping[str, Any]:
     """Runs an MSA tool, checking if output already exists first."""
-    if(msa_format == "sto" and max_sto_sequences is not None):
-        result = msa_runner.query(fasta_path, max_sto_sequences)[0]
-    else:
-        result = msa_runner.query(fasta_path)[0]
 
-    assert msa_out_path.split('.')[-1] == msa_format
-    with open(msa_out_path, "w") as f:
-        f.write(result[msa_format])
+    print('computing %s:' % msa_out_path)
+    msa_out_a3m_path = msa_out_path.replace('sto','a3m') #msa_out_path is of type .sto
+    if os.path.exists(msa_out_path) or os.path.exists(msa_out_a3m_path):
+        if os.path.exists(msa_out_path):
+            print('%s already exists, not computing it' % msa_out_path)
+            with open(msa_out_path) as f:
+                out = f.read()
+        else:
+            print('%s already exists, not computing it' % msa_out_a3m_path)
+            msa_format = 'a3m' 
+            with open(msa_out_a3m_path) as f:
+                out = f.read()
+        result = {}
+        result[msa_format] = out 
+    else:
+        if(msa_format == "sto" and max_sto_sequences is not None):
+            result = msa_runner.query(fasta_path, max_sto_sequences)[0]
+        else:
+            result = msa_runner.query(fasta_path)[0]
+
+        assert msa_out_path.split('.')[-1] == msa_format
+        with open(msa_out_path, "w") as f:
+            f.write(result[msa_format])
 
     return result
-
 
 def make_dummy_msa_obj(input_sequence) -> parsers.Msa:
     deletion_matrix = [[0 for _ in input_sequence]]
@@ -478,23 +493,30 @@ class AlignmentRunner:
                 max_sto_sequences=self.uniref_max_hits,
             )
 
-            template_msa = jackhmmer_uniref90_result["sto"]
-            template_msa = parsers.deduplicate_stockholm_msa(template_msa)
-            template_msa = parsers.remove_empty_columns_from_stockholm_msa(
-                template_msa
-            )
+            if "sto" in jackhmmer_uniref90_result:
+                template_msa = jackhmmer_uniref90_result["sto"]
+                template_msa = parsers.deduplicate_stockholm_msa(template_msa)
+                template_msa = parsers.remove_empty_columns_from_stockholm_msa(
+                    template_msa
+                )
+            elif "a3m" in jackhmmer_uniref90_result:
+                template_msa = jackhmmer_uniref90_result["a3m"]
 
             if(self.template_searcher is not None):
-                if(self.template_searcher.input_format == "sto"):
+                print('computing templates')
+                if("sto" in jackhmmer_uniref90_result):
                     pdb_templates_result = self.template_searcher.query(
                         template_msa,
                         output_dir=output_dir
                     )
-                elif(self.template_searcher.input_format == "a3m"):
-                    uniref90_msa_as_a3m = parsers.convert_stockholm_to_a3m(
-                        template_msa
-                    )
-                    pdb_templates_result = self.template_searcher.query(
+                elif("a3m" in jackhmmer_uniref90_result or self.template_searcher.input_format == "a3m"): #openprotein alignments are a3m
+                    if self.template_searcher.input_format == "a3m":
+                        uniref90_msa_as_a3m = parsers.convert_stockholm_to_a3m(
+                            template_msa
+                        )
+                    else:
+                        uniref90_msa_as_a3m = template_msa
+                    pdb_templates_result = self.template_searcher.query_a3m(
                         uniref90_msa_as_a3m,
                         output_dir=output_dir
                     )

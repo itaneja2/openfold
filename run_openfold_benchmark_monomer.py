@@ -57,6 +57,7 @@ from rw_helper_functions import write_timings, remove_files, calc_disordered_per
 
 logging.basicConfig(filename='benchmark_monomer.log', filemode='w')
 logger = logging.getLogger(__file__)
+logger.setLevel(level=logging.INFO)
 
 TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
@@ -268,7 +269,7 @@ def main(args):
             logging.info('RUNNING model %s, pred %d' % (model_name,j))
 
             mean_plddt, disordered_percentage, inference_time, pdb_path = eval_model(model, args, config, feature_processor, feature_dict, processed_feature_dict, tag, output_dir)    
-            logging.info('pLDDT: %.3f, disordered percentage: %.3f' % (mean_plddt, disordered_percentage)) 
+            logger.info('pLDDT: %.3f, disordered percentage: %.3f' % (mean_plddt, disordered_percentage)) 
 
             if i == 0 and j == 0:
                 rmsd = 0 

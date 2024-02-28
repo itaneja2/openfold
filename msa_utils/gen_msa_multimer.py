@@ -194,14 +194,9 @@ if __name__ == "__main__":
         raise ValueError("Both uniprot_id_list and pdb_id_list cannot be passed in")
     
     if pdb_id_list is not None:
-        for pdb in pdb_list:
+        for pdb in pdb_id_list:
             if len(pdb.split('_')) != 2:
                 raise ValueError("Every entry in the pdb_id_list must be of format XXXX_Y, where XXXX is the pdb_id and Y is the chain_id")
-        print("pdb_id list:")
-        print(pdb_id_list)
-    else:
-        print("uniprot_id_list")
-        print(uniprot_id_list)
 
     pdb_openprotein_dict = {} 
 
@@ -265,8 +260,21 @@ if __name__ == "__main__":
             uniprot_id_list.append(uniprot_id) 
             prefix = 'pdb/%s' % pdb_id
             objs = list(bucket.objects.filter(Prefix=prefix))
+
             if len(objs) > 0:
                 pdb_openprotein_dict[pdb_id] = 1
+            else:
+                print("pdb_id %s not found in OpenProteinSet" % pdb_id)
+                user_input = input("Do you want to continue? (y/n): If yes, then alignments will be computed from scratch. \n")
+                if user_input.lower() == 'n':
+                    print("Exiting...")
+                    sys.exit()
+                elif user_input.lower() == 'y':
+                    print("Continuing...")
+                else:
+                    print("Invalid input. Please enter 'y' to continue or 'n' to exit.")
+
+
 
     print("pdb_id list:")
     print(pdb_id_list)
@@ -322,29 +330,31 @@ if __name__ == "__main__":
             #print(mgnify_src_path)
             #print(uniref90_src_path)
 
-            mgnify_tmp_path = '%s/mgnify_hits.a3m' % chain_alignment_dir
+            '''mgnify_tmp_path = '%s/mgnify_hits.a3m' % chain_alignment_dir
             uniref90_tmp_path = '%s/uniref90_hits.a3m' % chain_alignment_dir
 
             if os.path.exists(mgnify_src_path):
                 shutil.copyfile(mgnify_src_path, mgnify_tmp_path)
             if os.path.exists(uniref90_src_path):
-                shutil.copyfile(uniref90_src_path, uniref90_tmp_path)
+                shutil.copyfile(uniref90_src_path, uniref90_tmp_path)''' 
 
             bfd_dst_path = '%s/bfd_uniref_hits.a3m' % chain_alignment_dir 
-            mgnify_dst_path = '%s/mgnify_hits.sto' % chain_alignment_dir
-            uniref90_dst_path = '%s/uniref90_hits.sto' % chain_alignment_dir
+            mgnify_dst_path = '%s/mgnify_hits.a3m' % chain_alignment_dir
+            uniref90_dst_path = '%s/uniref90_hits.a3m' % chain_alignment_dir
 
             #print(bfd_dst_path)
             #print(mgnify_dst_path)
             #print(uniref90_dst_path)
 
-            #copy bfd to appropriate directory 
-
+            if os.path.exists(mgnify_src_path):
+                shutil.copyfile(mgnify_src_path, mgnify_dst_path)
+            if os.path.exists(uniref90_src_path):
+                shutil.copyfile(uniref90_src_path, uniref90_dst_path) 
             if os.path.exists(bfd_src_path):
                 shutil.copyfile(bfd_src_path, bfd_dst_path)
          
-            #convert a3m to sto
-            #reformat .sto so that it is compatible with openfold pipeline and save in appropriate directory 
+            '''convert a3m to sto
+               reformat .sto so that it is compatible with openfold pipeline and save in appropriate directory 
             print('converting a3m to sto') 
             if os.path.exists(mgnify_tmp_path):
                 subprocess.run(['perl', perl_script, mgnify_tmp_path, mgnify_dst_path])
@@ -353,7 +363,7 @@ if __name__ == "__main__":
             if os.path.exists(uniref90_tmp_path):
                 subprocess.run(['perl', perl_script, uniref90_tmp_path, uniref90_dst_path])
                 format_sto(uniref90_dst_path)
-                os.remove(uniref90_tmp_path)               
+                os.remove(uniref90_tmp_path)'''  
 
             shutil.rmtree('%s/%s/%s' % (args.msa_save_dir, multimer_uniprot_str, 'pdb'))
 
