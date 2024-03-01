@@ -244,7 +244,7 @@ def fetch_pdb(pdb_id: str, save_dir: str, clean=False) -> str:
         chain_id_list = None
     cmd.delete('all')
 
-    fetch_path = './%s.cif' % pdb_id
+    fetch_path = './%s.cif' % pdb_id_wo_chain
     if os.path.exists(fetch_path):
         os.remove(fetch_path)    
 
@@ -382,14 +382,14 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
         logger.info('ERROR: pdb1_source is %s and pdb2_source is %s' % (pdb1_source, pdb2_source))
         raise ValueError('Because we are superimposing pdb2 on pdb1, pdb1 should be from PDB while pdb2 should be a predicted structure or from PDB')
 
-    if pdb1_source == 'pdb':
+    if (pdb1_source == 'pdb') and (pdb1_path is None):
         pdb1_id = pdb1_full_id.split('_')[0]
         pdb1_chain = pdb1_full_id.split('_')[1] 
     else:
         pdb1_id = None
         pdb1_chain = None
 
-    if pdb2_source == 'pdb':
+    if (pdb2_source == 'pdb') and (pdb2_path is None):
         pdb2_id = pdb2_full_id.split('_')[0]
         pdb2_chain = pdb2_full_id.split('_')[1] 
     else:
@@ -450,7 +450,7 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
 
     rmsd = align_and_get_rmsd(pdb1_input_path, pdb2_output_path, pdb1_chain, pdb2_chain)
     logger.info('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
-
+ 
     return rmsd, pdb1_path, pdb2_path
 
 

@@ -141,6 +141,13 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
 
     logger.info(f"Output written to {unrelaxed_output_path}...")
 
+    if not args.skip_relaxation:
+        # Relax the prediction.
+        logger.info(f"Running relaxation on {unrelaxed_output_path}...")
+        relax_protein(config, args.model_device, unrelaxed_protein, model_output_dir, output_name,
+                      args.cif_output)
+
+
     return mean_plddt, disordered_percentage, inference_time, accept_conformation, unrelaxed_output_path 
 
     
@@ -895,6 +902,8 @@ def main(args):
             cmd_to_run = ["python", finetune_openfold_path] + script_arguments
             cmd_to_run_str = s = ' '.join(cmd_to_run)
             logger.info("RUNNING GRADIENT DESCENT WRT TO: %s" % curr_pdb_fname)
+            logger.info(asterisk_line)
+            logger.info("RUNNING THE FOLLOWING COMMAND:")
             logger.info(cmd_to_run_str)
             subprocess.run(cmd_to_run)
 

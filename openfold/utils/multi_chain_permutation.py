@@ -38,12 +38,12 @@ def kabsch_rotation(P, Q):
     assert P.shape == torch.Size([Q.shape[0], Q.shape[1]])
 
     # Firstly, compute SVD of P.T * Q
-    u, _, vt = torch.linalg.svd(torch.matmul(P.to(torch.float32).T,
-                                             Q.to(torch.float32)))
+    x = torch.matmul(P.to(torch.float32).T,Q.to(torch.float32)).to(torch.float32)
+    u, _, vt = torch.linalg.svd(x)
     # Then construct s matrix
     s = torch.eye(P.shape[1], device=P.device)
     # correct the rotation matrix to ensure a right-handed coordinate
-    s[-1, -1] = torch.sign(torch.linalg.det(torch.matmul(u, vt)))
+    s[-1, -1] = torch.sign(torch.linalg.det(torch.matmul(u, vt).to(torch.float32)))
     # finally compute the rotation matrix
     r_opt = torch.matmul(torch.matmul(u, s), vt)
     assert r_opt.shape == torch.Size([3,3])

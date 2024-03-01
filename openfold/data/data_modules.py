@@ -13,6 +13,7 @@ import pytorch_lightning as pl
 import torch
 from torch.utils.data import RandomSampler
 from openfold.np.residue_constants import restypes
+from openfold.np.protein import from_pdb_string, to_modelcif
 from openfold.data import (
     data_pipeline,
     feature_pipeline,
@@ -464,6 +465,10 @@ class OpenFoldSingleMultimerDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         mmcif_id = self.idx_to_mmcif_id(idx)
+        if self.mode == 'custom_train':
+            alignment_dir = os.path.join(self.alignment_dir, mmcif_id)
+        else:
+            alignment_dir = self.alignment_dir
 
         alignment_index = None
         if self.alignment_index is not None:
@@ -485,15 +490,27 @@ class OpenFoldSingleMultimerDataset(torch.utils.data.Dataset):
             path += ext
             if ext == ".cif":
                 data = self._parse_mmcif(
-                    path, mmcif_id, self.alignment_dir, alignment_index,
+                    path, mmcif_id, alignment_dir, alignment_index,
                 )
+            elif ext == ".pdb":
+                with open(path, "r") as f:
+                    pdb_str = f.read()
+                prot = from_pdb_string(pdb_str)
+                mmcif_string = to_modelcif(prot)
+                mmcif_output_path = path.replace('.pdb','.cif') 
+                with open(mmcif_output_path, 'w') as f:
+                    f.write(mmcif_string)
+                data = self._parse_mmcif(
+                   mmcif_output_path, mmcif_id, alignment_dir, alignment_index,
+                )    
+                os.remove(mmcif_output_path) #remove cif file
             else:
                 raise ValueError("Extension branch missing")
         else:
             path = os.path.join(self.data_dir, f"{mmcif_id}.fasta")
             data = self.data_pipeline.process_fasta(
                 fasta_path=path,
-                alignment_dir=self.alignment_dir,
+                alignment_dir=alignment_dir,
                 alignment_index=alignment_index
             )
 

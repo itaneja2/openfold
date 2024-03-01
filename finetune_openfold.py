@@ -366,13 +366,9 @@ class OpenFoldWrapper(pl.LightningModule):
         self.last_lr_step = lr_step
 
     def load_from_jax(self, jax_path):
-        model_basename = get_model_basename(args.resume_from_jax_params)
+        model_basename = get_model_basename(jax_path)
         model_version = "_".join(model_basename.split("_")[1:])
-        import_jax_weights_(
-                self.model, jax_path, version=model_version
-        )
-
-
+        import_jax_weights_(self.config, self.model, jax_path, version=model_version)
 
 
 def main(args):

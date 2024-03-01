@@ -55,6 +55,7 @@ from scripts.utils import add_data_args
 
 from random_corr_sap import gen_randcorr_sap
 from pdb_utils.pdb_utils import align_and_get_rmsd
+import rw_helper_functions
 
 FeatureDict = MutableMapping[str, np.ndarray]
 
@@ -151,8 +152,14 @@ def eval_model(model, config, intrinsic_parameter, epsilon, epsilon_scaling_fact
         else:
             fp.write(protein.to_pdb(unrelaxed_protein))
 
-
     logger.info(f"Output written to {unrelaxed_output_path}...")
+
+    if not args.skip_relaxation:
+        # Relax the prediction.
+        logger.info(f"Running relaxation on {unrelaxed_output_path}...")
+        relax_protein(config, args.model_device, unrelaxed_protein, model_output_dir, output_name,
+                      args.cif_output)
+
 
     return mean_plddt, float(weighted_ptm_score), disordered_percentage, num_recycles, inference_time, accept_conformation, unrelaxed_output_path 
 
@@ -210,8 +217,9 @@ def update_config(
 
 
 def get_aligned_models_info(
-    model_to_run: List[Any], 
-    initial_pred_path_dict: Mapping[str, str], 
+    models_to_run: List[Any], 
+    initial_pred_path_dict: Mapping[str, str],
+    file_id: str, 
     args: argparse.Namespace
 ):
     """Gets a list of <source,target> models to use for the gradient descent phase of
@@ -876,7 +884,7 @@ def main(args):
         seed_fname = '%s/seed.txt' % initial_pred_dir
         np.savetxt(seed_fname, [random_seed], fmt='%d')
        
-    aligned_models_info = get_aligned_models_info(model_to_run, initial_pred_path_dict, args)
+    aligned_models_info = get_aligned_models_info(models_to_run, initial_pred_path_dict, file_id, args)
  
     #####################################################
     logger.info(asterisk_line)
@@ -928,6 +936,8 @@ def main(args):
             cmd_to_run = ["python", finetune_openfold_path] + script_arguments
             cmd_to_run_str = s = ' '.join(cmd_to_run)
             logger.info("RUNNING GRADIENT DESCENT WITH SOURCE %s AND TARGET %s" % (initial_pred_path_dict[model_name_source],initial_pred_path_dict[model_name_target]))
+            logger.info(asterisk_line)
+            logger.info("RUNNING THE FOLLOWING COMMAND:")
             logger.info(cmd_to_run_str)
             subprocess.run(cmd_to_run)
 

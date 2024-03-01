@@ -1201,7 +1201,7 @@ class DataPipelineMultimer:
         chain_fasta_str = f'>{chain_id}\n{sequence}\n'
 
         if chain_alignment_index is None and not os.path.exists(chain_alignment_dir):
-            raise ValueError(f"Alignments for {chain_id} not found...")
+            raise ValueError(f"Alignments for {chain_id} not found in {chain_alignment_dir}...")
 
         features_output_path = os.path.join(chain_alignment_dir, 'features.pkl')
         if os.path.isfile(features_output_path):
@@ -1332,9 +1332,10 @@ class DataPipelineMultimer:
             mmcif_object.header["resolution"], dtype=np.float32
         )
 
-        mmcif_feats["release_date"] = np.array(
-            [mmcif_object.header["release_date"].encode("utf-8")], dtype=np.object_
-        )
+        if "release_date" in mmcif_object.header:
+            mmcif_feats["release_date"] = np.array(
+                [mmcif_object.header["release_date"].encode("utf-8")], dtype=np.object_
+            )
 
         mmcif_feats["is_distillation"] = np.array(0., dtype=np.float32)
 
