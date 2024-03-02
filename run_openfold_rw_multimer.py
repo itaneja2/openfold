@@ -542,7 +542,7 @@ def run_grid_search_multimer(
     # To speed things up when searching for scaling factors, we initially evaluate the min(grid_search_combinations) 
     # and max(grid_search_combinations). Based on the results of the min(grid_search_combinations) and 
     # max(grid_search_combinations), we may terminate the search early. We only do this for grid_search_combinations
-    # that have not been previously evaluated or only consist of a single combination. 
+    # that have not been previously evaluated and consist of more than a single combination.
 
     if len(grid_search_combinations) == 1 or len(state_history_dict) > 0:
 
@@ -583,7 +583,7 @@ def run_grid_search_multimer(
         grid_search_combinations_reordered.extend(grid_search_combinations_excluding_min_max)
 
         # If the acceptance rate of max(grid_search_combinations) >= ub_threshold, we set the acceptance rate of all 
-        # other combinations to 1 (because decreasing scaling factor should only increase acceptance rate). If the acceptance
+        # other combinations to 1 (because decreasing scaling factor should generally increase acceptance rate). If the acceptance
         # rate of min(grid_search_combinations) <= lb_threshold, we set the acceptance rate of all other combinations 
         # to 0 (because increasing scaling factor should only decrease acceptance rate).
  
@@ -616,13 +616,24 @@ def run_grid_search_multimer(
                     return state_history_dict
                 
             if i == 0: #min_combination
-                if acceptance_rate <= lower_bound_acceptance_threshold:
+                if acceptance_rate < lower_bound_acceptance_threshold:
                     state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1 
                     return state_history_dict
+                elif acceptance_rate >= lower_bound_acceptance_threshold and acceptance_rate <= upper_bound_acceptance_threshold:
+                    min_combo_outside_acceptance_range = False
+                else:
+                    min_combo_outside_acceptance_range = True
             elif i == 1: #max_combination
-                if acceptance_rate >= upper_bound_acceptance_threshold:
-                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1
-                    return state_history_dict
+                if acceptance_rate > upper_bound_acceptance_threshold:
+                    #in general, if max_combo acceptance > ub_threshold, 
+                    #then min_combo should as well. however, if the prediction 
+                    #confidence is low, this can lead to more variability
+                    #in the acceptance rate, so we check to see if min_combo
+                    #is also outside the acceptance range before terminating
+                    #the search early  
+                    if min_combo_outside_acceptance_range: 
+                        state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1
+                        return state_history_dict
                 
     return state_history_dict
 
