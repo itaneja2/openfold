@@ -45,7 +45,7 @@
             }
         },
         "rw": {
-            "hp_config_0-1": {
+            "hp_config_0-0": {
                 "bootstrap_tuning_acceptance_threshold": 90e-2,
                 "bootstrap_tuning_threshold_ub_tolerance": 5e-2,
                 "bootstrap_tuning_threshold_lb_tolerance": 5e-2,
@@ -53,58 +53,18 @@
                 "rw_tuning_acceptance_threshold_ub_tolerance": 10e-2,
                 "rw_tuning_acceptance_threshold_lb_tolerance": 5e-2,
                 "cov_type": "full",
-                "rw_type": "vanila",
-                "hp_tuning": "auto" 
-            },
-            "hp_config_1-1": {
-                "bootstrap_tuning_acceptance_threshold": 75e-2,
-                "rw_tuning_acceptance_threshold": 75e-2,
-                "rw_tuning_acceptance_threshold_tolerance": 10e-2,
+                "rw_type": "vanila"
+            },  
+            "hp_config_1-0": {
+                "bootstrap_tuning_acceptance_threshold": 90e-2,
+                "bootstrap_tuning_threshold_ub_tolerance": 5e-2,
+                "bootstrap_tuning_threshold_lb_tolerance": 5e-2,
+                "rw_tuning_acceptance_threshold": 90e-2,
+                "rw_tuning_acceptance_threshold_ub_tolerance": 5e-2,
+                "rw_tuning_acceptance_threshold_lb_tolerance": 10e-2,
                 "cov_type": "full",
-                "rw_type": "discrete_ou",
-                "hp_tuning": "auto" 
-            },
-            "hp_config_2-1": {
-                "bootstrap_tuning_acceptance_threshold": 75e-2,
-                "rw_tuning_acceptance_threshold": 75e-2,
-                "rw_tuning_acceptance_threshold_tolerance": 10e-2,
-                "cov_type": "full",
-                "rw_type": "rw_w_momentum",
-                "hp_tuning": "auto" 
-            },
-            "hp_config_0-2": {
-                "bootstrap_tuning_acceptance_threshold": 80e-2,
-                "rw_tuning_acceptance_threshold": 80e-2,
-                "rw_tuning_acceptance_threshold_tolerance": 10e-2,
-                "cov_type": "full",
-                "rw_type": "vanila",
-                "hp_tuning": "auto" 
-            },
-            "hp_config_1-2": {
-                "bootstrap_tuning_acceptance_threshold": 80e-2,
-                "rw_tuning_acceptance_threshold": 80e-2,
-                "rw_tuning_acceptance_threshold_tolerance": 10e-2,
-                "cov_type": "full",
-                "rw_type": "discrete_ou",
-                "hp_tuning": "auto" 
-            },
-            "hp_config_2-2": {
-                "bootstrap_tuning_acceptance_threshold": 80e-2,
-                "rw_tuning_acceptance_threshold": 80e-2,
-                "rw_tuning_acceptance_threshold_tolerance": 10e-2,
-                "cov_type": "full",
-                "rw_type": "rw_w_momentum",
-                "hp_tuning": "auto" 
-            },
-            "hp_config_0-s1": {
-                "bootstrap_tuning_acceptance_threshold": 75e-2,
-                "rw_tuning_acceptance_threshold": 75e-2,
-                "rw_tuning_acceptance_threshold_tolerance": 10e-2,
-                "cov_type": "full-block-s1",
-                "rw_type": "vanila",
-                "hp_tuning": "auto" 
-            }
-
+                "rw_type": "vanila"
+            } 
         }
            
     }       
