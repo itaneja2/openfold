@@ -59,8 +59,22 @@ import rw_helper_functions
 
 FeatureDict = MutableMapping[str, np.ndarray]
 
-logging.basicConfig(filename='rw_monomer.log', filemode='w')
-logger = logging.getLogger(__file__)
+if __name__ == "__main__":
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)  
+    logger.propagate = False
+    formatter = logging.Formatter('%(asctime)s - %(filename)s - %(levelname)s : %(message)s')
+    console_handler = logging.StreamHandler() 
+    console_handler.setLevel(logging.INFO) 
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+    file_handler = logging.FileHandler('./rw_monomer.log', mode='w') 
+    file_handler.setLevel(logging.INFO) 
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+else:
+    logger = logging.getLogger("run_openfold_rw_monomer_batch.run_openfold_rw_monomer")
+
 
 finetune_openfold_path = './finetune_openfold.py'
 
@@ -318,9 +332,9 @@ def run_rw_monomer(
             num_accepted_steps += 1
             rmsd = align_and_get_rmsd(pdb_path_initial, pdb_path_rw) #important that we align prior to training
             if save_intrinsic_param:
-                conformation_info.append((pdb_path_rw, rmsd, mean_plddt, disordered_percentage, inference_time, intrinsic_param_proposed, rw_hp_dict['epsilon_scaling_factor']))
+                conformation_info.append((pdb_path_rw, rmsd, mean_plddt, disordered_percentage, inference_time, intrinsic_param_proposed, rw_hp_dict['epsilon_scaling_factor'], curr_step_aggregate))
             else:
-                conformation_info.append((pdb_path_rw, rmsd, mean_plddt, disordered_percentage, inference_time, None, None))
+                conformation_info.append((pdb_path_rw, rmsd, mean_plddt, disordered_percentage, inference_time, None, rw_hp_dict['epsilon_scaling_factor'], curr_step_aggregate)) #if this function is called within a local context manager, curr_step_aggregate can be used to reproduce intrinsic_param_proposed
         else:
             logger.info('STEP %d: REJECTED' % curr_step_aggregate)
             if early_stop:

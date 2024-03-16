@@ -51,6 +51,19 @@ def fast_walsh_hadamard_torched(x, axis: int = 0, normalize: bool = True):
 
 @contextlib.contextmanager
 def local_np_seed(seed):
+    """
+    The current state of the numpy random number 
+    generator is saved using get_state(). 
+    The yield statement is used to define the context
+    block where the code within the context manager 
+    will be executed. After the code within the context 
+    block is executed, the original state of the numpy 
+    random number generator is restored.
+    
+    Effectively, this enables a the same result
+    to be outputted each time code using numpy 
+    rng functions is executed within this context manager. 
+    """
     state = np.random.get_state()
     np.random.seed(seed)
     try:

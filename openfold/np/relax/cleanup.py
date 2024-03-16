@@ -140,7 +140,7 @@ def _replace_met_se(pdb_structure, alterations_info):
                     s_atom.element = element.get_by_symbol("S")
                     modified_met_residues.append(s_atom.residue_number)
             except KeyError as e:
-                print(e)
+                pass 
 
     alterations_info["Se_in_MET"] = modified_met_residues
 

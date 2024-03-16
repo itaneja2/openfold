@@ -59,8 +59,19 @@ import rw_helper_functions
 
 FeatureDict = MutableMapping[str, np.ndarray]
 
-logging.basicConfig(filename='rw_multimer.log', filemode='w')
 logger = logging.getLogger(__file__)
+logger.setLevel(logging.INFO)  
+logger.propagate = False
+formatter = logging.Formatter('%(asctime)s - %(filename)s - %(levelname)s : %(message)s')
+console_handler = logging.StreamHandler() 
+console_handler.setLevel(logging.INFO) 
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+file_handler = logging.FileHandler('./rw_multimer.log', mode='w') 
+file_handler.setLevel(logging.INFO) 
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
 
 finetune_openfold_path = './finetune_openfold.py'
 

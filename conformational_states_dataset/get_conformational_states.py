@@ -36,15 +36,19 @@ def get_all_pdb_openprotein():
             pdb_id_w_chain = common_prefix['Prefix'].split('/')[1]
             all_pdb_list.append(pdb_id_w_chain)
             all_pdb_dict[pdb_id_w_chain] = 1 
-    
-    print(len(all_pdb_list))
 
+    print(all_pdb_list)    
+    print(len(all_pdb_list))
+    sdf
     os.makedirs('./data', exist_ok=True)
     with open("./data/pdb_list_openprotein.pkl", "wb") as f:
         pickle.dump(all_pdb_list, f)
     with open("./data/pdb_dict_openprotein.pkl", "wb") as f:
         pickle.dump(all_pdb_dict, f)
+
+get_all_pdb_openprotein()
  
+
 def parse_superposition_info(json_dict, uniprot_id, all_pdb_dict):
     parsed_dict = {} 
     parsed_dict[uniprot_id] = {} 
