@@ -672,7 +672,7 @@ def summarize_rw(
 
 
 
-def main(args):
+def run_rw_pipeline(args):
 
     if args.log_level.lower() == 'debug':
         logger.setLevel(level=logging.DEBUG)
@@ -971,9 +971,13 @@ def main(args):
     #####################################################
     logger.info(asterisk_line)
 
-    if rw_hp_config_data['cov_type'] == 'full': 
+    if rw_hp_config_data['cov_type'] == 'full':
         logger.info('GENERATING RANDOM CORRELATION MATRIX')
-        random_corr = gen_randcorr_sap.randcorr(intrinsic_dim)
+        if args.use_local_context_manager:
+            with local_np_seed(random_seed):
+                random_corr = gen_randcorr_sap.randcorr(intrinsic_dim)
+        else:
+            random_corr = gen_randcorr_sap.randcorr(intrinsic_dim)
     
     rw_hp_dict = {}  
     rw_hp_parent_dir = '%s/rw_hp_tuning' % output_dir
@@ -1103,7 +1107,12 @@ def main(args):
 
         logger.info('RW OUTPUT DIR: %s' % rw_output_dir)
 
-        state_history, conformation_info = run_rw_multimer(source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+        if args.use_local_context_manager:
+            with local_np_seed(random_seed):
+                state_history, conformation_info = run_rw_multimer(source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+        else:
+            state_history, conformation_info = run_rw_multimer(source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+
         key = '%s-%s' % (model_name_source, model_name_target)
         conformation_info_dict[key] = conformation_info
 
@@ -1246,6 +1255,16 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument(
+    "--use_local_context_manager", action="store_true", default=False,
+    help=(
+        """whether to use local context manager
+         when generating proposals. this means 
+         that the same set of intrinsic_param
+         will be produced within that context
+         block."""
+        )    
+    )  
+    parser.add_argument(
         "--skip_initial_pred_phase", action="store_true", default=False
     )    
     parser.add_argument(
@@ -1273,8 +1292,6 @@ if __name__ == "__main__":
         "--log_level", type=str, default='INFO'
     )
 
-
-
     add_data_args(parser)
     args = parser.parse_args()
 
@@ -1284,5 +1301,5 @@ if __name__ == "__main__":
             --model_device for better performance"""
         )
 
-    main(args)
+    run_rw_pipeline(args)
 

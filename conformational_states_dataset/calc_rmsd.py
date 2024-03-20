@@ -140,7 +140,7 @@ def get_rmsd_dict(chunk_num):
             for segment_id in conformation_info[uniprot_id]:
                 pdb_id_list = conformation_info[uniprot_id][segment_id]
                 pdb_ref = pdb_id_list[0]
-                rmsd_list = [] 
+                rmsd_list = [] #calculate rmsd w.r.t the first pdb in the list 
                 for i in range(1,len(pdb_id_list)):
                     rmsd, _, _ = superimpose_wrapper_monomer(pdb_ref, pdb_id_list[i], './pdb_structures')
                     rmsd_list.append(rmsd)

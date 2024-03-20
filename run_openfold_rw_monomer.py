@@ -81,6 +81,28 @@ finetune_openfold_path = './finetune_openfold.py'
 TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
 
+@contextlib.contextmanager
+def local_np_seed(seed):
+    """ 
+    The current state of the numpy random number 
+    generator is saved using get_state(). 
+    The yield statement is used to define the context
+    block where the code within the context manager 
+    will be executed. After the code within the context 
+    block is executed, the original state of the numpy 
+    random number generator is restored.
+    
+    Effectively, this enables a the same result
+    to be outputted each time code using numpy 
+    rng functions is executed within this context manager. 
+    """
+    state = np.random.get_state()
+    np.random.seed(seed)
+    try:
+        yield
+    finally:
+        np.random.set_state(state)
+
 def eval_model(model, config, intrinsic_parameter, feature_processor, feature_dict, processed_feature_dict, tag, output_dir, phase, args):
 
     model.intrinsic_parameter = nn.Parameter(torch.tensor(intrinsic_parameter, dtype=torch.float).to(args.model_device))
@@ -701,7 +723,7 @@ def summarize_rw(
     logger.info(asterisk_line)
 
 
-def main(args):
+def run_rw_pipeline(args):
 
     if args.log_level.lower() == 'debug':
         logger.setLevel(level=logging.DEBUG)
@@ -720,13 +742,19 @@ def main(args):
                 "Tracing requires that fixed_size mode be enabled in the config"
             )
  
-    output_dir = '%s/%s/%s/train-%s/rw-%s' % (args.output_dir_base, 'rw', args.module_config, args.train_hp_config, args.rw_hp_config)
-    l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'rw', args.module_config)
-    l2_output_dir = '%s/%s/%s/train-%s' % (args.output_dir_base, 'rw', args.module_config, args.train_hp_config)
-    
-    output_dir = os.path.abspath(output_dir)
-    l1_output_dir = os.path.abspath(l1_output_dir)
-    l2_output_dir = os.path.abspath(l2_output_dir) 
+    if args.bootstrap_phase_only:
+        output_dir = '%s/%s/%s/rw-%s' % (args.output_dir_base, 'rw', args.module_config, args.rw_hp_config)
+        l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'rw', args.module_config)
+        l2_output_dir = None
+        output_dir = os.path.abspath(output_dir)
+        l1_output_dir = os.path.abspath(l1_output_dir)
+    else: 
+        output_dir = '%s/%s/%s/train-%s/rw-%s' % (args.output_dir_base, 'rw', args.module_config, args.train_hp_config, args.rw_hp_config)
+        l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'rw', args.module_config)
+        l2_output_dir = '%s/%s/%s/train-%s' % (args.output_dir_base, 'rw', args.module_config, args.train_hp_config) 
+        output_dir = os.path.abspath(output_dir)
+        l1_output_dir = os.path.abspath(l1_output_dir)
+        l2_output_dir = os.path.abspath(l2_output_dir) 
 
     logger.info("OUTPUT DIRECTORY: %s" % output_dir)
 
@@ -820,8 +848,11 @@ def main(args):
     logger.info(asterisk_line)
 
     initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir 
-    bootstrap_output_dir = '%s/bootstrap' % l1_output_dir
-    bootstrap_training_conformations_dir = '%s/bootstrap_training_conformations' % l2_output_dir
+    if not(args.bootstrap_phase_only):
+        bootstrap_output_dir = '%s/bootstrap' % l1_output_dir
+        bootstrap_training_conformations_dir = '%s/bootstrap_training_conformations' % l2_output_dir
+    else:
+        bootstrap_output_dir = '%s/bootstrap' % output_dir #note we are saving boostrap_conformations in output_dir as opposed to l1_output_dir  
 
     if args.skip_bootstrap_phase:
         conformation_info_fname = '%s/conformation_info.pkl' % bootstrap_output_dir
@@ -863,7 +894,11 @@ def main(args):
         logger.info('RUNNING RW TO GENERATE CONFORMATIONS FOR BOOTSTRAP PHASE') 
         rw_hp_dict = {}
         rw_hp_dict['epsilon_scaling_factor'] = scaling_factor_bootstrap 
-        state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
+        if args.use_local_context_manager:
+            with local_np_seed(random_seed):
+                state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
+        else:
+                state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
  
         bootstrap_acceptance_rate = sum(state_history)/len(state_history)
         logger.info('BOOTSTRAP ACCEPTANCE RATE: %.3f' % bootstrap_acceptance_rate)
@@ -879,8 +914,15 @@ def main(args):
 
         seed_fname = '%s/seed.txt' % bootstrap_output_dir
         np.savetxt(seed_fname, [random_seed], fmt='%d')
+
+        rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
+        max_rmsd = np.max(rmsd_all)
+        logger.info('MAX RMSD: %.3f' % max_rmsd)
  
     bootstrap_candidate_conformations = get_bootstrap_candidate_conformations(conformation_info, args) 
+    
+    if args.bootstrap_phase_only:
+        return
 
     #####################################################
     logger.info(asterisk_line)
@@ -942,7 +984,11 @@ def main(args):
  
     if rw_hp_config_data['cov_type'] == 'full': 
         logger.info('GENERATING RANDOM CORRELATION MATRIX')
-        random_corr = gen_randcorr_sap.randcorr(intrinsic_dim)
+        if args.use_local_context_manager:
+            with local_np_seed(random_seed):
+                random_corr = gen_randcorr_sap.randcorr(intrinsic_dim)   
+        else:
+            random_corr = gen_randcorr_sap.randcorr(intrinsic_dim) 
     
     rw_hp_dict = {}
     rw_hp_parent_dir = '%s/rw_hp_tuning' % output_dir
@@ -995,7 +1041,7 @@ def main(args):
 
                 model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
                 sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
-        
+ 
                 if rw_hp_config_data['cov_type'] == 'full':
                     random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
                     logger.info('calculating cholesky')
@@ -1078,7 +1124,11 @@ def main(args):
 
         logger.info('BEGINNING RW FOR: %s' % rw_output_dir)
 
-        state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+        if args.use_local_context_manager:
+            with local_np_seed(random_seed):
+                state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+        else:
+            state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
         conformation_info_dict[iter_num] = conformation_info
 
         acceptance_rate = sum(state_history)/len(state_history)
@@ -1233,6 +1283,19 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument(
+        "--use_local_context_manager", action="store_true", default=False,
+        help=(
+            """whether to use local context manager
+             when generating proposals. this means 
+             that the same set of intrinsic_param
+             will be produced within that context
+             block."""
+            )
+    )
+    parser.add_argument(
+        "--bootstrap_phase_only", action="store_true", default=False
+    )
+    parser.add_argument(
         "--skip_bootstrap_phase", action="store_true", default=False
     )
     parser.add_argument(
@@ -1252,10 +1315,6 @@ if __name__ == "__main__":
     )
 
 
-
-
-
-
     add_data_args(parser)
     args = parser.parse_args()
 
@@ -1271,5 +1330,5 @@ if __name__ == "__main__":
             --model_device for better performance"""
         )
 
-    main(args)
+    run_rw_pipeline(args)
 

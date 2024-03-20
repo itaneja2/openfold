@@ -35,6 +35,7 @@ arg11 = '--hhsearch_binary_path=/opt/applications/hhsuite/3.3.0/gnu/bin/hhsearch
 arg12 = '--kalign_binary_path=/opt/applications/kalign/2.04/gnu/bin/kalign' 
 
 
+
 for index,row in conformational_states_df.iterrows():
 
     print('On row %d of %d' % (index, len(conformational_states_df)))   
@@ -60,8 +61,15 @@ for index,row in conformational_states_df.iterrows():
         
         curr_folder_name =  './alignment_data/%s' % uniprot_id_from_sifts
         new_folder_name = './alignment_data/%s' % uniprot_id
-        print('renaming %s to %s' % (curr_folder_name,new_folder_name))
-        os.rename(curr_folder_name, new_folder_name)
+        pdb_curr_folder = '%s/%s' % (curr_folder_name, pdb_id_ref)
+        pdb_new_folder = '%s/%s' % (new_folder_name, pdb_id_ref)
+        if not(os.path.exists(new_folder_name)):
+            print('renaming %s to %s' % (curr_folder_name,new_folder_name))
+            os.rename(curr_folder_name, new_folder_name)
+        else:
+            print('copying %s to %s' % (pdb_curr_folder, new_folder_name))
+            shutil.copytree(pdb_curr_folder, pdb_new_folder, dirs_exist_ok=True)
+            shutil.rmtree(curr_folder_name)
     else:
         print('%s already exists' % features_path)
 
@@ -75,4 +83,53 @@ for index,row in conformational_states_df.iterrows():
     print('sequence length: %d, seg_len: %d' % (len(seq), seg_len))
 
 
+####we only ran for reference so far###
+for index,row in conformational_states_df.iterrows():
+
+    print('On row %d of %d' % (index, len(conformational_states_df)))   
+    print(row)
+ 
+    uniprot_id = str(row['uniprot_id'])
+    #pdb_id_ref = str(row['pdb_id_ref'])
+    pdb_id_state_i = str(row['pdb_id_state_i'])
+    seg_len = int(row['seg_len'])
+    uniprot_id_from_sifts = get_uniprot_id(pdb_id_state_i)
+
+    features_path = './alignment_data/%s/%s/features.pkl' % (uniprot_id, pdb_id_state_i)
+    
+    if not(os.path.exists(features_path)):
+        arg1 = '--pdb_id=%s' % pdb_id_state_i
+        script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12]
+        cmd_to_run = ["python", gen_msa_monomer_path] + script_arguments
+        cmd_to_run_str = s = ' '.join(cmd_to_run)
+        print(asterisk_line)
+        print("RUNNING THE FOLLOWING COMMAND:")
+        print(cmd_to_run_str)
+        subprocess.run(cmd_to_run)
+        
+        curr_folder_name =  './alignment_data/%s' % uniprot_id_from_sifts
+        new_folder_name = './alignment_data/%s' % uniprot_id
+        pdb_curr_folder = '%s/%s' % (curr_folder_name, pdb_id_state_i)
+        pdb_new_folder = '%s/%s' % (new_folder_name, pdb_id_state_i)
+        if not(os.path.exists(new_folder_name)):
+            print('renaming %s to %s' % (curr_folder_name,new_folder_name))
+            os.rename(curr_folder_name, new_folder_name)
+        else:
+            print('copying %s to %s' % (pdb_curr_folder, new_folder_name))
+            shutil.copytree(pdb_curr_folder, pdb_new_folder, dirs_exist_ok=True)
+            shutil.rmtree(curr_folder_name)
+    else:
+        print('%s already exists' % features_path)
+
+    fasta_file = './alignment_data/%s/%s/%s.fasta' % (uniprot_id, pdb_id_state_i, pdb_id_state_i)
+
+    with open(fasta_file, "r") as fp:
+        fasta_data = fp.read()
+    _, seq = parse_fasta(fasta_data)
+    seq = seq[0]
+    print(seq)
+    print('sequence length: %d, seg_len: %d' % (len(seq), seg_len))
+
+
+print('FINISHED PDB_STATE_I')
 

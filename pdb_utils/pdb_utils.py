@@ -2,6 +2,7 @@ import logging
 import os 
 import io 
 import subprocess 
+import numpy as np
 import pandas as pd 
 import string
 from io import StringIO
@@ -15,6 +16,8 @@ from Bio.PDB.PDBIO import PDBIO
 from Bio.PDB.mmcifio import MMCIFIO
 from Bio.SeqUtils import seq1
 from Bio import SeqIO
+from Bio import pairwise2
+from Bio.pairwise2 import format_alignment
 
 from typing import List
 
@@ -28,11 +31,15 @@ try:
     from openmm import unit
     from openmm import app as openmm_app
     from openmm.app.internal.pdbstructure import PdbStructure 
+    from openmm.app import PDBFile
+    from openmm.app import Modeller 
 except ImportError:
     import simtk.openmm
     from simtk.openmm import unit
     from simtk.openmm import app as openmm_app
     from simtk.openmm.app.internal.pdbstructure import PdbStructure
+    from simtk.openmm.app import PDBFile
+    from simtk.openmm.app import Modeller
 
 import requests
 import urllib.request
@@ -244,7 +251,11 @@ def fetch_pdb(pdb_id: str, save_dir: str, clean=False) -> str:
         chain_id_list = None
     cmd.delete('all')
 
-    fetch_path = './%s.cif' % pdb_id_wo_chain
+    if len(pdb_id.split('_')) > 1:
+        fetch_path = './%s.cif' % pdb_id_wo_chain
+    else:
+        fetch_path = './%s.cif' % pdb_id
+
     if os.path.exists(fetch_path):
         os.remove(fetch_path)    
 
@@ -255,7 +266,9 @@ def fetch_pdb(pdb_id: str, save_dir: str, clean=False) -> str:
 
     return pdb_save_path
 
-def fetch_af_pdb(uniprot_id, save_dir):
+def fetch_af_pdb(uniprot_id: str, save_dir: str):
+
+    os.makedirs(save_dir, exist_ok=True)
 
     url = 'https://alphafold.ebi.ac.uk/api/prediction/%s' % uniprot_id
     params = {'key': 'AIzaSyCeurAJz7ZGjPQUtEaerUkBZ3TaBkXrY94'}
@@ -277,11 +290,11 @@ def fetch_af_pdb(uniprot_id, save_dir):
     cif_path = '%s/%s.cif' % (save_dir, af_id)
     urllib.request.urlretrieve(cif_url, cif_path)
     pdb_path = cif_path.replace('.cif','.pdb')
-    pdb_path = cif_path.replace('-','')
+    pdb_path = pdb_path.replace('-','')
     convert_mmcif_to_pdb(cif_path, pdb_path)
     os.remove(cif_path)    
  
-    return (af_id, pdb_path, af_seq)
+    return (pdb_path, af_id, af_seq)
 
 def get_pdb_str(pdb_id: str, pdb_path: str) -> str:
 
@@ -305,9 +318,9 @@ def get_pdb_str(pdb_id: str, pdb_path: str) -> str:
         raise ValueError('.cif must be in %s' % pdb_path)
 
 
-def get_mean_bfactor(pdb_id, pdb_path):
+def get_bfactor(cif_path: str):
 
-    structure = MMCIF2Dict.MMCIF2Dict(pdb_path)
+    structure = MMCIF2Dict.MMCIF2Dict(cif_path)
     b_factor = structure['_atom_site.B_iso_or_equiv']
     res = structure['_atom_site.label_comp_id']
     atom = structure['_atom_site.label_atom_id']
@@ -320,8 +333,9 @@ def get_mean_bfactor(pdb_id, pdb_path):
             b_factor_ca.append(float(b_factor[i]))
             res_ca.append(res[i])
 
-    mean_bfactor_ca = np.mean(np.array(b_factor_ca))
-    return(mean_bfactor_ca)
+    b_factor_ca = np.array(b_factor_ca)
+    mean_bfactor_ca = np.mean(b_factor_ca)
+    return b_factor_ca, mean_bfactor_ca
 
 def convert_mmcif_to_pdb(cif_path, pdb_path):
     cmd.reinitialize()
@@ -329,6 +343,24 @@ def convert_mmcif_to_pdb(cif_path, pdb_path):
     cmd.save(pdb_path, 'protein')
     cmd.delete('all')
 
+def convert_pdb_to_mmcif(pdb_path: str, output_dir: str) -> str:
+    """
+    Args:
+        pdb_path: path to .pdb file 
+    """ 
+
+    os.makedirs(output_dir, exist_ok=True)
+    model_name = pdb_path[pdb_path.rindex('/')+1:pdb_path.rindex('.pdb')]
+    cif_path = os.path.join(output_dir, f'{model_name}.cif')
+
+    with open(pdb_path, "r") as f:
+        pdb_str = f.read()
+    prot = from_pdb_string(pdb_str)
+    cif_string = to_modelcif(prot)
+    with open(cif_path, 'w') as f:
+        f.write(cif_string)
+
+    return cif_path 
 
 def num_to_chain(number):
     if 0 <= number < 26:
@@ -448,7 +480,9 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
     pdb2_output_path = '%s/%s.pdb' % (pdb_superimposed_folder, pdb2_model_name)
     shutil.copyfile(pdb2_input_path, pdb2_output_path)
 
-    rmsd = align_and_get_rmsd(pdb1_input_path, pdb2_output_path, pdb1_chain, pdb2_chain)
+    #pdb1_chain and pdb2_chain are set to A because
+    #clean_pdb replaces chain_id with A 
+    rmsd = align_and_get_rmsd(pdb1_input_path, pdb2_output_path, 'A', 'A')
     logger.info('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
  
     return rmsd, pdb1_path, pdb2_path
@@ -527,60 +561,115 @@ def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, p
     return rmsd, pdb1_path, pdb2_path
 
 
+def get_af_disordered_residues(pdb_path: str):
+    """pdb_path assumes AF structure"""
+    #plddt_threshold sourced from https://onlinelibrary.wiley.com/doi/10.1002/pro.4466
 
-'''
-def _save_mmcif_file(
-    prot: protein.Protein,
-    output_dir: str,
-    model_name: str,
-    file_id: str,
-    model_type: str,
-) -> None:
-  """Crate mmCIF string and save to a file.
-     https://github.com/deepmind/alphafold/blob/6c4d833fbd1c6b8e7c9a21dae5d4ada2ce777e10/run_alphafold.py#L189
-  Args:
-    prot: Protein object.
-    output_dir: Directory to which files are saved.
-    model_name: Name of a model.
-    file_id: The file ID (usually the PDB ID) to be used in the mmCIF.
-    model_type: Monomer or multimer.
-  """
+    cif_path = convert_pdb_to_mmcif(pdb_path, './cif_temp')
+    plddt_scores, mean_plddt = get_bfactor(cif_path)
+    os.remove(cif_path)
+    pdb_seq = get_pdb_path_seq(pdb_path, None)
 
-  mmcif_string = to_mmcif(prot, file_id, model_type)
-
-  # Save the MMCIF.
-  mmcif_output_path = os.path.join(output_dir, f'{model_name}.cif')
-  with open(mmcif_output_path, 'w') as f:
-    f.write(mmcif_string)
-
-
-def convert_pdb_to_mmcif(pdb_path: str, pdb_id: str, model_type: str, pdb_source: str) -> str:
-
-    """
-    Args:
-        pdb_path: path to .pdb file 
-    """ 
-
-    output_dir = pdb_path[0:pdb_path.rindex('/')]
-    model_name = pdb_path[pdb_path.rindex('/')+1:pdb_path.rindex('.pdb')]
-    mmcif_output_path = os.path.join(output_dir, f'{model_name}.cif')
-
-    if os.path.isfile(mmcif_output_path):  
-        return mmcif_output_path
-    else:
-        #remove insertion code if file is sourced from pdb
-        logger.info('converting %s to %s' % (pdb_path, mmcif_output_path)) 
-        if pdb_source == 'pdb':
-            pdb_outpath = pdb_path.replace('.','_icrmv.')
-            python_cmd = f'python {pdb_fixinsert_path} {pdb_path} > {pdb_outpath}' 
-            subprocess.run(python_cmd, shell=True)
+    af_disordered = 1-plddt_scores/100
+    af_disordered = af_disordered >= .31
+     
+    af_disordered_domains_idx = []
+    start_idx = 0
+    while start_idx < len(af_disordered):
+        if af_disordered[start_idx]:
+            end_idx = start_idx+1
+            if end_idx < len(af_disordered):
+                while af_disordered[end_idx]:
+                    end_idx += 1
+                    if end_idx >= len(af_disordered):
+                        break  
+            seg_len = end_idx-start_idx
+            if seg_len >= 3:
+                af_disordered_domains_idx.append([start_idx, end_idx-1])
+            start_idx = end_idx+1
         else:
-            pdb_outpath = pdb_path 
+            start_idx += 1 
+               
+    af_disordered_domains_seq = [] 
+    for i in range(0,len(af_disordered_domains_idx)):
+        af_disordered_domains_seq.append([pdb_seq[af_disordered_domains_idx[i][0]:af_disordered_domains_idx[i][1]+1]])
 
-        with open(pdb_output_path, "r") as f:
-            pdb_str = f.read()
-        prot = from_pdb_string(pdb_str)
-        _save_mmcif_file(prot, output_dir, model_name, pdb_id, model_type)
-        return mmcif_output_path 
- 
+    return af_disordered_domains_idx, af_disordered_domains_seq
+    
+
+def get_pdb_disordered_residues_idx(af_seq: str, pdb_seq: str, af_disordered_idx: List[List[int]], af_disordered_seq: List[str]):
+
+    alignments = pairwise2.align.globalxx(af_seq, pdb_seq)
+    print('Aligned AF seq with PDB seq:')
+    print(format_alignment(*alignments[0]))
+    af_seq_aligned = alignments[0].seqA
+    pdb_seq_aligned = alignments[0].seqB
+
+    pdb_disordered_idx = [] 
+
+    for i in range(0,len(af_disordered_idx)):
+        d = af_disordered_idx[i]
+        s = af_disordered_seq[i]
+        start_idx = d[0]
+        end_idx = d[1]
+        for j in range(start_idx, end_idx+1):
+            if pdb_seq_aligned[j] != '-':
+                num_gaps = pdb_seq_aligned[0:j].count('-')
+                pdb_seq_idx = j-num_gaps
+                pdb_disordered_idx.append(pdb_seq_idx)
+
+    #remove disordered residues that are not contiguous (i.e there is no disordered residue before or after it)
+    pdb_disordered_idx_cleaned = [] 
+    for i in range(0,len(pdb_disordered_idx)):
+        if i == 0: 
+            if (pdb_disordered_idx[i+1]-1) == pdb_disordered_idx[i]:
+                pdb_disordered_idx_cleaned.append(pdb_disordered_idx[i])
+        elif i == len(pdb_disordered_idx)-1:
+            if (pdb_disordered_idx[i-1]+1) == pdb_disordered_idx[i]:
+                pdb_disordered_idx_cleaned.append(pdb_disordered_idx[i])
+        else:
+            if (pdb_disordered_idx[i-1]+1) == pdb_disordered_idx[i]:
+                pdb_disordered_idx_cleaned.append(pdb_disordered_idx[i])
+            elif (pdb_disordered_idx[i+1]-1) == pdb_disordered_idx[i]:
+                pdb_disordered_idx_cleaned.append(pdb_disordered_idx[i])
+
+    print(pdb_disordered_idx_cleaned) 
+    return(pdb_disordered_idx_cleaned)        
+    
+    
+'''
+     
+uniprot_id = 'P29253'
+#pdb_path = '../conformational_states_dataset/predictions/A0A0H3C8Q1/rw/module_config_0/initial_pred/initial_pred_unrelaxed.pdb'
+save_dir = './pdb_temp'
+pdb_path, _, _ = fetch_af_pdb(uniprot_id, save_dir)
+af_seq = get_pdb_path_seq(pdb_path, None)
+idx, af_disordered_seq = get_af_disordered_residues(pdb_path) 
+print(idx)
+print(af_disordered_seq)
+pdb_path = '../conformational_states_dataset/pdb_structures/pdb_ref_structure/2rpi_A.pdb'
+pdb_seq = get_pdb_path_seq(pdb_path, None)
+get_pdb_disordered_residues_idx(af_seq, pdb_seq, idx, af_disordered_seq)
+sdf
+
+
+
+pdb = PDBFile(pdb_path)
+modeller = Modeller(pdb.topology, pdb.positions)
+
+for residue in modeller.topology.residues():
+    print(residue)
+
+
+pdb_path = '../conformational_states_dataset/predictions/A0A0H3C8Q1/rw/module_config_0/initial_pred/initial_pred_unrelaxed.pdb'
+#uniprot_id = 'D0G6S1'
+#save_dir = './pdb_temp' 
+#pdb_path, _, _ = fetch_af_pdb(uniprot_id, save_dir)
+#get_disordered_residues(pdb_path)
+
+pdb = PDBFile(pdb_path)
+modeller = Modeller(pdb.topology, pdb.positions)
+
+for residue in modeller.topology.residues():
+    print(residue)
 '''

@@ -48,14 +48,14 @@ for i,conformation_info in enumerate(conformation_states_dict):
         for segment_id in conformation_info[uniprot_id]:
             seg_start = segment_id.split('-')[0]
             seg_end = segment_id.split('-')[1]
-            rmsd_list = get_rmsd_list(rmsd_dict_all, uniprot_id, segment_id)
+            rmsd_list = get_rmsd_list(rmsd_dict_all, uniprot_id, segment_id) #rmsd is taken w.r.t first pdb in list
             if rmsd_list is not None:
                 pdb_id_list = conformation_info[uniprot_id][segment_id]
                 pdb_ref = pdb_id_list[0]
                 for i in range(1,len(pdb_id_list)):
                     pdb_i = pdb_id_list[i]
-                    rmsd_wrt_pdb_i = rmsd_list[i-1] 
-                    curr_data = [uniprot_id, seg_start, seg_end, pdb_ref, pdb_i, rmsd_wrt_pdb_i]
+                    rmsd_wrt_pdb_id_ref = rmsd_list[i-1] 
+                    curr_data = [uniprot_id, seg_start, seg_end, pdb_ref, pdb_i, rmsd_wrt_pdb_id_ref]
                     conformational_states_dataset.append(curr_data)
 
 
