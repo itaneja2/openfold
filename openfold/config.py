@@ -91,6 +91,14 @@ def model_config(
         c.loss.fape.sidechain.weight = 0
         c.loss.fape.backbone.clamp_distance = 3.5 
         c.loss.fape.backbone.loss_unit_distance = 3.5 
+
+        if 'conformation_module' in ft_method:
+            config.use_conformation_module = True
+            c.loss.distogram.weight = 0.0
+            c.loss.masked_msa.weight = 0.0
+        else:
+            config.use_conformation_module = False 
+
     elif name == "finetuning":
         # AF2 Suppl. Table 4, "finetuning" setting
         c.data.train.crop_size = 384
@@ -217,6 +225,11 @@ def model_config(
         # Not used in multimer
         del c.model.template.template_pointwise_attention
         del c.loss.fape.backbone
+
+        if 'chainmask' in name:
+            c.use_chainmask = True
+        else:
+            c.use_chainmask = False
 
         if 'custom_finetuning' in name:
             if len(name.split('-')) != 5:

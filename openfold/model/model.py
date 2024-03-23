@@ -38,7 +38,7 @@ from openfold.model.embedders import (
 from openfold.model.evoformer import EvoformerStack, ExtraMSAStack
 from openfold.model.evoformer_chainmask import EvoformerStackChainMask, ExtraMSAStackChainMask
 from openfold.model.heads import AuxiliaryHeads
-from openfold.model.structure_module import StructureModule
+from openfold.model.structure_module import StructureModule, ConformationModule
 from openfold.model.template import (
     TemplatePairStack,
     TemplatePointwiseAttention,
@@ -119,38 +119,35 @@ class AlphaFold(nn.Module):
                 **self.extra_msa_config["extra_msa_embedder"],
             )
 
-            if 'custom_fine_tuning' not in config:
+            if not(config.use_chainmask):
                 self.extra_msa_stack = ExtraMSAStack(
                     **self.extra_msa_config["extra_msa_stack"],
                 )
             else: 
-                if 'chainmask' not in config.custom_fine_tuning.ft_method:
-                    self.extra_msa_stack = ExtraMSAStack(
-                        **self.extra_msa_config["extra_msa_stack"],
-                    )
-                else:
-                    self.extra_msa_stack = ExtraMSAStackChainMask(
-                        **self.extra_msa_config["extra_msa_stack"],
-                    )
+                self.extra_msa_stack = ExtraMSAStackChainMask(
+                    **self.extra_msa_config["extra_msa_stack"],
+                )
 
-        if 'custom_fine_tuning' not in config:
+        if not(config.use_chainmask):
             self.evoformer = EvoformerStack(
                 **self.config["evoformer_stack"],
             )
         else: 
-            if 'chainmask' not in config.custom_fine_tuning.ft_method:
-                self.evoformer = EvoformerStack(
-                    **self.config["evoformer_stack"],
-                )
-            else:
-                self.evoformer = EvoformerStackChainMask(
-                    **self.config["evoformer_stack"],
-                )
+            self.evoformer = EvoformerStackChainMask(
+                **self.config["evoformer_stack"],
+            )
 
         self.structure_module = StructureModule(
             is_multimer=self.globals.is_multimer,
             **self.config["structure_module"],
         )
+
+        if config.use_conformation_module:
+            self.conformation_module = ConformationModule(
+                is_multimer=self.globals.is_multimer,
+                **self.config["structure_module"],
+        )
+
         self.aux_heads = AuxiliaryHeads(
             self.config["heads"],
         )
@@ -469,6 +466,17 @@ class AlphaFold(nn.Module):
             inplace_safe=inplace_safe,
             _offload_inference=self.globals.offload_inference,
         )
+
+        if self.config.use_conformation_module:
+            outputs["sm"] = self.conformation_module(
+                outputs,
+                feats["aatype"],
+                mask=feats["seq_mask"].to(dtype=s.dtype),
+                inplace_safe=inplace_safe,
+                _offload_inference=self.globals.offload_inference,
+            )
+            
+
         outputs["final_atom_positions"] = atom14_to_atom37(
             outputs["sm"]["positions"][-1], feats
         )

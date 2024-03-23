@@ -8,12 +8,3 @@ conformational_states_df_filtered_rmsd_seg_len = conformational_states_df %>% fi
 #manual filtering criteria:
 #visible conformational change NOT confined to a (low confidence, i.e predicted disordered) linker/loop/tail  
 
-
-
-
-for ML dataset:
-take each openfold prediction
-determine which pdb is further
-remove disrodered residues
-and make sure the protein has same number of residues as other pdb
-so chop off any terminal residues

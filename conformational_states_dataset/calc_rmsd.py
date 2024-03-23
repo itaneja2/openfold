@@ -20,39 +20,10 @@ import numpy as np
 
 sys.path.insert(0, '../')
 
-from pdb_utils.pdb_utils import save_pdb_chain, get_model_name, get_pymol_cmd_superimpose, get_pymol_cmd_save, clean_pdb
+from pdb_utils.pdb_utils import save_pdb_chain, get_model_name, get_pymol_cmd_superimpose, get_pymol_cmd_save, clean_pdb, align_and_get_rmsd
 
 
-############################3
-
-
-def align_and_get_rmsd(pdb1_path, pdb2_path, pdb1_chain=None, pdb2_chain=None):
-
-    pdb1_model_name = get_model_name(pdb1_path)
-    pdb2_model_name = get_model_name(pdb2_path)
-    
-    cmd.reinitialize()
-    cmd.load(pdb1_path)
-    cmd.load(pdb2_path)
-
-    s1 = get_pymol_cmd_superimpose(pdb1_model_name, pdb1_chain)
-    s2 = get_pymol_cmd_superimpose(pdb2_model_name, pdb2_chain)
-
-    #print('super %s,%s' % (s2,s1))
-
-    out = cmd.super(s2,s1) #this superimposes s2 onto s1
-    rmsd = out[0]*10 #convert to angstrom
-    #print('RMSD: %.3f' % rmsd)
-
-    if rmsd < 0:
-        print("RMSD < 0")
-        rmsd = 0 
-
-    s2 = get_pymol_cmd_save(pdb2_model_name)
-    cmd.save(pdb2_path, s2)
-    cmd.delete('all')
-
-    return rmsd 
+############################
 
 
 def fetch_pdb(pdb_id: str, save_dir: str, clean=False) -> str:
@@ -90,7 +61,7 @@ def fetch_pdb(pdb_id: str, save_dir: str, clean=False) -> str:
 
 
 
-def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, save_dir: str, parallel=False):
+def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, save_dir: str):
 
     """
     Args:

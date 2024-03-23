@@ -32,7 +32,7 @@ try:
     from openmm import app as openmm_app
     from openmm.app.internal.pdbstructure import PdbStructure 
     from openmm.app import PDBFile
-    from openmm.app import Modeller 
+    from openmm.app import Modeller
 except ImportError:
     import simtk.openmm
     from simtk.openmm import unit
@@ -561,6 +561,77 @@ def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, p
     return rmsd, pdb1_path, pdb2_path
 
 
+def get_flanking_residues_idx(seq1: str, seq2: str):
+    """
+    seq1: MSDE
+    seq2: -SD-
+    return: seq1: [], seq2: [0,3]
+    """ 
+
+    def get_nterm_flanking(seq_aligned):
+        nterm_idx = [] 
+        i = 0 
+        while i < len(seq_aligned):
+            if seq_aligned[i] == '-':
+                nterm_idx.append(i)
+                i += 1
+            else:
+                break  
+        return nterm_idx
+    def get_cterm_flanking(seq1_aligned, seq2_aligned):
+        cterm_idx = [] 
+        i = len(seq1_aligned) 
+        while i > 0:
+            if seq1_aligned[i-1] == '-':
+                num_gaps = seq2_aligned[0:(i-1)].count('-') #need to use seq2 for number of gaps to get correct idx 
+                cterm_idx.append(i-1-num_gaps)
+                i -= 1
+            else: 
+                break
+        return cterm_idx
+
+    alignments = pairwise2.align.globalxx(seq1, seq2)
+
+    seq1_aligned = alignments[0].seqA
+    seq2_aligned = alignments[0].seqB
+
+    flanking_residues_dict = {} 
+    #if seq1 has a gap, then the corresponding residue in seq2 can be 
+    #considered flanking (and vice-versa) 
+    flanking_residues_dict['seq2_nterm'] = get_nterm_flanking(seq1_aligned)
+    flanking_residues_dict['seq2_cterm'] = get_cterm_flanking(seq1_aligned, seq2_aligned)
+    flanking_residues_dict['seq1_nterm'] = get_nterm_flanking(seq2_aligned)
+    flanking_residues_dict['seq1_cterm'] = get_cterm_flanking(seq2_aligned, seq1_aligned)
+
+    return flanking_residues_dict
+
+
+def get_residues_idx_in_seq2_not_seq1(seq1: str, seq2: str):
+    """
+    seq1: MS-E-
+    seq2: MSDER
+    return: [2,4]
+    """ 
+
+    alignments = pairwise2.align.globalxx(seq1, seq2)
+    #print('Aligned seq1 with seq2:')
+    #print(format_alignment(*alignments[0]))
+
+    seq1_aligned = alignments[0].seqA
+    seq2_aligned = alignments[0].seqB
+
+    residues_idx = [] 
+    for i in range(0,len(seq1_aligned)):
+        if seq1_aligned[i] == '-' and seq2_aligned[i] != '-':
+            num_gaps = seq2_aligned[0:i].count('-')
+            residues_idx.append(i-num_gaps)
+
+    #print(residues_idx)
+    #for r in residues_idx:
+    #    print(seq2[r])
+    return residues_idx
+   
+
 def get_af_disordered_residues(pdb_path: str):
     """pdb_path assumes AF structure"""
     #plddt_threshold sourced from https://onlinelibrary.wiley.com/doi/10.1002/pro.4466
@@ -582,7 +653,8 @@ def get_af_disordered_residues(pdb_path: str):
                 while af_disordered[end_idx]:
                     end_idx += 1
                     if end_idx >= len(af_disordered):
-                        break  
+                        break 
+            #by postcondition: af_disordered[end_idx] = False   
             seg_len = end_idx-start_idx
             if seg_len >= 3:
                 af_disordered_domains_idx.append([start_idx, end_idx-1])
@@ -597,7 +669,7 @@ def get_af_disordered_residues(pdb_path: str):
     return af_disordered_domains_idx, af_disordered_domains_seq
     
 
-def get_pdb_disordered_residues_idx(af_seq: str, pdb_seq: str, af_disordered_idx: List[List[int]], af_disordered_seq: List[str]):
+def get_pdb_disordered_residues_idx(af_seq: str, pdb_seq: str, af_disordered_domains_idx: List[List[int]]):
 
     alignments = pairwise2.align.globalxx(af_seq, pdb_seq)
     print('Aligned AF seq with PDB seq:')
@@ -606,10 +678,10 @@ def get_pdb_disordered_residues_idx(af_seq: str, pdb_seq: str, af_disordered_idx
     pdb_seq_aligned = alignments[0].seqB
 
     pdb_disordered_idx = [] 
+    pdb_disordered_seq = [] 
 
-    for i in range(0,len(af_disordered_idx)):
-        d = af_disordered_idx[i]
-        s = af_disordered_seq[i]
+    for i in range(0,len(af_disordered_domains_idx)):
+        d = af_disordered_domains_idx[i]
         start_idx = d[0]
         end_idx = d[1]
         for j in range(start_idx, end_idx+1):
@@ -617,59 +689,25 @@ def get_pdb_disordered_residues_idx(af_seq: str, pdb_seq: str, af_disordered_idx
                 num_gaps = pdb_seq_aligned[0:j].count('-')
                 pdb_seq_idx = j-num_gaps
                 pdb_disordered_idx.append(pdb_seq_idx)
+                pdb_disordered_seq.append(pdb_seq[pdb_seq_idx])
 
-    #remove disordered residues that are not contiguous (i.e there is no disordered residue before or after it)
-    pdb_disordered_idx_cleaned = [] 
-    for i in range(0,len(pdb_disordered_idx)):
-        if i == 0: 
-            if (pdb_disordered_idx[i+1]-1) == pdb_disordered_idx[i]:
-                pdb_disordered_idx_cleaned.append(pdb_disordered_idx[i])
-        elif i == len(pdb_disordered_idx)-1:
-            if (pdb_disordered_idx[i-1]+1) == pdb_disordered_idx[i]:
-                pdb_disordered_idx_cleaned.append(pdb_disordered_idx[i])
-        else:
-            if (pdb_disordered_idx[i-1]+1) == pdb_disordered_idx[i]:
-                pdb_disordered_idx_cleaned.append(pdb_disordered_idx[i])
-            elif (pdb_disordered_idx[i+1]-1) == pdb_disordered_idx[i]:
-                pdb_disordered_idx_cleaned.append(pdb_disordered_idx[i])
+    return pdb_disordered_idx, pdb_disordered_seq 
+   
 
-    print(pdb_disordered_idx_cleaned) 
-    return(pdb_disordered_idx_cleaned)        
-    
-    
-'''
-     
-uniprot_id = 'P29253'
-#pdb_path = '../conformational_states_dataset/predictions/A0A0H3C8Q1/rw/module_config_0/initial_pred/initial_pred_unrelaxed.pdb'
-save_dir = './pdb_temp'
-pdb_path, _, _ = fetch_af_pdb(uniprot_id, save_dir)
-af_seq = get_pdb_path_seq(pdb_path, None)
-idx, af_disordered_seq = get_af_disordered_residues(pdb_path) 
-print(idx)
-print(af_disordered_seq)
-pdb_path = '../conformational_states_dataset/pdb_structures/pdb_ref_structure/2rpi_A.pdb'
-pdb_seq = get_pdb_path_seq(pdb_path, None)
-get_pdb_disordered_residues_idx(af_seq, pdb_seq, idx, af_disordered_seq)
-sdf
+def delete_residues(pdb_input_path: str, pdb_output_path: str, residues_delete_idx: List[int]):
 
+    pdb = PDBFile(pdb_input_path)
+    modeller = Modeller(pdb.topology, pdb.positions)
 
+    residues_delete = [] 
+    for residue in modeller.topology.residues(): 
+        if residue.index in residues_delete_idx:
+            residues_delete.append(residue)
+            print('deleting:')
+            print(residue)
 
-pdb = PDBFile(pdb_path)
-modeller = Modeller(pdb.topology, pdb.positions)
+    modeller.delete(residues_delete) 
+    with open(pdb_output_path, 'w') as f:
+        PDBFile.writeFile(modeller.topology, modeller.positions, f)
 
-for residue in modeller.topology.residues():
-    print(residue)
-
-
-pdb_path = '../conformational_states_dataset/predictions/A0A0H3C8Q1/rw/module_config_0/initial_pred/initial_pred_unrelaxed.pdb'
-#uniprot_id = 'D0G6S1'
-#save_dir = './pdb_temp' 
-#pdb_path, _, _ = fetch_af_pdb(uniprot_id, save_dir)
-#get_disordered_residues(pdb_path)
-
-pdb = PDBFile(pdb_path)
-modeller = Modeller(pdb.topology, pdb.positions)
-
-for residue in modeller.topology.residues():
-    print(residue)
-'''
+ 
