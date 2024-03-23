@@ -96,6 +96,7 @@ def model_config(
             config.use_conformation_module = True
             c.loss.distogram.weight = 0.0
             c.loss.masked_msa.weight = 0.0
+            c.loss.supervised_chi.weight = 0.0
         else:
             config.use_conformation_module = False 
 

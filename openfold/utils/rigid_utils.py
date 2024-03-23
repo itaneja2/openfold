@@ -1028,24 +1028,6 @@ class Rigid:
 
         return Rigid(new_rots, new_translation)
 
-    def compose_t_update_vec(self, 
-        t_update_vec: torch.Tensor,
-    ) -> Rigid:
-        """
-            Composes the transformation with a translation update vector of
-            shape [*, 3]
-
-            Args:
-                t_vec: The translation update vector.
-            Returns:
-                The composed transformation.
-        """
-        trans_update = self._rots.apply(t_update_vec)
-        new_translation = self._trans + trans_update
-
-        return Rigid(self._rots, new_translation)
-
-
     def compose(self,
         r: Rigid,
     ) -> Rigid:

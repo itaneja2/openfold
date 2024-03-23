@@ -1382,7 +1382,7 @@ class ConformationModule(nn.Module):
         if self.is_multimer:
             self.bb_update = QuatRigid(self.c_s, full_quat=False)
         else:
-            self.bb_update = BackboneUpdate(self.c_s, 3) #only predicting c_alpha 
+            self.bb_update = BackboneUpdate(self.c_s) 
 
         self.angle_resnet = AngleResnet(
             self.c_s,
@@ -1457,7 +1457,7 @@ class ConformationModule(nn.Module):
             s = self.transition(s)
            
             # [*, N]
-            rigids = rigids.compose_t_update_vec(self.bb_update(s))
+            rigids = rigids.compose_q_update_vec(self.bb_update(s))
 
             # To hew as closely as possible to AlphaFold, we convert our
             # quaternion-based transformations to rotation-matrix ones
