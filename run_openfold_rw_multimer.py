@@ -181,7 +181,8 @@ def update_config(
     num_chains: int, 
     args: argparse.Namespace,
 ):
-    """Updates the config dictionary by adding the appropriate chain masks. 
+    """Updates the config dictionary by adding the appropriate chain masks 
+       and updating the appropriate recycling parameters. 
     """
 
     if args.recycle_wo_early_stopping:
@@ -191,7 +192,7 @@ def update_config(
     else:
         num_recycles_str = 'early_stopping'
 
-    if 'chainmask' in config.custom_fine_tuning.ft_method:
+    if config.use_chainmask:
         total_seq_len = sum(len(s) for s in seqs)
         mask_all = [] 
         chain_mask_row_all = []
@@ -811,13 +812,11 @@ def run_rw_pipeline(args):
     config_dict = {}
     for m in models_to_run:
         if use_chainmask:
-            config_name = 'multimer-custom_finetuning-SAID_chainmask-all-%s' % m #model with fine tuning layer 
+            config_name = 'multimer-chainmask-%s' % m #model with chainmask  
         else:
-            config_name = 'multimer-custom_finetuning-SAID-all-%s' % m #model with fine tuning layer  
-
+            config_name = 'multimer-%s' % m #model without chainmask 
         config = model_config(config_name, long_sequence_inference=args.long_sequence_inference)
         config = update_config(config, seqs, num_chains, args)
-
         if m not in config_dict:
             config_dict[m] = config
             if(args.trace_model):
@@ -829,7 +828,6 @@ def run_rw_pipeline(args):
     feature_processor = feature_pipeline.FeaturePipeline(config_dict[list(config_dict.keys())[0]].data)
     intrinsic_param_zero = np.zeros(intrinsic_dim)
  
-    
     #####################################################
     logger.info(asterisk_line)
     initial_pred_dir = '%s/initial_pred' %  l1_output_dir
@@ -863,10 +861,13 @@ def run_rw_pipeline(args):
         logger.info('BEGINNING INITIAL PRED PHASE:') 
         t0 = time.perf_counter()
 
-        #this uses the standard inference configuration with dropout for the initial prediction  
+        #this uses the standard inference configuration with dropout for the initial prediction 
         model_dict = {} 
-        for m in models_to_run: 
-            model = load_model_w_intrinsic_param(config_dict[m], module_config_data, args.model_device, None, jax_param_path_dict[m], intrinsic_param_zero, enable_dropout=True)
+        for m in models_to_run:
+            config_name = 'multimer-%s' % m #model without chainmask 
+            config = model_config(config_name, long_sequence_inference=args.long_sequence_inference)
+            config = update_config(config, seqs, num_chains, args) 
+            model = load_model_w_intrinsic_param(config, module_config_data, args.model_device, None, jax_param_path_dict[m], intrinsic_param_zero, enable_dropout=True)
             if m not in model_dict:
                 model_dict[m] = model
 
@@ -886,7 +887,7 @@ def run_rw_pipeline(args):
             initial_pred_output_dir = '%s/%s' %  (initial_pred_dir, model_name)
             tag = 'initial_pred_model_%d' % (i+1)
             logger.info('RUNNING %s' % model_name)
-            mean_plddt_initial, weighted_ptm_score_initial,  disordered_percentage_initial, _, _, _, pdb_path_initial = eval_model(model_dict[model_name], config_dict[model_name], intrinsic_param_zero, intrinsic_param_zero, [0]*num_chains, feature_processor, feature_dict, processed_feature_dict, tag, initial_pred_output_dir, 'initial', args)   
+            mean_plddt_initial, weighted_ptm_score_initial,  disordered_percentage_initial, _, _, _, pdb_path_initial = eval_model(model_dict[model_name], config, intrinsic_param_zero, intrinsic_param_zero, [0]*num_chains, feature_processor, feature_dict, processed_feature_dict, tag, initial_pred_output_dir, 'initial', args)   
             logger.info('pLDDT: %.3f, IPTM_PTM SCORE: %.3f, disordered percentage: %.3f' % (mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial)) 
             conformation_info_dict[model_name] = (pdb_path_initial, mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial) 
             initial_pred_path_dict[model_name] = pdb_path_initial 
@@ -911,7 +912,7 @@ def run_rw_pipeline(args):
     #####################################################
     logger.info(asterisk_line)
 
-    #this uses the standard inference configuration without dropout (unless specified otherwise by user) 
+    #this uses an inference configuration with or without the chainmask (as specified by user) and without dropout (unless specified otherwise by user) 
     model_dict = {} 
     for m in models_to_run: 
         model = load_model_w_intrinsic_param(config_dict[m], module_config_data, args.model_device, None, jax_param_path_dict[m], intrinsic_param_zero, enable_dropout=args.enable_dropout)

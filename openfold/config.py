@@ -65,6 +65,9 @@ def model_config(
     long_sequence_inference=False
 ):
     c = copy.deepcopy(config)
+    c.use_chainmask = False
+    c.use_conformation_module = False 
+
     # TRAINING PRESETS
     if name == "initial_training":
         # AF2 Suppl. Table 4, "initial training" setting
@@ -93,12 +96,10 @@ def model_config(
         c.loss.fape.backbone.loss_unit_distance = 3.5 
 
         if 'conformation_module' in ft_method:
-            config.use_conformation_module = True
+            c.use_conformation_module = True
             c.loss.distogram.weight = 0.0
             c.loss.masked_msa.weight = 0.0
             c.loss.supervised_chi.weight = 0.0
-        else:
-            config.use_conformation_module = False 
 
     elif name == "finetuning":
         # AF2 Suppl. Table 4, "finetuning" setting
@@ -229,8 +230,6 @@ def model_config(
 
         if 'chainmask' in name:
             c.use_chainmask = True
-        else:
-            c.use_chainmask = False
 
         if 'custom_finetuning' in name:
             if len(name.split('-')) != 5:

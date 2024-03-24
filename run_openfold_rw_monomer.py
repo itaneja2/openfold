@@ -15,6 +15,7 @@ import itertools
 import time 
 import ml_collections as mlc
 from typing import Tuple, List, Mapping, Optional, Sequence, Any, MutableMapping, Union
+import contextlib 
 
 from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein

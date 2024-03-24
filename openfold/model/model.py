@@ -38,7 +38,7 @@ from openfold.model.embedders import (
 from openfold.model.evoformer import EvoformerStack, ExtraMSAStack
 from openfold.model.evoformer_chainmask import EvoformerStackChainMask, ExtraMSAStackChainMask
 from openfold.model.heads import AuxiliaryHeads
-from openfold.model.structure_module import StructureModule, ConformationModule
+from openfold.model.structure_module import StructureModule
 from openfold.model.template import (
     TemplatePairStack,
     TemplatePointwiseAttention,
@@ -139,12 +139,14 @@ class AlphaFold(nn.Module):
 
         self.structure_module = StructureModule(
             is_multimer=self.globals.is_multimer,
+            conformation_pred=False,
             **self.config["structure_module"],
         )
 
         if config.use_conformation_module:
-            self.conformation_module = ConformationModule(
+            self.conformation_module = StructureModule(
                 is_multimer=self.globals.is_multimer,
+                conformation_pred=True
                 **self.config["structure_module"],
         )
 
@@ -467,16 +469,6 @@ class AlphaFold(nn.Module):
             _offload_inference=self.globals.offload_inference,
         )
 
-        if self.config.use_conformation_module:
-            outputs["sm"] = self.conformation_module(
-                outputs,
-                feats["aatype"],
-                mask=feats["seq_mask"].to(dtype=s.dtype),
-                inplace_safe=inplace_safe,
-                _offload_inference=self.globals.offload_inference,
-            )
-            
-
         outputs["final_atom_positions"] = atom14_to_atom37(
             outputs["sm"]["positions"][-1], feats
         )
@@ -609,6 +601,21 @@ class AlphaFold(nn.Module):
                     del m_1_prev, z_prev, x_prev
                 else:
                     break
+
+        if self.config.use_conformation_module:
+            outputs["sm"] = self.conformation_module(
+                outputs,
+                feats["aatype"],
+                mask=feats["seq_mask"].to(dtype=s.dtype),
+                inplace_safe=not(self.training or torch.is_grad_enabled()),
+                _offload_inference=self.globals.offload_inference,
+            )
+            
+        outputs["final_atom_positions"] = atom14_to_atom37(
+            outputs["sm"]["positions"][-1], feats
+        )
+        outputs["final_atom_mask"] = feats["atom37_atom_exists"]
+        outputs["final_affine_tensor"] = outputs["sm"]["frames"][-1]
 
         outputs["num_recycles"] = torch.tensor(num_recycles, device=feats["aatype"].device)
 
