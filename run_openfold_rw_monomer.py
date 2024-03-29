@@ -156,11 +156,11 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
     else:
         if accept_conformation:
             output_name = '%s-A' % tag  
-            model_output_dir = '%s/ACCEPTED' % (output_dir)
+            model_output_dir = '%s/ACCEPTED' % output_dir
             os.makedirs(model_output_dir, exist_ok=True)
         else:
             output_name = '%s-R' % tag 
-            model_output_dir = '%s/REJECTED' % (output_dir) 
+            model_output_dir = '%s/REJECTED' % output_dir 
             os.makedirs(model_output_dir, exist_ok=True) 
 
     unrelaxed_file_suffix = "_unrelaxed.pdb"
@@ -183,6 +183,28 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
         logger.info(f"Running relaxation on {unrelaxed_output_path}...")
         relax_protein(config, args.model_device, unrelaxed_protein, model_output_dir, output_name,
                       args.cif_output)
+
+    if args.save_outputs and accept_conformation:
+        embeddings_output_dir = '%s/embeddings' % model_output_dir
+        os.makedirs(embeddings_output_dir, exist_ok=True)
+
+        output_dict_path = os.path.join(
+            embeddings_output_dir, f'{output_name}_output_dict.pkl'
+        )
+        with open(output_dict_path, "wb") as fp:
+            pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
+        logger.info(f"Model embeddings written to {output_dict_path}...")
+
+    if args.save_structure_module_intermediates and accept_conformation:
+        sm_intermediates_output_dir = '%s/structure_module_intermediates' % model_output_dir
+        os.makedirs(sm_intermediates_output_dir, exist_ok=True)
+
+        sm_output_dict_path = os.path.join(
+            sm_intermediates_output_dir, f'{output_name}_sm_output_dict.pkl'
+        )
+        with open(output_dict_path, "wb") as fp:
+            pickle.dump(out["sm"], fp, protocol=pickle.HIGHEST_PROTOCOL)
+        logger.info(f"Structure module intermediates written to {output_dict_path}...")
 
 
     return mean_plddt, disordered_percentage, inference_time, accept_conformation, unrelaxed_output_path 
@@ -735,7 +757,7 @@ def run_rw_pipeline(args):
     os.makedirs(args.output_dir_base, exist_ok=True)
     output_dir_name = args.output_dir_base.split('/')[-1]
 
-    config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference)
+    config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference, save_structure_module_intermediates=args.save_structure_module_intermediates)
 
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
@@ -800,8 +822,12 @@ def run_rw_pipeline(args):
     rw_hp_config_data = rw_config_data['hyperparameter']['rw'][args.rw_hp_config]
     train_hp_config_data = rw_config_data['hyperparameter']['train'][args.train_hp_config]
     intrinsic_dim = module_config_data['intrinsic_dim']
- 
-    pattern = "%s/features.pkl" % alignment_dir_w_file_id
+
+    if not(args.custom_template_pdb_id): 
+        pattern = "%s/features.pkl" % alignment_dir_w_file_id
+    else:   
+        template_pdb_id, template_chain_id = args.custom_template_pdb_id.split('_')
+        pattern = "%s/features_template=%s.pkl" % (alignment_dir_w_file_id, template_pdb_id)
     files = glob.glob(pattern, recursive=True)
     if len(files) == 1:
         features_output_path = files[0]
@@ -824,9 +850,10 @@ def run_rw_pipeline(args):
             template_featurizer=template_featurizer,
         )
         feature_dict = data_processor.process_fasta(
-            fasta_path=fasta_file, alignment_dir=alignment_dir_w_file_id
+            fasta_path=fasta_file, alignment_dir=alignment_dir_w_file_id, custom_template_pdb_id=args.custom_template_pdb_id
         )
-        features_output_path = os.path.join(alignment_dir_w_file_id, 'features.pkl')
+        template_pdb_id, template_chain_id = args.custom_template_pdb_id.split('_')
+        features_output_path = os.path.join(alignment_dir_w_file_id, 'features_template=%s.pkl' % template_pdb_id)
         with open(features_output_path, 'wb') as f:
             pickle.dump(feature_dict, f, protocol=4)
         logger.info('SAVED %s' % features_output_path)
@@ -1161,6 +1188,11 @@ if __name__ == "__main__":
         help="Directory containing mmCIF files to search for templates"
     )
     parser.add_argument(
+        "--custom_template_pdb_id", type=str, default=None, 
+        help="""String of the format PDB-ID_CHAIN-ID (e.g 4ake_A). If provided,
+              this structure is used as the only template."""
+    )
+    parser.add_argument(
         "--alignment_dir", type=str, required=True,
         help="""Path to alignment directory. If provided, alignment computation 
                 is skipped and database path arguments are ignored."""
@@ -1170,7 +1202,6 @@ if __name__ == "__main__":
         help="""Path to alignment directory. If provided, alignment computation 
                 is skipped and database path arguments are ignored."""
     )
-
     parser.add_argument(
         "--output_dir_base", type=str, default=os.getcwd(),
         help="""Name of the directory in which to output the prediction""",
@@ -1223,6 +1254,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_outputs", action="store_true", default=False,
         help="Whether to save all model outputs, including embeddings, etc."
+    )
+    parser.add_argument(
+        "--save_structure_module_intermediates", action="store_true", default=False,
+        help="Whether to save s (i.e first row of MSA) and backbone frames representation"
     )
     parser.add_argument(
         "--cpus", type=int, default=4,

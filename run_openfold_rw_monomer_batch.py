@@ -83,7 +83,7 @@ TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
 
 
-def gen_args(alignment_dir, output_dir_base, seed):
+def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -93,6 +93,11 @@ def gen_args(alignment_dir, output_dir_base, seed):
     parser.add_argument(
         "--template_mmcif_dir", type=str, 
         help="Directory containing mmCIF files to search for templates"
+    )
+    parser.add_argument(
+        "--custom_template_pdb_id", type=str, default=None,
+        help="""String of the format PDB-ID_CHAIN-ID (e.g 4ake_A). If provided,
+              this structure is used as the only template."""
     )
     parser.add_argument(
         "--alignment_dir", type=str, default=None,
@@ -157,6 +162,10 @@ def gen_args(alignment_dir, output_dir_base, seed):
     parser.add_argument(
         "--save_outputs", action="store_true", default=False,
         help="Whether to save all model outputs, including embeddings, etc."
+    )
+    parser.add_argument(
+        "--save_structure_module_intermediates", action="store_true", default=False,
+        help="Whether to save s (i.e first row of MSA) and backbone frames representation"
     )
     parser.add_argument(
         "--cpus", type=int, default=4,
@@ -253,12 +262,14 @@ def gen_args(alignment_dir, output_dir_base, seed):
     args = parser.parse_args()
 
     args.template_mmcif_dir = '/dev/shm/pdb_mmcif/mmcif_files'
+    args.custom_template_pdb_id = template_pdb_id 
     args.alignment_dir = alignment_dir
     args.output_dir_base = output_dir_base 
+    args.save_structure_module_intermediates = True
     args.config_preset = 'model_1_ptm'
     args.openfold_checkpoint_path = '/opt/databases/openfold/openfold_params/finetuning_ptm_2.pt'
     args.module_config = 'module_config_0'
-    args.rw_hp_config = 'hp_config_0-0'
+    args.rw_hp_config = 'hp_config_0'
     args.skip_relaxation = True
     args.model_device = 'cuda:0'
     args.bootstrap_phase_only = True
@@ -280,9 +291,9 @@ def gen_args(alignment_dir, output_dir_base, seed):
 
 
 
-def run_rw_all():
+def run_rw_all_custom_template():
  
-    conformational_states_df = pd.read_csv('./conformational_states_dataset/data/conformational_states_filtered_adjudicated.csv')
+    conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
     conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
 
     for index,row in conformational_states_df.iterrows():
@@ -292,12 +303,52 @@ def run_rw_all():
      
         uniprot_id = str(row['uniprot_id'])
         pdb_id_ref = str(row['pdb_id_ref'])
+        pdb_id_state_i = str(row['pdb_id_state_i'])
         seg_len = int(row['seg_len'])
 
-        alignment_dir = './conformational_states_dataset/alignment_data/%s' % uniprot_id
-        output_dir_base = './conformational_states_dataset/predictions/%s' % uniprot_id 
+        alignment_dir = './conformational_states_training_data/alignment_data/%s' % uniprot_id
 
-        args = gen_args(alignment_dir, output_dir_base, index)
+        for template_pdb_id in [pdb_id_ref, pdb_id_state_i]:
+            template_str = 'template=%s' % template_pdb_id
+            output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
+            args = gen_args(template_pdb_id, alignment_dir, output_dir_base, index)
+            output_dir = '%s/%s/%s/rw-%s' % (output_dir_base, 'rw', args.module_config, args.rw_hp_config)
+            l1_output_dir = '%s/%s/%s' % (output_dir_base, 'rw', args.module_config)
+            initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir
+            bootstrap_output_dir = '%s/bootstrap' % output_dir
+
+            conformation_info_fname = '%s/conformation_info.pkl' % bootstrap_output_dir
+            pdb_path_initial = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir  
+
+            if os.path.exists(conformation_info_fname) and os.path.exists(pdb_path_initial):
+                logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir)
+                continue 
+            else:
+                logger.info("RUNNING %s" % output_dir)
+            
+            run_rw_pipeline(args)
+
+
+def run_rw_all_standard_template():
+ 
+    conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
+    conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
+
+    for index,row in conformational_states_df.iterrows():
+
+        logger.info('On row %d of %d' % (index, len(conformational_states_df)))   
+        print(row)
+     
+        uniprot_id = str(row['uniprot_id'])
+        pdb_id_ref = str(row['pdb_id_ref'])
+        pdb_id_state_i = str(row['pdb_id_state_i'])
+        seg_len = int(row['seg_len'])
+        
+        template_pdb_id = None
+        alignment_dir = './conformational_states_training_data/alignment_data/%s' % uniprot_id
+
+        output_dir_base = './conformational_states_training_data/rw_predictions/%s' % uniprot_id 
+        args = gen_args(template_pdb_id, alignment_dir, output_dir_base, index)
         output_dir = '%s/%s/%s/rw-%s' % (output_dir_base, 'rw', args.module_config, args.rw_hp_config)
         l1_output_dir = '%s/%s/%s' % (output_dir_base, 'rw', args.module_config)
         initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir
@@ -307,10 +358,13 @@ def run_rw_all():
         pdb_path_initial = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir  
 
         if os.path.exists(conformation_info_fname) and os.path.exists(pdb_path_initial):
-            logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % uniprot_id)
+            logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir)
             continue 
-            
+        else:
+            logger.info("RUNNING %s" % output_dir)
+        
         run_rw_pipeline(args)
 
 
-run_rw_all() 
+
+run_rw_all_custom_template() 

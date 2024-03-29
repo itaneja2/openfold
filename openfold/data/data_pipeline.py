@@ -24,7 +24,7 @@ from typing import Mapping, Optional, Sequence, Any, MutableMapping, Union
 import numpy as np
 import torch
 from openfold.data import templates, parsers, mmcif_parsing, msa_identifiers, msa_pairing, feature_processing_multimer
-from openfold.data.templates import get_custom_template_features, empty_template_feats
+from openfold.data.templates import get_custom_template_features, empty_template_feats, fetch_mmcif
 from openfold.data.tools import jackhmmer, hhblits, hhsearch, hmmsearch
 from openfold.np import residue_constants, protein
 
@@ -32,20 +32,36 @@ FeatureDict = MutableMapping[str, np.ndarray]
 TemplateSearcher = Union[hhsearch.HHSearch, hmmsearch.Hmmsearch]
 
 
+
 def make_template_features(
     input_sequence: str,
     hits: Sequence[Any],
     template_featurizer: Any,
+    custom_template_pdb_id: str = None
 ) -> FeatureDict:
-    hits_cat = sum(hits.values(), [])
-    if(len(hits_cat) == 0 or template_featurizer is None):
-        template_features = empty_template_feats(len(input_sequence))
-    else:
-        templates_result = template_featurizer.get_templates(
+
+    if custom_template_pdb_id:
+        pdb_id, chain_id = custom_template_pdb_id.split('_')
+        mmcif_path = os.path.join(getattr(template_featurizer,'_mmcif_dir'), '%s.cif' % pdb_id)
+        if not(os.path.exists(mmcif_path)):
+            mmcif_path = fetch_mmcif(pdb_id, './template_mmcif_files')      
+        template_features = get_custom_template_features(
+            mmcif_path=mmcif_path,
             query_sequence=input_sequence,
-            hits=hits_cat,
+            pdb_id=pdb_id,
+            chain_id=chain_id,
+            kalign_binary_path=getattr(template_featurizer,'_kalign_binary_path')
         )
-        template_features = templates_result.features
+    else:
+        hits_cat = sum(hits.values(), [])
+        if(len(hits_cat) == 0 or template_featurizer is None):
+            template_features = empty_template_feats(len(input_sequence))
+        else:
+            templates_result = template_featurizer.get_templates(
+                query_sequence=input_sequence,
+                hits=hits_cat,
+            )
+            template_features = templates_result.features
 
     return template_features
 
@@ -876,6 +892,7 @@ class DataPipeline:
         alignment_dir: str,
         alignment_index: Optional[Any] = None,
         seqemb_mode: bool = False,
+        custom_template_pdb_id: str = None
     ) -> FeatureDict:
         """Assembles features for a single sequence in a FASTA file"""
         with open(fasta_path) as f:
@@ -889,16 +906,20 @@ class DataPipeline:
         input_description = input_descs[0]
         num_res = len(input_sequence)
 
-        hits = self._parse_template_hit_files(
-            alignment_dir=alignment_dir,
-            input_sequence=input_sequence,
-            alignment_index=alignment_index,
-        )
+        if custom_template_pdb_id is None:
+            hits = self._parse_template_hit_files(
+                alignment_dir=alignment_dir,
+                input_sequence=input_sequence,
+                alignment_index=alignment_index,
+            )
+        else:
+            hits = None 
 
         template_features = make_template_features(
             input_sequence,
             hits,
             self.template_featurizer,
+            custom_template_pdb_id,
         )
 
         sequence_features = make_sequence_features(
@@ -931,6 +952,7 @@ class DataPipeline:
         alignment_index: Optional[Any] = None,
         seqemb_mode: bool = False,
         fasta_feature_dict: FeatureDict = None,
+        custom_template_pdb_id: str = None,
     ) -> FeatureDict:
         """
             Assembles features for a specific chain in an mmCIF object.
@@ -951,15 +973,20 @@ class DataPipeline:
             return {**mmcif_feats, **fasta_feature_dict}
         
         input_sequence = mmcif.chain_to_seqres[chain_id]
-        hits = self._parse_template_hit_files(
-            alignment_dir=alignment_dir,
-            input_sequence=input_sequence,
-            alignment_index=alignment_index)
+
+        if custom_template_pdb_id is None:
+            hits = self._parse_template_hit_files(
+                alignment_dir=alignment_dir,
+                input_sequence=input_sequence,
+                alignment_index=alignment_index)
+        else:
+            hits = None 
 
         template_features = make_template_features(
             input_sequence,
             hits,
-            self.template_featurizer
+            self.template_featurizer,
+            custom_template_pdb_id
         )
 
         sequence_embedding_features = {}
@@ -982,7 +1009,8 @@ class DataPipeline:
         _structure_index: Optional[str] = None,
         alignment_index: Optional[Any] = None,
         seqemb_mode: bool = False,
-        fasta_feature_dict: FeatureDict = None, 
+        fasta_feature_dict: FeatureDict = None,
+        custom_template_pdb_id: str = None 
     ) -> FeatureDict:
         """
             Assembles features for a protein in a PDB file.
@@ -1011,17 +1039,21 @@ class DataPipeline:
     
         if fasta_feature_dict is not None:
             return {**pdb_feats, **fasta_feature_dict}
-
-        hits = self._parse_template_hit_files(
-            alignment_dir=alignment_dir,
-            input_sequence=input_sequence,
-            alignment_index=alignment_index,
-        )
+        
+        if custom_template_pdb_id is None:
+            hits = self._parse_template_hit_files(
+                alignment_dir=alignment_dir,
+                input_sequence=input_sequence,
+                alignment_index=alignment_index,
+            )
+        else:
+            hits = None 
 
         template_features = make_template_features(
             input_sequence,
             hits,
             self.template_featurizer,
+            custom_template_pdb_id
         )
 
         sequence_embedding_features = {}
@@ -1040,6 +1072,7 @@ class DataPipeline:
         alignment_dir: str,
         alignment_index: Optional[Any] = None,
         seqemb_mode: bool = False,
+        custom_template_pdb_id: str = None
     ) -> FeatureDict:
         """
             Assembles features for a protein in a ProteinNet .core file.
@@ -1051,17 +1084,21 @@ class DataPipeline:
         input_sequence = _aatype_to_str_sequence(protein_object.aatype)
         description = os.path.splitext(os.path.basename(core_path))[0].upper()
         core_feats = make_protein_features(protein_object, description)
-
-        hits = self._parse_template_hit_files(
-            alignment_dir=alignment_dir,
-            input_sequence=input_sequence,
-            alignment_index=alignment_index,
-        )
+    
+        if custom_template_pdb_id is None:
+            hits = self._parse_template_hit_files(
+                alignment_dir=alignment_dir,
+                input_sequence=input_sequence,
+                alignment_index=alignment_index,
+            )
+        else:
+            hits = None
 
         template_features = make_template_features(
             input_sequence,
             hits,
             self.template_featurizer,
+            custom_template_pdb_id
         )
 
         sequence_embedding_features = {}
@@ -1078,6 +1115,7 @@ class DataPipeline:
                                fasta_path: str,
                                super_alignment_dir: str,
                                ri_gap: int = 200,
+                               custom_template_pdb_id: str = None
                                ) -> FeatureDict:
         """
             Assembles features for a multi-sequence FASTA. Uses Minkyung Baek's
@@ -1158,6 +1196,7 @@ class DataPipeline:
                 seq,
                 hits,
                 self.template_featurizer,
+                custom_template_pdb_id
             )
             template_feature_list.append(template_features)
 

@@ -62,11 +62,12 @@ def model_config(
     name, 
     train=False, 
     low_prec=False, 
-    long_sequence_inference=False
+    long_sequence_inference=False,
+    save_structure_module_intermediates=False
 ):
     c = copy.deepcopy(config)
-    c.use_chainmask = False
-    c.use_conformation_module = False 
+    c.model.use_chainmask = False
+    c.model.use_conformation_module = False 
 
     # TRAINING PRESETS
     if name == "initial_training":
@@ -96,7 +97,7 @@ def model_config(
         c.loss.fape.backbone.loss_unit_distance = 3.5 
 
         if 'conformation_module' in ft_method:
-            c.use_conformation_module = True
+            c.model.use_conformation_module = True
             c.loss.distogram.weight = 0.0
             c.loss.masked_msa.weight = 0.0
             c.loss.supervised_chi.weight = 0.0
@@ -229,7 +230,7 @@ def model_config(
         del c.loss.fape.backbone
 
         if 'chainmask' in name:
-            c.use_chainmask = True
+            c.model.use_chainmask = True
 
         if 'custom_finetuning' in name:
             if len(name.split('-')) != 5:
@@ -688,6 +689,7 @@ config = mlc.ConfigDict(
                 "trans_scale_factor": 10,
                 "epsilon": eps,  # 1e-12,
                 "inf": 1e5,
+                "save_intermediates": save_structure_module_intermediates,
             },
             "heads": {
                 "lddt": {

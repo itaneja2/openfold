@@ -33,7 +33,7 @@ asterisk_line = '*********************************'
 ############################
 
  
-conformational_states_df = pd.read_csv('../conformational_states_dataset/data/conformational_states_filtered_adjudicated.csv')
+conformational_states_df = pd.read_csv('../conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
 conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
 
 uniprot_pdb_dict = {} 
@@ -64,8 +64,8 @@ for index,row in conformational_states_df.iterrows():
     pdb_id_state_i = str(row['pdb_id_state_i'])
     seg_len = int(row['seg_len'])
 
-    alignment_dir = '../conformational_states_dataset/alignment_data/%s' % uniprot_id
-    output_dir_base = '../conformational_states_dataset/predictions/%s' % uniprot_id 
+    alignment_dir = './alignment_data/%s' % uniprot_id
+    output_dir_base = './rw_predictions/%s' % uniprot_id 
 
     module_config = 'module_config_0'
     rw_hp_config = 'hp_config_0-0' 
@@ -137,12 +137,11 @@ for index,row in conformational_states_df.iterrows():
         if len(exclusive_pdb_residues_idx) <= 5:
             pdb_model_name = rel_pdb_path.split('/')[-1]
             pdb_id = pdb_model_name.split('_')[0]
-            pdb_output_dir = './conformation_data/state_%d/%s' % (state_num,uniprot_id)
-            if not(os.path.exists(pdb_output_dir)):
-                os.makedirs(pdb_output_dir, exist_ok=True)
-                pdb_output_path = '%s/%s.pdb' % (pdb_output_dir, pdb_id)
-                print('pdb output path: %s' % pdb_output_path)
-                delete_residues(rel_pdb_path, pdb_output_path, residues_delete_idx)
+            pdb_output_dir = './ground_truth_conformation_data/%s' % uniprot_id
+            os.makedirs(pdb_output_dir, exist_ok=True)
+            pdb_output_path = '%s/%s.pdb' % (pdb_output_dir, pdb_id)
+            print('pdb output path: %s' % pdb_output_path)
+            delete_residues(rel_pdb_path, pdb_output_path, residues_delete_idx)
         else:
             print("SKIPPING this PDB because more than 5 residues exist in PDB but not in AF")
 

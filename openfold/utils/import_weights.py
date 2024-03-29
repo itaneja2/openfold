@@ -852,7 +852,7 @@ def import_jax_weights_(config, model, npz_path, version="model_1"):
   
     chain_mask = False 
     num_chains = None
-    if config.use_chainmask:
+    if config.model.use_chainmask:
         num_chains = config.custom_fine_tuning.num_chains
         os.makedirs('./openfold/chainmask_params/num_chains=%d' % num_chains, exist_ok=True)
         npz_chainmask_path = './openfold/chainmask_params/num_chains=%d/%s' % (num_chains, npz_path.split('/')[-1])
@@ -916,10 +916,19 @@ def import_openfold_weights_(model, state_dict):
     of adding support for Multimer. The state dicts of older models are translated
     to match the refactored model code.
     """
-    print(state_dict)
-    sdf
     try:
-        model.load_state_dict(state_dict, strict=False)
+        model.load_state_dict(state_dict)
     except RuntimeError:
         converted_state_dict = convert_deprecated_v1_keys(state_dict)
-        model.load_state_dict(converted_state_dict, strict=False)
+        model.load_state_dict(converted_state_dict)
+
+
+def import_openfold_weights_modified_architecture_(model, state_dict):
+    """
+    Import model weights. Several parts of the model were refactored in the process
+    of adding support for Multimer. The state dicts of older models are translated
+    to match the refactored model code.
+    """
+    converted_state_dict = convert_deprecated_v1_keys(state_dict)
+    model.load_state_dict(converted_state_dict, strict=False)
+

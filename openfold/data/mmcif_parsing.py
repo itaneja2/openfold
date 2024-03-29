@@ -413,7 +413,6 @@ def _get_protein_chains(
     valid_chains = {}
     for entity_id, seq_info in polymers.items():
         chain_ids = entity_to_mmcif_chains[entity_id]
-
         # Reject polymers without any peptide-like components, such as DNA/RNA.
         if any(
             [

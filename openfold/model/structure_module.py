@@ -851,8 +851,10 @@ class StructureModule(nn.Module):
         trans_scale_factor,
         epsilon,
         inf,
+        save_intermediates,
         is_multimer=False,
         conformation_pred=False,
+        output_rigid=False,
         **kwargs,
     ):
         """
@@ -888,6 +890,8 @@ class StructureModule(nn.Module):
                 Small number used in angle resnet normalization
             inf:
                 Large number used for attention masking
+            save_intermediates:
+                Whether to save s (i.e first row of MSA) and backbone frames representation 
         """
         super(StructureModule, self).__init__()
 
@@ -906,8 +910,10 @@ class StructureModule(nn.Module):
         self.trans_scale_factor = trans_scale_factor
         self.epsilon = epsilon
         self.inf = inf
+        self.save_intermediates = save_intermediates
         self.is_multimer = is_multimer
         self.conformation_pred = conformation_pred 
+        self.output_rigid = output_rigid
 
         # Buffers to be lazily initialized later
         # self.default_frames
@@ -989,7 +995,10 @@ class StructureModule(nn.Module):
         s = self.layer_norm_s(s)
 
         # [*, N, N, C_z]
-        z = self.layer_norm_z(evoformer_output_dict["pair"])
+        if not(self.conformation_pred):
+            z = self.layer_norm_z(evoformer_output_dict["pair"])
+        else:
+            z = None 
 
         z_reference_list = None
         if (_offload_inference):
@@ -1085,7 +1094,8 @@ class StructureModule(nn.Module):
 
         outputs = dict_multimap(torch.stack, outputs)
         outputs["single"] = s
-        outputs["rigid"] = rigids 
+        if self.output_rigid or self.save_intermediates: 
+            outputs["rigid"] = rigids 
 
         return outputs
 

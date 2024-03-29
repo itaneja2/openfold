@@ -143,11 +143,11 @@ def eval_model(model, config, intrinsic_parameter, epsilon, epsilon_scaling_fact
     else:
         if accept_conformation:
             output_name = '%s-A' % tag  
-            model_output_dir = '%s/ACCEPTED' % (output_dir)
+            model_output_dir = '%s/ACCEPTED' % output_dir
             os.makedirs(model_output_dir, exist_ok=True)
         else:
             output_name = '%s-R' % tag 
-            model_output_dir = '%s/REJECTED' % (output_dir) 
+            model_output_dir = '%s/REJECTED' % output_dir 
             os.makedirs(model_output_dir, exist_ok=True) 
 
     unrelaxed_file_suffix = "_unrelaxed.pdb"
@@ -171,6 +171,17 @@ def eval_model(model, config, intrinsic_parameter, epsilon, epsilon_scaling_fact
         relax_protein(config, args.model_device, unrelaxed_protein, model_output_dir, output_name,
                       args.cif_output)
 
+    if args.save_outputs and accept_conformation:
+        embeddings_output_dir = '%s/embeddings' % model_output_dir
+        os.makedirs(embeddings_output_dir, exist_ok=True)
+
+        output_dict_path = os.path.join(
+            embeddings_output_dir, f'{output_name}_output_dict.pkl'
+        )
+        with open(output_dict_path, "wb") as fp:
+            pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
+        logger.info(f"Model embeddings written to {output_dict_path}...")
+
 
     return mean_plddt, float(weighted_ptm_score), disordered_percentage, num_recycles, inference_time, accept_conformation, unrelaxed_output_path 
 
@@ -192,7 +203,7 @@ def update_config(
     else:
         num_recycles_str = 'early_stopping'
 
-    if config.use_chainmask:
+    if config.model.use_chainmask:
         total_seq_len = sum(len(s) for s in seqs)
         mask_all = [] 
         chain_mask_row_all = []

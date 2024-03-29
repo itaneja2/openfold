@@ -19,7 +19,7 @@ gen_msa_monomer_path = '../msa_utils/gen_msa_monomer.py'
 asterisk_line = '******************************************************************************'
 
 
-conformational_states_df = pd.read_csv('./data/conformational_states_filtered_adjudicated.csv')
+conformational_states_df = pd.read_csv('../conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
 conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
 
 arg2 = '--msa_save_dir=./alignment_data'
@@ -84,6 +84,8 @@ for index,row in conformational_states_df.iterrows():
 
 
 ####we only ran for reference so far###
+
+'''
 for index,row in conformational_states_df.iterrows():
 
     print('On row %d of %d' % (index, len(conformational_states_df)))   
@@ -132,4 +134,4 @@ for index,row in conformational_states_df.iterrows():
 
 
 print('FINISHED PDB_STATE_I')
-
+'''

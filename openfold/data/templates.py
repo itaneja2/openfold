@@ -25,6 +25,7 @@ import os
 import re
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
+from Bio.PDB import PDBList
 from pymol import cmd
 import numpy as np
 
@@ -815,45 +816,23 @@ def _prefilter_hit(
     return PrefilterResult(valid=True, error=None, warning=None)
 
 
-def fetch_pdb(pdb_id: str, save_dir: str):
+def fetch_mmcif(pdb_id: str, save_dir: str):
 
     """
     Args:
         pdb_id: e.g 1xyz_A or 1xyz
         save_dir: e.g ./pdb_raw_structures_folder
-    """
-
-    pdb_save_path = "%s/%s.cif" % (save_dir, pdb_id)
-    os.makedirs(save_dir, exist_ok=True) 
-
-    if len(pdb_id.split('_')) > 1:
-        pdb_id_wo_chain = pdb_id.split('_')[0]
-        chain_id = pdb_id.split('_')[1]
-        cmd.fetch(pdb_id_wo_chain, async_=0)
-        cmd.save(pdb_save_path, "chain %s and %s" % (chain_id, pdb_id_wo_chain))
-        chain_id_list = [chain_id]
-    else:
-        cmd.fetch(pdb_id, async_=0)
-        cmd.save(pdb_save_path, pdb_id)
-        chain_id_list = None
-
-    if len(pdb_id.split('_')) > 1:
-        fetch_path = './%s.cif' % pdb_id_wo_chain
-    else:
-        fetch_path = './%s.cif' % pdb_id
-
-    if os.path.exists(fetch_path):
-        os.remove(fetch_path)    
-
-    return pdb_save_path
-
+    """     
+    pdb_list = PDBList()
+    cif_fname = pdb_list.retrieve_pdb_file(pdb_id, file_format='mmCif', pdir=save_dir)
+    return cif_fname
 
 @functools.lru_cache(16, typed=False)
 def _read_file(path):
     if not(os.path.exists(path)):
         pdb_id = path.split('/')[-1].split('.')[0]
         print('%s does not exist, fetching...' % pdb_id)
-        path = fetch_pdb(pdb_id, './mmcif_files')
+        path = fetch_mmcif(pdb_id, './mmcif_files')
     with open(path, 'r') as f:
         file_data = f.read()
 
@@ -991,12 +970,12 @@ def get_custom_template_features(
         chain_id: str,
         kalign_binary_path: str):
 
-    with open(mmcif_path, "r") as mmcif_path:
-        cif_string = mmcif_path.read()
+    cif_string = _read_file(mmcif_path)
 
     mmcif_parse_result = mmcif_parsing.parse(
-        file_id=pdb_id, mmcif_string=cif_string
+        file_id=pdb_id.lower(), mmcif_string=cif_string
     )
+
     template_sequence = mmcif_parse_result.mmcif_object.chain_to_seqres[chain_id]
 
 
@@ -1028,10 +1007,7 @@ def get_custom_template_features(
             template_features[name], axis=0
         ).astype(TEMPLATE_FEATURES[name])
 
-    return TemplateSearchResult(
-        features=template_features, errors=None, warnings=warnings
-    )
-
+    return template_features
 
 
 @dataclasses.dataclass(frozen=True)
