@@ -1249,21 +1249,21 @@ if __name__ == "__main__":
         help="Output predicted models in ModelCIF format instead of PDB format (default)"
     )
     parser.add_argument(
-        "--module_config", type=str, default='model_config_0',
+        "--module_config", type=str, default=None,
         help=(
             "module_config_x where x is a number"
         )
     )
     parser.add_argument(
-        "--rw_hp_config", type=str, default='hp_config_0',
+        "--rw_hp_config", type=str, default=None,
         help=(
             "hp_config_x where x is a number"
         )
     )
     parser.add_argument(
-        "--train_hp_config", type=str, default='hp_config_2',
+        "--train_hp_config", type=str, default=None,
         help=(
-            "hp_config_x where x is a number"
+            "train_hp_config_x where x is a number"
         )
     )
     parser.add_argument(

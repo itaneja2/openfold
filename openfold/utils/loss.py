@@ -311,6 +311,7 @@ def fape_loss(
         )
         weighted_bb_loss = bb_loss * config.backbone.weight
 
+    print(out["sm"])
     sc_loss = sidechain_loss(
         out["sm"]["sidechain_frames"],
         out["sm"]["positions"],
@@ -1758,9 +1759,12 @@ class AlphaFoldLoss(nn.Module):
         cum_loss = 0.
         losses = {}
         for loss_name, loss_fn in loss_fns.items():
-            print("loss component: %s" % loss_name)
             weight = self.config[loss_name].weight
-            loss = loss_fn()
+            if weight > 0:
+                loss = loss_fn()
+            else:
+                continue
+            print("loss component: %s" % loss_name)
             print('weight: %.2f' % weight)
             print('loss: %.3f' % loss)
             if torch.isnan(loss) or torch.isinf(loss):

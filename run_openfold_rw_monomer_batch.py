@@ -274,6 +274,7 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
     args.model_device = 'cuda:0'
     args.bootstrap_phase_only = True
     args.data_random_seed = seed 
+    args.num_bootstrap_steps = 10 
         
     if(args.jax_param_path is None and args.openfold_checkpoint_path is None):
         args.jax_param_path = os.path.join(
@@ -295,6 +296,9 @@ def run_rw_all_custom_template():
  
     conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
     conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
+
+    conformational_states_df = conformational_states_df[conformational_states_df['uniprot_id'] == 'P69441'].reset_index(drop=True)
+
 
     for index,row in conformational_states_df.iterrows():
 
@@ -320,11 +324,11 @@ def run_rw_all_custom_template():
             conformation_info_fname = '%s/conformation_info.pkl' % bootstrap_output_dir
             pdb_path_initial = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir  
 
-            if os.path.exists(conformation_info_fname) and os.path.exists(pdb_path_initial):
+            '''if os.path.exists(conformation_info_fname) and os.path.exists(pdb_path_initial):
                 logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir)
                 continue 
             else:
-                logger.info("RUNNING %s" % output_dir)
+                logger.info("RUNNING %s" % output_dir)'''
             
             run_rw_pipeline(args)
 

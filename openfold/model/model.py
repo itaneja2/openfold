@@ -615,7 +615,7 @@ class AlphaFold(nn.Module):
             outputs["sm"] = self.conformation_module(
                 outputs,
                 feats["aatype"],
-                mask=feats["seq_mask"].to(dtype=s.dtype),
+                mask=feats["seq_mask"].to(dtype=outputs["single"].dtype),
                 inplace_safe=not(self.training or torch.is_grad_enabled()),
                 _offload_inference=self.globals.offload_inference,
             )
@@ -638,10 +638,6 @@ class AlphaFold(nn.Module):
 
 
 
-
-
-
-
 class ConformationFold(nn.Module):
 
     def __init__(self, config):
@@ -652,10 +648,16 @@ class ConformationFold(nn.Module):
         """
         super(ConformationFold, self).__init__()
 
+        self.globals = config.globals
+        self.config = config.model
+        self.template_config = self.config.template
+        self.extra_msa_config = self.config.extra_msa
+        self.seqemb_mode = config.globals.seqemb_mode_enabled
+
         self.conformation_module = StructureModule(
             is_multimer=self.globals.is_multimer,
             conformation_pred=True,
-            output_rigid=False
+            output_rigid=False,
             **self.config["structure_module"],
         )
 
@@ -734,14 +736,21 @@ class ConformationFold(nn.Module):
         """
         is_grad_enabled = torch.is_grad_enabled()
 
-        print(batch)
-        print(batch.shape)
-        feats = batch[..., 0]
- 
+        # Select the features for the current recycling cycle
+        fetch_cur_batch = lambda t: t[..., 0]
+        feats = tensor_tree_map(fetch_cur_batch, batch)
+
+        # This needs to be done manually for DeepSpeed's sake
+        dtype = next(self.parameters()).dtype
+        for k in feats:
+            if feats[k].dtype == torch.float32:
+                feats[k] = feats[k].to(dtype=dtype)
+
+        outputs = {}
         outputs["sm"] = self.conformation_module(
-            batch,
+            feats,
             feats["aatype"],
-            mask=feats["seq_mask"].to(dtype=s.dtype),
+            mask=feats["seq_mask"].to(dtype=feats["single"].dtype),
             inplace_safe=not(self.training or torch.is_grad_enabled()),
             _offload_inference=self.globals.offload_inference,
         )

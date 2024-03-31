@@ -18,7 +18,7 @@ from pytorch_lightning.plugins.training_type import DeepSpeedPlugin, DDPPlugin
 import torch
 
 from openfold.config import model_config
-from openfold.data.data_modules import OpenFoldConformationDataModule 
+from openfold.data.conformation_data_module import OpenFoldConformationDataModule 
 from openfold.data import feature_pipeline
 from openfold.model.model import ConformationFold
 from openfold.model.torchscript import script_preset_
@@ -44,7 +44,8 @@ from openfold.utils.validation_metrics import (
 )
 from openfold.utils.import_weights import (
     import_jax_weights_,
-    import_openfold_weights_
+    import_openfold_weights_,
+    import_openfold_weights_modified_architecture_
 )
 from scripts.zero_to_fp32 import (
     get_fp32_state_dict_from_zero_checkpoint,
@@ -64,7 +65,7 @@ from pdb_utils.pdb_utils import align_and_get_rmsd
 class OpenFoldWrapper(pl.LightningModule):
     def __init__(self, config):
         super(OpenFoldWrapper, self).__init__()
-        self.model = ConformationModule(config)
+        self.model = ConformationFold(config)
         self.is_multimer = config.globals.is_multimer
         self.loss = AlphaFoldLoss(config.loss)
         self.config = config 
@@ -74,7 +75,7 @@ class OpenFoldWrapper(pl.LightningModule):
     def forward(self, batch):
         return self.model(batch)
 
-    def _log(self, loss_breakdown, batch, outputs, save_structure_output, train=True):
+    def _log(self, loss_breakdown, batch, outputs, train=True):
         phase = "train" if train else "val"
         for loss_name, indiv_loss in loss_breakdown.items():
 
@@ -128,7 +129,7 @@ class OpenFoldWrapper(pl.LightningModule):
         )
 
         # Log it
-        self._log(loss_breakdown, batch, outputs, self.save_structure_output)
+        self._log(loss_breakdown, batch, outputs)
 
         return loss
 
@@ -236,7 +237,7 @@ class OpenFoldWrapper(pl.LightningModule):
 
 
         optimizer = torch.optim.Adam(
-            params = self.get_module_params('conformation_module', 'all'), 
+            params = self.get_module_params(['conformation_module'], ['all']), 
             lr=learning_rate,
             eps=eps
         )
@@ -249,10 +250,10 @@ class OpenFoldWrapper(pl.LightningModule):
     def get_module_params(self, module_to_update, layer_to_update):
         if layer_to_update != ['all']:
             n = [name for name, param in self.model.named_parameters() if (any(module in name for module in module_to_update)) and (any(layer in name for layer in layer_to_update))]
-            p = [param for name, param in self.model.named_parameters() if (any(module in name for module in layer_to_update)) and (any(layer in name for layer in layer_to_update))]
+            p = [param for name, param in self.model.named_parameters() if (any(module in name for module in module_to_update)) and (any(layer in name for layer in layer_to_update))]
         else:
             n = [name for name, param in self.model.named_parameters() if any(module in name for module in module_to_update)]
-            p = [param for name, param in self.model.named_parameters() if any(module in name for module in layer_to_update)]
+            p = [param for name, param in self.model.named_parameters() if any(module in name for module in module_to_update)]
 
         print('PARAMETERS TO TUNE:')
         print(n)
@@ -268,6 +269,9 @@ class OpenFoldWrapper(pl.LightningModule):
 
 
 def main(args):
+    
+    torch.multiprocessing.set_start_method('spawn')
+
     if(args.seed is not None):
         seed_everything(args.seed) 
 
@@ -275,7 +279,6 @@ def main(args):
         args.config_preset, 
         train=True, 
         low_prec=(str(args.precision) == "16"),
-        save_structure_module_intermediates=True
     ) 
 
     model_module = OpenFoldWrapper(config)
@@ -296,22 +299,31 @@ def main(args):
         else:
             sd = torch.load(args.openfold_checkpoint_path)
         #sd = {('model.'+k):v for k,v in sd.items()}
-        import_openfold_weights_(model=model_module.model, state_dict=sd)
+        import_openfold_weights_modified_architecture_(model=model_module.model, state_dict=sd)
         print("Successfully loaded model weights...")
     elif(args.resume_from_jax_params):
         model_module.load_from_jax(args.resume_from_jax_params)
         print(f"Successfully loaded JAX parameters at {args.resume_from_jax_params}...")
 
     #######
+
+    if args.fine_tuning_save_dir is None:
+        log_parent_dir = './conformation_module_training_logs'
+        log_child_dir = 'tmp'
+        fine_tuning_save_dir = '%s/%s' % (log_parent_dir, log_child_dir)
+    else:
+        fine_tuning_save_dir = args.fine_tuning_save_dir
+        log_parent_dir = fine_tuning_save_dir[0:fine_tuning_save_dir.rfind('/')]
+        log_child_dir = fine_tuning_save_dir.split('/')[-1] 
+    
+    os.makedirs(fine_tuning_save_dir, exist_ok=True)
+
     
     '''for m_name, module in dict(model_module.named_modules()).items():
         print(m_name)
         print('****')
         for c_name, layer in dict(module.named_children()).items():
             print(c_name)'''
-
-    if config.custom_fine_tuning.ft_method == 'SAID':
-        model_module.model = modify_with_intrinsic_model(model_module.model, module_config_data, config.globals.is_multimer)
 
     # TorchScript components of the model
     if(args.script_modules):
@@ -391,7 +403,7 @@ def main(args):
 
     trainer = pl.Trainer.from_argparse_args(
         args,
-        max_epochs = hp_config_data['max_epochs'],
+        max_epochs = 10,
         log_every_n_steps = 1,
         default_root_dir='./',
         strategy=strategy,
@@ -603,9 +615,6 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "--save_structure_output", action="store_true", default=False,
-    )
-    parser.add_argument(
         "--_distillation_structure_index_path", type=str, default=None,
     )
     parser.add_argument(
@@ -635,6 +644,9 @@ if __name__ == "__main__":
     ) 
 
     args = parser.parse_args()
+
+    if args.max_template_date is None:
+        args.max_template_date = '2024-03-29'
 
     if(args.seed is None and 
         ((args.gpus is not None and args.gpus > 1) or 

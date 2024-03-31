@@ -353,10 +353,10 @@ class OpenFoldWrapper(pl.LightningModule):
     def get_module_params(self, module_to_update, layer_to_update):
         if layer_to_update != ['all']:
             n = [name for name, param in self.model.named_parameters() if (any(module in name for module in module_to_update)) and (any(layer in name for layer in layer_to_update))]
-            p = [param for name, param in self.model.named_parameters() if (any(module in name for module in layer_to_update)) and (any(layer in name for layer in layer_to_update))]
+            p = [param for name, param in self.model.named_parameters() if (any(module in name for module in module_to_update)) and (any(layer in name for layer in layer_to_update))]
         else:
             n = [name for name, param in self.model.named_parameters() if any(module in name for module in module_to_update)]
-            p = [param for name, param in self.model.named_parameters() if any(module in name for module in layer_to_update)]
+            p = [param for name, param in self.model.named_parameters() if any(module in name for module in module_to_update)]
 
         print('PARAMETERS TO TUNE:')
         print(n)

@@ -16,7 +16,7 @@
 from functools import partial
 import logging
 from typing import Tuple, List, Callable, Any, Dict, Sequence, Optional
-
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -61,10 +61,14 @@ def dict_multimap(fn, dicts):
     first = dicts[0]
     new_dict = {}
     for k, v in first.items():
-        all_v = [d[k] for d in dicts]
         if type(v) is dict:
+            all_v = [d[k] for d in dicts]
             new_dict[k] = dict_multimap(fn, all_v)
+        elif isinstance(v, np.ndarray): 
+            all_v = [torch.from_numpy(d[k]) for d in dicts]
+            new_dict[k] = fn(all_v)
         else:
+            all_v = [d[k] for d in dicts]
             new_dict[k] = fn(all_v)
 
     return new_dict

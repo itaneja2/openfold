@@ -68,6 +68,7 @@ def model_config(
     c = copy.deepcopy(config)
     c.model.use_chainmask = False
     c.model.use_conformation_module = False 
+    c.model.structure_module.save_intermediates = save_structure_module_intermediates
 
     # TRAINING PRESETS
     if name == "initial_training":
@@ -98,6 +99,7 @@ def model_config(
 
         if 'conformation_module' in ft_method:
             c.model.use_conformation_module = True
+            c.data.common.max_recycling_iters = 0 
             c.loss.distogram.weight = 0.0
             c.loss.masked_msa.weight = 0.0
             c.loss.supervised_chi.weight = 0.0
@@ -689,7 +691,7 @@ config = mlc.ConfigDict(
                 "trans_scale_factor": 10,
                 "epsilon": eps,  # 1e-12,
                 "inf": 1e5,
-                "save_intermediates": save_structure_module_intermediates,
+                "save_intermediates": False,
             },
             "heads": {
                 "lddt": {

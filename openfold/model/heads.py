@@ -60,39 +60,43 @@ class AuxiliaryHeads(nn.Module):
         # Required for relaxation later on
         aux_out["plddt"] = compute_plddt(lddt_logits)
 
-        distogram_logits = self.distogram(outputs["pair"])
-        aux_out["distogram_logits"] = distogram_logits
+        if "pair" in outputs:
+            distogram_logits = self.distogram(outputs["pair"])
+            aux_out["distogram_logits"] = distogram_logits
 
-        masked_msa_logits = self.masked_msa(outputs["msa"])
-        aux_out["masked_msa_logits"] = masked_msa_logits
+        if "msa" in outputs:
+            masked_msa_logits = self.masked_msa(outputs["msa"])
+            aux_out["masked_msa_logits"] = masked_msa_logits
 
-        experimentally_resolved_logits = self.experimentally_resolved(
-            outputs["single"]
-        )
-        aux_out[
-            "experimentally_resolved_logits"
-        ] = experimentally_resolved_logits
+        if "single" in outputs:
+            experimentally_resolved_logits = self.experimentally_resolved(
+                outputs["single"]
+            )
+            aux_out[
+                "experimentally_resolved_logits"
+            ] = experimentally_resolved_logits
 
         if self.config.tm.enabled:
-            tm_logits = self.tm(outputs["pair"])
-            aux_out["tm_logits"] = tm_logits
-            aux_out["ptm_score"] = compute_tm(
-                tm_logits, **self.config.tm
-            )
-            asym_id = outputs.get("asym_id")
-            if asym_id is not None:
-                aux_out["iptm_score"] = compute_tm(
-                    tm_logits, asym_id=asym_id, interface=True, **self.config.tm
+            if "pair" in outputs:
+                tm_logits = self.tm(outputs["pair"])
+                aux_out["tm_logits"] = tm_logits
+                aux_out["ptm_score"] = compute_tm(
+                    tm_logits, **self.config.tm
                 )
-                aux_out["weighted_ptm_score"] = (self.config.tm["iptm_weight"] * aux_out["iptm_score"]
-                                                 + self.config.tm["ptm_weight"] * aux_out["ptm_score"])
+                asym_id = outputs.get("asym_id")
+                if asym_id is not None:
+                    aux_out["iptm_score"] = compute_tm(
+                        tm_logits, asym_id=asym_id, interface=True, **self.config.tm
+                    )
+                    aux_out["weighted_ptm_score"] = (self.config.tm["iptm_weight"] * aux_out["iptm_score"]
+                                                     + self.config.tm["ptm_weight"] * aux_out["ptm_score"])
 
-            aux_out.update(
-                compute_predicted_aligned_error(
-                    tm_logits,
-                    **self.config.tm,
+                aux_out.update(
+                    compute_predicted_aligned_error(
+                        tm_logits,
+                        **self.config.tm,
+                    )
                 )
-            )
 
         return aux_out
 

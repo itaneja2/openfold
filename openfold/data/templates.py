@@ -977,10 +977,7 @@ def get_custom_template_features(
     )
 
     template_sequence = mmcif_parse_result.mmcif_object.chain_to_seqres[chain_id]
-
-
     mapping = {x:x for x, _ in enumerate(query_sequence)}
-
 
     features, warnings = _extract_template_features(
         mmcif_object=mmcif_parse_result.mmcif_object,

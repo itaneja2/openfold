@@ -386,7 +386,7 @@ class InvariantPointAttention(nn.Module):
         # Compute attention scores
         ##########################
         # [*, N_res, N_res, H]
-        if z is not None:
+        if z[0] is not None:
             b = self.linear_b(z[0])
 
         if (_offload_inference):
@@ -407,7 +407,7 @@ class InvariantPointAttention(nn.Module):
             )
 
         a *= math.sqrt(1.0 / (3 * self.c_hidden))
-        if z is not None:
+        if z[0] is not None:
             a += (math.sqrt(1.0 / 3) * permute_final_dims(b, (2, 0, 1)))
 
         # [*, N_res, N_res, H, P_q, 3]
@@ -501,7 +501,7 @@ class InvariantPointAttention(nn.Module):
         if (_offload_inference):
             z[0] = z[0].to(o_pt.device)
 
-        if z is not None:
+        if z[0] is not None:
             # [*, N_res, H, C_z]
             o_pair = torch.matmul(a.transpose(-2, -3), z[0].to(dtype=a.dtype))
             # [*, N_res, H * C_z]
@@ -516,7 +516,7 @@ class InvariantPointAttention(nn.Module):
             s = self.linear_out(
                 torch.cat(
                     (o, *o_pt, o_pt_norm), dim=-1
-                ).to(dtype=z[0].dtype)
+                ).to(dtype=s.dtype)
             )
 
 
@@ -1020,7 +1020,14 @@ class StructureModule(nn.Module):
                 fmt="quat",
             )
         else:
-            rigids = outputs["rigid"]  
+            rigids = Rigid(
+                Rotation(
+                    rot_mats=evoformer_output_dict["rigid_rotation"], 
+                    quats=None
+                ),
+                evoformer_output_dict["rigid_translation"],
+            )
+                
 
         outputs = []
         for i in range(self.no_blocks):
@@ -1095,7 +1102,8 @@ class StructureModule(nn.Module):
         outputs = dict_multimap(torch.stack, outputs)
         outputs["single"] = s
         if self.output_rigid or self.save_intermediates: 
-            outputs["rigid"] = rigids 
+            outputs["rigid_rotation"] = rigids.get_rots().get_rot_mats() 
+            outputs["rigid_translation"] = rigids.get_trans() 
 
         return outputs
 

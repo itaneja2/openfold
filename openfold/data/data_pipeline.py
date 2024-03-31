@@ -951,7 +951,7 @@ class DataPipeline:
         chain_id: Optional[str] = None,
         alignment_index: Optional[Any] = None,
         seqemb_mode: bool = False,
-        fasta_feature_dict: FeatureDict = None,
+        feature_dict: FeatureDict = None,
         custom_template_pdb_id: str = None,
     ) -> FeatureDict:
         """
@@ -969,8 +969,9 @@ class DataPipeline:
 
         mmcif_feats = make_mmcif_features(mmcif, chain_id)
 
-        if fasta_feature_dict is not None:
-            return {**mmcif_feats, **fasta_feature_dict}
+        if feature_dict is not None:
+            if custom_template_pdb_id is None:
+                return {**mmcif_feats, **feature_dict}
         
         input_sequence = mmcif.chain_to_seqres[chain_id]
 
@@ -989,6 +990,13 @@ class DataPipeline:
             custom_template_pdb_id
         )
 
+        if feature_dict is not None:
+            if custom_template_pdb_id is not None:
+                for key in feature_dict:
+                    if key in template_features:
+                        feature_dict[key] = template_features[key]
+            return {**mmcif_feats, **feature_dict}
+        
         sequence_embedding_features = {}
         # If using seqemb mode, generate a dummy MSA features using just the sequence
         if seqemb_mode:
@@ -1009,7 +1017,7 @@ class DataPipeline:
         _structure_index: Optional[str] = None,
         alignment_index: Optional[Any] = None,
         seqemb_mode: bool = False,
-        fasta_feature_dict: FeatureDict = None,
+        feature_dict: FeatureDict = None,
         custom_template_pdb_id: str = None 
     ) -> FeatureDict:
         """
@@ -1037,8 +1045,9 @@ class DataPipeline:
             is_distillation=is_distillation
         )
     
-        if fasta_feature_dict is not None:
-            return {**pdb_feats, **fasta_feature_dict}
+        if feature_dict is not None:
+            if custom_template_pdb_id is None:
+                return {**pdb_feats, **feature_dict}
         
         if custom_template_pdb_id is None:
             hits = self._parse_template_hit_files(
@@ -1055,6 +1064,13 @@ class DataPipeline:
             self.template_featurizer,
             custom_template_pdb_id
         )
+
+        if feature_dict is not None:
+            if custom_template_pdb_id is not None:
+                for key in feature_dict:
+                    if key in template_features:
+                        feature_dict[key] = template_features[key]
+            return {**pdb_feats, **feature_dict}
 
         sequence_embedding_features = {}
         # If in sequence embedding mode, generate dummy MSA features using just the input sequence

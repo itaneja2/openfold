@@ -14,7 +14,7 @@
 # limitations under the License.
 
 import random
-
+import copy
 import torch
 
 from openfold.data import data_transforms

@@ -176,7 +176,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
         if not self._output_raw:
             self.feature_pipeline = feature_pipeline.FeaturePipeline(config)
 
-    def _parse_mmcif(self, path, file_id, chain_id, alignment_dir, alignment_index, fasta_feature_dict=None):
+    def _parse_mmcif(self, path, file_id, chain_id, alignment_dir, alignment_index, feature_dict=None):
         with open(path, 'r') as f:
             mmcif_string = f.read()
 
@@ -197,7 +197,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
             chain_id=chain_id,
             alignment_index=alignment_index,
             seqemb_mode=self.config.seqemb_mode.enabled,
-            fasta_feature_dict=fasta_feature_dict
+            feature_dict=feature_dict
         )
 
         return data
@@ -244,16 +244,16 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
             if self.mode == 'custom_train':
                 features_output_path = os.path.join(alignment_dir, 'features.pkl')
                 if os.path.isfile(features_output_path):
-                    fasta_feature_dict = np.load(features_output_path, allow_pickle=True)                  
+                    feature_dict = np.load(features_output_path, allow_pickle=True)                  
                 else:
-                    fasta_feature_dict = None 
+                    feature_dict = None 
             else:
-                fasta_feature_dict = None  
+                feature_dict = None  
 
             path += ext
             if ext == ".cif":
                 data = self._parse_mmcif(
-                    path, file_id, chain_id, alignment_dir, alignment_index, fasta_feature_dict,
+                    path, file_id, chain_id, alignment_dir, alignment_index, feature_dict,
                 )
             elif ext == ".core":
                 data = self.data_pipeline.process_core(
@@ -272,7 +272,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                     alignment_index=alignment_index,
                     _structure_index=structure_index,
                     seqemb_mode=self.config.seqemb_mode.enabled,
-                    fasta_feature_dict=fasta_feature_dict,
+                    feature_dict=feature_dict,
                 )
             else:
                 raise ValueError("Extension branch missing")

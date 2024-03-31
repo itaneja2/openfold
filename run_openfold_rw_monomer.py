@@ -16,9 +16,11 @@ import time
 import ml_collections as mlc
 from typing import Tuple, List, Mapping, Optional, Sequence, Any, MutableMapping, Union
 import contextlib 
+import copy 
 
 from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
+from openfold.data.data_pipeline import make_template_features 
 
 import subprocess 
 import pickle
@@ -116,6 +118,13 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
         lambda x: np.array(x[..., -1].cpu()),
         processed_feature_dict
     )
+    
+    if 'rigid_rotation' in out['sm']:
+        out_tensor = copy.deepcopy(out) #this is to keep a copy of out where values are of type torch.Tensor  
+        keys_to_remove = [key for key in out_tensor['sm'] if key not in ['single', 'rigid_rotation', 'rigid_translation']]
+        for key in keys_to_remove:
+            del out_tensor['sm'][key] 
+
     out = tensor_tree_map(lambda x: np.array(x.cpu()), out)
     mean_plddt = np.mean(out["plddt"])
 
@@ -195,16 +204,16 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
             pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info(f"Model embeddings written to {output_dict_path}...")
 
-    if args.save_structure_module_intermediates and accept_conformation:
+    if args.save_structure_module_intermediates and accept_conformation and 'warmup' not in model_output_dir:
         sm_intermediates_output_dir = '%s/structure_module_intermediates' % model_output_dir
         os.makedirs(sm_intermediates_output_dir, exist_ok=True)
 
         sm_output_dict_path = os.path.join(
             sm_intermediates_output_dir, f'{output_name}_sm_output_dict.pkl'
         )
-        with open(output_dict_path, "wb") as fp:
-            pickle.dump(out["sm"], fp, protocol=pickle.HIGHEST_PROTOCOL)
-        logger.info(f"Structure module intermediates written to {output_dict_path}...")
+        with open(sm_output_dict_path, "wb") as fp:
+            pickle.dump(out_tensor["sm"], fp, protocol=pickle.HIGHEST_PROTOCOL)
+        logger.info(f"Structure module intermediates written to {sm_output_dict_path}...")
 
 
     return mean_plddt, disordered_percentage, inference_time, accept_conformation, unrelaxed_output_path 
@@ -342,7 +351,10 @@ def run_rw_monomer(
        been run.  
     """
 
-    base_tag = '%s_train-%s_rw-%s' % (args.module_config, args.train_hp_config, args.rw_hp_config)
+    if args.bootstrap_phase_only:
+        base_tag = '%s_rw-%s' % (args.module_config, args.rw_hp_config)
+    else:
+        base_tag = '%s_train-%s_rw-%s' % (args.module_config, args.train_hp_config, args.rw_hp_config)
     base_tag = base_tag.replace('=','-')
 
     intrinsic_param_prev = np.zeros(intrinsic_dim)
@@ -423,7 +435,10 @@ def get_scaling_factor_bootstrap(
     upper_bound_acceptance_threshold = round(rw_hp_config_data['bootstrap_tuning_acceptance_threshold']+rw_hp_config_data['bootstrap_tuning_threshold_ub_tolerance'],2)
     lower_bound_acceptance_threshold = round(rw_hp_config_data['bootstrap_tuning_acceptance_threshold']-rw_hp_config_data['bootstrap_tuning_threshold_lb_tolerance'],2)
 
-    base_tag = '%s_train-%s_rw-%s' % (args.module_config, args.train_hp_config, args.rw_hp_config)
+    if args.bootstrap_phase_only:
+        base_tag = '%s_rw-%s' % (args.module_config, args.rw_hp_config)
+    else:
+        base_tag = '%s_train-%s_rw-%s' % (args.module_config, args.train_hp_config, args.rw_hp_config)
     base_tag = base_tag.replace('=','-')
 
     #run a pseudo-binary search to determine scaling_factor_bootstrap
@@ -805,6 +820,7 @@ def run_rw_pipeline(args):
     with open(fasta_file, "r") as fp:
         fasta_data = fp.read()
     _, seq = parse_fasta(fasta_data)
+    seq = seq[0]
     logger.info("PROTEIN SEQUENCE:")
     logger.info(seq)
 
@@ -828,6 +844,8 @@ def run_rw_pipeline(args):
     else:   
         template_pdb_id, template_chain_id = args.custom_template_pdb_id.split('_')
         pattern = "%s/features_template=%s.pkl" % (alignment_dir_w_file_id, template_pdb_id)
+
+    pattern = "%s/features.pkl" % alignment_dir_w_file_id
     files = glob.glob(pattern, recursive=True)
     if len(files) == 1:
         features_output_path = files[0]
@@ -852,11 +870,25 @@ def run_rw_pipeline(args):
         feature_dict = data_processor.process_fasta(
             fasta_path=fasta_file, alignment_dir=alignment_dir_w_file_id, custom_template_pdb_id=args.custom_template_pdb_id
         )
-        template_pdb_id, template_chain_id = args.custom_template_pdb_id.split('_')
-        features_output_path = os.path.join(alignment_dir_w_file_id, 'features_template=%s.pkl' % template_pdb_id)
+        features_output_path = os.path.join(alignment_dir_w_file_id, 'features.pkl')
         with open(features_output_path, 'wb') as f:
             pickle.dump(feature_dict, f, protocol=4)
         logger.info('SAVED %s' % features_output_path)
+
+    #update template features with that derived from custom_template_pdb_id
+    if args.custom_template_pdb_id:
+        template_featurizer = templates.HhsearchHitFeaturizer(
+            mmcif_dir=args.template_mmcif_dir,
+            max_template_date=args.max_template_date,
+            max_hits=4,
+            kalign_binary_path=args.kalign_binary_path,
+            release_dates_path=args.release_dates_path,
+            obsolete_pdbs_path=args.obsolete_pdbs_path
+        )
+        template_features = make_template_features(seq, None, template_featurizer, args.custom_template_pdb_id)
+        for key in feature_dict:
+            if key in template_features:
+                feature_dict[key] = template_features[key] 
 
     logger.debug("FEATURE DICTIONARY:")
     logger.debug(feature_dict)
@@ -1301,21 +1333,21 @@ if __name__ == "__main__":
         help="Output predicted models in ModelCIF format instead of PDB format (default)"
     )
     parser.add_argument(
-        "--module_config", type=str, default='model_config_0',
+        "--module_config", type=str, default=None,
         help=(
             "module_config_x where x is a number"
         )
     )
     parser.add_argument(
-        "--rw_hp_config", type=str, default='hp_config_0',
+        "--rw_hp_config", type=str, default=None,
         help=(
             "hp_config_x where x is a number"
         )
     )
     parser.add_argument(
-        "--train_hp_config", type=str, default='hp_config_2',
+        "--train_hp_config", type=str, default=None,
         help=(
-            "hp_config_x where x is a number"
+            "train_hp_config_x wheire x is a number"
         )
     )
     parser.add_argument(
