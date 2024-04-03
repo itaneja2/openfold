@@ -274,7 +274,7 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
     args.model_device = 'cuda:0'
     args.bootstrap_phase_only = True
     args.data_random_seed = seed 
-    args.num_bootstrap_steps = 10 
+    args.num_bootstrap_steps = 50 
         
     if(args.jax_param_path is None and args.openfold_checkpoint_path is None):
         args.jax_param_path = os.path.join(
@@ -312,10 +312,15 @@ def run_rw_all_custom_template():
 
         alignment_dir = './conformational_states_training_data/alignment_data/%s' % uniprot_id
 
-        for template_pdb_id in [pdb_id_ref, pdb_id_state_i]:
+        for j,template_pdb_id in enumerate([pdb_id_ref, pdb_id_state_i]):
+
+            seed = (index*2)+j
+            print(asterisk_line)
+            print('SEED = %d' % seed) 
+            print(asterisk_line)
             template_str = 'template=%s' % template_pdb_id
             output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
-            args = gen_args(template_pdb_id, alignment_dir, output_dir_base, index)
+            args = gen_args(template_pdb_id, alignment_dir, output_dir_base, seed)
             output_dir = '%s/%s/%s/rw-%s' % (output_dir_base, 'rw', args.module_config, args.rw_hp_config)
             l1_output_dir = '%s/%s/%s' % (output_dir_base, 'rw', args.module_config)
             initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir

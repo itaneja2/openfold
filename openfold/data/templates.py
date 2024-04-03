@@ -820,8 +820,7 @@ def fetch_mmcif(pdb_id: str, save_dir: str):
 
     """
     Args:
-        pdb_id: e.g 1xyz_A or 1xyz
-        save_dir: e.g ./pdb_raw_structures_folder
+        pdb_id: e.g 1xy
     """     
     pdb_list = PDBList()
     cif_fname = pdb_list.retrieve_pdb_file(pdb_id, file_format='mmCif', pdir=save_dir)

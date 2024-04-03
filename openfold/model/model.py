@@ -661,10 +661,6 @@ class ConformationFold(nn.Module):
             **self.config["structure_module"],
         )
 
-        self.aux_heads = AuxiliaryHeads(
-            self.config["heads"],
-        )
-
     def _disable_activation_checkpointing(self):
         self.template_embedder.template_pair_stack.blocks_per_ckpt = None
         self.evoformer.blocks_per_ckpt = None
@@ -765,9 +761,6 @@ class ConformationFold(nn.Module):
 
         if "asym_id" in batch:
             outputs["asym_id"] = feats["asym_id"]
-
-        # Run auxiliary heads
-        outputs.update(self.aux_heads(outputs))
 
         return outputs
 

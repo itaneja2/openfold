@@ -21,7 +21,7 @@ import io
 import json
 import logging
 import os
-from typing import Any, Mapping, Optional, Sequence, Tuple
+from typing import Any, Mapping, Optional, Sequence, Tuple, List
 
 from Bio import PDB
 from Bio.Data import SCOPData
@@ -176,7 +176,7 @@ def mmcif_loop_to_dict(
 
 @functools.lru_cache(16, typed=False)
 def parse(
-    *, file_id: str, mmcif_string: str, catch_all_errors: bool = True
+    *, file_id: str, mmcif_string: str, catch_all_errors: bool = True, residues_ignore_idx: Tuple[int] = None
 ) -> ParsingResult:
     """Entry point, parses an mmcif_string.
 
@@ -257,12 +257,29 @@ def parse(
                 current = seq_to_structure_mappings.get(
                     atom.author_chain_id, {}
                 )
-                current[seq_idx] = ResidueAtPosition(
-                    position=position,
-                    name=atom.residue_name,
-                    is_missing=False,
-                    hetflag=hetflag,
-                )
+                if residues_ignore_idx is None:
+                    current[seq_idx] = ResidueAtPosition(
+                        position=position,
+                        name=atom.residue_name,
+                        is_missing=False,
+                        hetflag=hetflag,
+                    )
+                else:
+                    if seq_idx not in residues_ignore_idx:
+                        current[seq_idx] = ResidueAtPosition(
+                            position=position,
+                            name=atom.residue_name,
+                            is_missing=False,
+                            hetflag=hetflag,
+                        )
+                    else:
+                        current[seq_idx] = ResidueAtPosition(
+                            position=None,
+                            name=atom.residue_name,
+                            is_missing=True,
+                            hetflag=hetflag,
+                        )
+
                 seq_to_structure_mappings[atom.author_chain_id] = current
 
         # Add missing residue information to seq_to_structure_mappings.

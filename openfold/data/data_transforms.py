@@ -694,10 +694,6 @@ def make_atom14_positions(protein):
     residx_atom14_mask = protein["atom14_atom_exists"]
     residx_atom14_to_atom37 = protein["residx_atom14_to_atom37"]
 
-    print(residx_atom14_mask)
-    print(residx_atom14_mask.shape)
-    print(protein["all_atom_mask"])
-    print(protein["all_atom_mask"].shape)
     # Create a mask for known ground truth positions.
     residx_atom14_gt_mask = residx_atom14_mask * batched_gather(
         protein["all_atom_mask"],

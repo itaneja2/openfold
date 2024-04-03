@@ -922,13 +922,25 @@ def import_openfold_weights_(model, state_dict):
         converted_state_dict = convert_deprecated_v1_keys(state_dict)
         model.load_state_dict(converted_state_dict)
 
+def import_angle_resnet_weights_(model, state_dict):
+    """
+    Imports weights from AngleResNet of original model into ConformationModule
+    model: ConformationModule model 
+    state_dict: original openfold weights 
+    """
+    state_dict = convert_deprecated_v1_keys(state_dict)
+    for name, param in model.named_parameters():
+        if 'angle_resnet' in name:
+            print('importing parameter %s' % name)
+            sm_name = name.replace('conformation_module', 'structure_module')
+            param.data = state_dict[sm_name]
+        
+def import_openfold_weights_merged_architecture_(model, state_dict_original_components, state_dict_new_components):
+    """
+    """
+    state_dict_original_components = convert_deprecated_v1_keys(state_dict_original_components)
+    merged_state_dict = {**state_dict_original_components, **state_dict_new_components} 
+    print(merged_state_dict)
+    model.load_state_dict(merged_state_dict)
 
-def import_openfold_weights_modified_architecture_(model, state_dict):
-    """
-    Import model weights. Several parts of the model were refactored in the process
-    of adding support for Multimer. The state dicts of older models are translated
-    to match the refactored model code.
-    """
-    converted_state_dict = convert_deprecated_v1_keys(state_dict)
-    model.load_state_dict(converted_state_dict, strict=False)
 

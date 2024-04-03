@@ -98,11 +98,14 @@ def model_config(
         c.loss.fape.backbone.loss_unit_distance = 3.5 
 
         if 'conformation_module' in ft_method:
+            c.data.data_module.data_loaders.num_workers = 2 
+            c.data.data_module.data_loaders.batch_size = 32
             c.model.use_conformation_module = True
             c.data.common.max_recycling_iters = 0 
             c.loss.distogram.weight = 0.0
             c.loss.masked_msa.weight = 0.0
             c.loss.supervised_chi.weight = 0.0
+            c.loss.plddt_loss.weight = 0.0
 
     elif name == "finetuning":
         # AF2 Suppl. Table 4, "finetuning" setting

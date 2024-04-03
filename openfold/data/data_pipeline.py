@@ -951,6 +951,7 @@ class DataPipeline:
         chain_id: Optional[str] = None,
         alignment_index: Optional[Any] = None,
         seqemb_mode: bool = False,
+        msa_dummy: bool = False,
         feature_dict: FeatureDict = None,
         custom_template_pdb_id: str = None,
     ) -> FeatureDict:
@@ -1002,6 +1003,8 @@ class DataPipeline:
         if seqemb_mode:
             msa_features = make_dummy_msa_feats(input_sequence)
             sequence_embedding_features = self._process_seqemb_features(alignment_dir)
+        elif msa_dummy:
+            msa_features = make_dummy_msa_feats(input_sequence)
         else:
             msa_features = self._process_msa_feats(alignment_dir, input_sequence, alignment_index)
 
@@ -1044,7 +1047,7 @@ class DataPipeline:
             description,
             is_distillation=is_distillation
         )
-    
+ 
         if feature_dict is not None:
             if custom_template_pdb_id is None:
                 return {**pdb_feats, **feature_dict}

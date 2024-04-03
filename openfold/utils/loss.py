@@ -311,7 +311,6 @@ def fape_loss(
         )
         weighted_bb_loss = bb_loss * config.backbone.weight
 
-    print(out["sm"])
     sc_loss = sidechain_loss(
         out["sm"]["sidechain_frames"],
         out["sm"]["positions"],

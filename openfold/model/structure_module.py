@@ -912,7 +912,7 @@ class StructureModule(nn.Module):
         self.inf = inf
         self.save_intermediates = save_intermediates
         self.is_multimer = is_multimer
-        self.conformation_pred = conformation_pred 
+        self.conformation_pred = conformation_pred #doesn't use z and utilizes an existing rigid representation  
         self.output_rigid = output_rigid
 
         # Buffers to be lazily initialized later
@@ -1078,7 +1078,7 @@ class StructureModule(nn.Module):
             )
 
             scaled_rigids = rigids.scale_translation(self.trans_scale_factor)
-            
+        
             preds = {
                 "frames": scaled_rigids.to_tensor_7(),
                 "sidechain_frames": all_frames_to_global.to_tensor_4x4(),

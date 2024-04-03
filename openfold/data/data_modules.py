@@ -795,9 +795,7 @@ class OpenFoldDatasetCustom(torch.utils.data.Dataset):
         return self.datasets[idx]
 
     def __len__(self):
-        files_in_dir = [name for name in os.listdir(self.datasets.data_dir) if os.path.isfile(os.path.join(self.datasets.data_dir,name))]
-        return len(files_in_dir) 
-
+        return 1 
 
 class OpenFoldMultimerDatasetCustom(torch.utils.data.Dataset):
     """
@@ -811,9 +809,7 @@ class OpenFoldMultimerDatasetCustom(torch.utils.data.Dataset):
         return self.datasets[idx]
 
     def __len__(self):
-        files_in_dir = [name for name in os.listdir(self.datasets.data_dir) if os.path.isfile(os.path.join(self.datasets.data_dir,name))]
-        return len(files_in_dir) 
-
+        return 1 
 
 class OpenFoldBatchCollator:
     def __call__(self, prots):

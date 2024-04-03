@@ -43,9 +43,8 @@ from openfold.utils.validation_metrics import (
     gdt_ha,
 )
 from openfold.utils.import_weights import (
-    import_jax_weights_,
-    import_openfold_weights_,
-    import_openfold_weights_modified_architecture_
+    import_angle_resnet_weights_,
+    import_openfold_weights_
 )
 from scripts.zero_to_fp32 import (
     get_fp32_state_dict_from_zero_checkpoint,
@@ -61,6 +60,20 @@ from intrinsic_ft import modify_with_intrinsic_model
 from collections import defaultdict
 
 from pdb_utils.pdb_utils import align_and_get_rmsd
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  
+logger.propagate = False
+formatter = logging.Formatter('%(asctime)s - %(filename)s - %(levelname)s : %(message)s')
+console_handler = logging.StreamHandler() 
+console_handler.setLevel(logging.INFO) 
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+file_handler = logging.FileHandler('./train_conformation_module.log', mode='w') 
+file_handler.setLevel(logging.INFO) 
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
 
 class OpenFoldWrapper(pl.LightningModule):
     def __init__(self, config):
@@ -100,8 +113,8 @@ class OpenFoldWrapper(pl.LightningModule):
             )
 
         for k,v in other_metrics.items(): 
-            print('metric: %s' % k)
-            print(v)
+            logger.info('metric: %s' % k)
+            logger.info(v)
             self.log(
                 f"{phase}/{k}",
                 torch.mean(v),
@@ -237,7 +250,7 @@ class OpenFoldWrapper(pl.LightningModule):
 
 
         optimizer = torch.optim.Adam(
-            params = self.get_module_params(['conformation_module'], ['all']), 
+            params = self.get_module_params(), 
             lr=learning_rate,
             eps=eps
         )
@@ -247,16 +260,11 @@ class OpenFoldWrapper(pl.LightningModule):
         }
 
     
-    def get_module_params(self, module_to_update, layer_to_update):
-        if layer_to_update != ['all']:
-            n = [name for name, param in self.model.named_parameters() if (any(module in name for module in module_to_update)) and (any(layer in name for layer in layer_to_update))]
-            p = [param for name, param in self.model.named_parameters() if (any(module in name for module in module_to_update)) and (any(layer in name for layer in layer_to_update))]
-        else:
-            n = [name for name, param in self.model.named_parameters() if any(module in name for module in module_to_update)]
-            p = [param for name, param in self.model.named_parameters() if any(module in name for module in module_to_update)]
-
-        print('PARAMETERS TO TUNE:')
-        print(n)
+    def get_module_params(self):
+        n = [name for name, param in self.model.named_parameters() if 'conformation_module' in name and 'angle_resnet' not in name]
+        p = [param for name, param in self.model.named_parameters() if 'conformation_module' in name and 'angle_resnet' not in name]
+        logger.info('PARAMETERS TO TUNE:')
+        logger.info(n)
         return p
 
     def resume_last_lr_step(self, lr_step):
@@ -285,26 +293,25 @@ def main(args):
 
     #######
 
-    if(args.openfold_checkpoint_path and not(args.resume_model_weights_only)):
-        if(os.path.isdir(args.openfold_checkpoint_path)):  
-            last_global_step = get_global_step_from_zero_checkpoint(args.openfold_checkpoint_path)
-        else:
-            sd = torch.load(args.openfold_checkpoint_path)
-            last_global_step = int(sd['global_step'])
-        model_module.resume_last_lr_step(last_global_step)
-        print("Successfully loaded last lr step...")
-    elif(args.openfold_checkpoint_path and args.resume_model_weights_only):
-        if(os.path.isdir(args.openfold_checkpoint_path)):
-            sd = get_fp32_state_dict_from_zero_checkpoint(args.openfold_checkpoint_path)
-        else:
-            sd = torch.load(args.openfold_checkpoint_path)
-        #sd = {('model.'+k):v for k,v in sd.items()}
-        import_openfold_weights_modified_architecture_(model=model_module.model, state_dict=sd)
-        print("Successfully loaded model weights...")
-    elif(args.resume_from_jax_params):
-        model_module.load_from_jax(args.resume_from_jax_params)
-        print(f"Successfully loaded JAX parameters at {args.resume_from_jax_params}...")
 
+    if args.conformation_module_checkpoint_path and not(args.resume_model_weights_only):
+        sd = torch.load(args.conformation_module_checkpoint_path)
+        last_global_step = int(sd['global_step'])
+        model_module.resume_last_lr_step(last_global_step)
+        logger.info("Successfully loaded last lr step...")
+    elif args.conformation_module_checkpoint_path and args.resume_model_weights_only:
+        sd = torch.load(args.conformation_module_checkpoint_path)
+        import_openfold_weights_(model=model_module.model, state_dict=sd)
+        logger.info("Successfully loaded ConformationModule weights...")
+    elif not(args.conformation_module_checkpoint_path):
+        if args.openfold_checkpoint_path:
+            sd = torch.load(args.openfold_checkpoint_path)
+            import_angle_resnet_weights_(model=model_module.model, state_dict=sd)
+            logger.info("Successfully loaded AngleResNet model weights from original model into ConformationModule...")
+        else:
+            logger.info("AngleResNet model weights NOT loaded from original model into ConformationModule...")
+
+    
     #######
 
     if args.fine_tuning_save_dir is None:
@@ -318,18 +325,11 @@ def main(args):
     
     os.makedirs(fine_tuning_save_dir, exist_ok=True)
 
-    
-    '''for m_name, module in dict(model_module.named_modules()).items():
-        print(m_name)
-        print('****')
-        for c_name, layer in dict(module.named_children()).items():
-            print(c_name)'''
-
     # TorchScript components of the model
     if(args.script_modules):
         script_preset_(model_module)
 
-    print("Loading Monomer Data")
+    logger.info("Loading Monomer Data")
     data_module = OpenFoldConformationDataModule(
         config=config.data, 
         batch_seed=args.seed,
@@ -403,7 +403,7 @@ def main(args):
 
     trainer = pl.Trainer.from_argparse_args(
         args,
-        max_epochs = 10,
+        max_epochs = 25,
         log_every_n_steps = 1,
         default_root_dir='./',
         strategy=strategy,
@@ -414,7 +414,7 @@ def main(args):
     if(args.resume_model_weights_only):
         ckpt_path = None
     else:
-        ckpt_path = args.openfold_checkpoint_path
+        ckpt_path = args.conformation_module_checkpoint_path
 
     trainer.fit(
         model_module, 
@@ -537,6 +537,11 @@ if __name__ == "__main__":
         "--openfold_checkpoint_path", type=str, default=None,
         help="Path to a model checkpoint from which to restore training state"
     )
+    parser.add_argument(
+        "--conformation_module_checkpoint_path", type=str, default=None,
+        help="Path to a model checkpoint from which to restore training state"
+    )
+
     parser.add_argument(
         "--resume_model_weights_only", type=bool_type, default=False,
         help="Whether to load just model weights as opposed to training state"
