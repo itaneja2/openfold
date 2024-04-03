@@ -302,6 +302,10 @@ if __name__ == "__main__":
         help="Directory containing mmCIF files to search for templates"
     )
     parser.add_argument(
+        "--rw_data_dir", type=str, default = None, 
+        help="Directory containing mmCIF files generated via random walk"
+    )
+    parser.add_argument(
         "--alignment_dir", type=str, required=True,
         help="""Path to alignment directory. If provided, alignment computation 
                 is skipped and database path arguments are ignored."""
@@ -331,7 +335,8 @@ if __name__ == "__main__":
              checkpoint directory or a .pt file"""
     )
     parser.add_argument(
-        "--num_predictions_per_model", type=int, default=10
+        "--conformation_module_checkpoint_path", type=str, default=None,
+        help="Path to a model checkpoint from which to restore training state"
     )
     parser.add_argument(
         "--save_outputs", action="store_true", default=False,

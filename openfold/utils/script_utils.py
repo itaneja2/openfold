@@ -8,7 +8,7 @@ import numpy
 import torch
 from torch import nn
 
-from openfold.model.model import AlphaFold
+from openfold.model.model import AlphaFold, ConformationFold
 from openfold.np import residue_constants, protein
 from openfold.np.relax import relax
 from openfold.utils.import_weights import (
@@ -151,7 +151,6 @@ def load_model(config, model_device, openfold_checkpoint_path, jax_param_path, e
             f"Successfully loaded JAX parameters at {ckpt_path}..."
         )
 
-
     af_model = af_model.to(model_device)
 
     return af_model
@@ -193,12 +192,42 @@ def load_model_w_intrinsic_param(config, module_config_data, model_device, openf
             f"Successfully loaded JAX parameters at {ckpt_path}..."
         )
 
-
     af_model_w_intrinsic_param = modify_with_intrinsic_model(af_model, module_config_data, config.globals.is_multimer)
     af_model_w_intrinsic_param.intrinsic_parameter = nn.Parameter(intrinsic_parameter)
     af_model_w_intrinsic_param = af_model_w_intrinsic_param.to(model_device)
 
     return af_model_w_intrinsic_param
+
+def load_conformation_module(config, model_device, conformation_module_checkpoint_path):
+ 
+    af_model = AlphaFold(config)
+    af_model = af_model.eval()
+   
+    if openfold_checkpoint_path: 
+        ckpt_path = openfold_checkpoint_path
+        d = torch.load(ckpt_path)
+        if "ema" in d:
+            # The public weights have had this done to them already
+            d = d["ema"]["params"]
+        import_openfold_weights_(model=af_model, state_dict=d)
+        logger.info(
+            f"Loaded OpenFold parameters at {ckpt_path}..."
+        )
+    elif jax_param_path:
+        ckpt_path = jax_param_path
+        checkpoint_basename = get_model_basename(ckpt_path)
+        model_version = "_".join(checkpoint_basename.split("_")[1:])
+        import_jax_weights_(
+            config, af_model, ckpt_path, version=model_version
+        )
+        logger.info(
+            f"Successfully loaded JAX parameters at {ckpt_path}..."
+        )
+
+    af_model = af_model.to(model_device)
+
+    return af_model
+
 
 
 

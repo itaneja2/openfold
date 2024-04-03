@@ -69,7 +69,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO) 
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
-file_handler = logging.FileHandler('./train_conformation_module.log', mode='w') 
+file_handler = logging.FileHandler('./train_conformationfold.log', mode='w') 
 file_handler.setLevel(logging.INFO) 
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
@@ -294,16 +294,16 @@ def main(args):
     #######
 
 
-    if args.conformation_module_checkpoint_path and not(args.resume_model_weights_only):
-        sd = torch.load(args.conformation_module_checkpoint_path)
+    if args.conformationfold_checkpoint_path and not(args.resume_model_weights_only):
+        sd = torch.load(args.conformationfold_checkpoint_path)
         last_global_step = int(sd['global_step'])
         model_module.resume_last_lr_step(last_global_step)
         logger.info("Successfully loaded last lr step...")
-    elif args.conformation_module_checkpoint_path and args.resume_model_weights_only:
-        sd = torch.load(args.conformation_module_checkpoint_path)
+    elif args.conformationfold_checkpoint_path and args.resume_model_weights_only:
+        sd = torch.load(args.conformationfold_checkpoint_path)
         import_openfold_weights_(model=model_module.model, state_dict=sd)
         logger.info("Successfully loaded ConformationModule weights...")
-    elif not(args.conformation_module_checkpoint_path):
+    elif not(args.conformationfold_checkpoint_path):
         if args.openfold_checkpoint_path:
             sd = torch.load(args.openfold_checkpoint_path)
             import_angle_resnet_weights_(model=model_module.model, state_dict=sd)
@@ -414,7 +414,7 @@ def main(args):
     if(args.resume_model_weights_only):
         ckpt_path = None
     else:
-        ckpt_path = args.conformation_module_checkpoint_path
+        ckpt_path = args.conformationfold_checkpoint_path
 
     trainer.fit(
         model_module, 
@@ -538,10 +538,9 @@ if __name__ == "__main__":
         help="Path to a model checkpoint from which to restore training state"
     )
     parser.add_argument(
-        "--conformation_module_checkpoint_path", type=str, default=None,
+        "--conformationfold_checkpoint_path", type=str, default=None,
         help="Path to a model checkpoint from which to restore training state"
     )
-
     parser.add_argument(
         "--resume_model_weights_only", type=bool_type, default=False,
         help="Whether to load just model weights as opposed to training state"

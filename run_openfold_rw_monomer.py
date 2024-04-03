@@ -120,7 +120,7 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
     )
     
     if 'rigid_rotation' in out['sm']:
-        out_tensor = copy.deepcopy(out) #this is to keep a copy of out where values are of type torch.Tensor  
+        out_tensor = copy.deepcopy(out) #this is to keep a copy of out where values are of type torch.Tensor (as opposed to numpy) 
         keys_to_remove = [key for key in out_tensor['sm'] if key not in ['single', 'rigid_rotation', 'rigid_translation']]
         for key in keys_to_remove:
             del out_tensor['sm'][key] 
@@ -1226,11 +1226,6 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--alignment_dir", type=str, required=True,
-        help="""Path to alignment directory. If provided, alignment computation 
-                is skipped and database path arguments are ignored."""
-    )
-    parser.add_argument(
-        "--conformation_dir", type=str, default=None,
         help="""Path to alignment directory. If provided, alignment computation 
                 is skipped and database path arguments are ignored."""
     )

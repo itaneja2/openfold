@@ -1161,12 +1161,6 @@ if __name__ == "__main__":
                 is skipped and database path arguments are ignored."""
     )
     parser.add_argument(
-        "--conformation_dir", type=str, default=None,
-        help="""Path to alignment directory. If provided, alignment computation 
-                is skipped and database path arguments are ignored."""
-    )
-
-    parser.add_argument(
         "--output_dir_base", type=str, default=os.getcwd(),
         help="""Name of the directory in which to output the prediction""",
     )
