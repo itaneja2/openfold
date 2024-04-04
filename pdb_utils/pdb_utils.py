@@ -31,14 +31,14 @@ try:
     from openmm import unit
     from openmm import app as openmm_app
     from openmm.app.internal.pdbstructure import PdbStructure 
-    from openmm.app import PDBFile
+    from openmm.app import PDBFile, PDBxFile
     from openmm.app import Modeller
 except ImportError:
     import simtk.openmm
     from simtk.openmm import unit
     from simtk.openmm import app as openmm_app
     from simtk.openmm.app.internal.pdbstructure import PdbStructure
-    from simtk.openmm.app import PDBFile
+    from simtk.openmm.app import PDBFile, PDBxFile
     from simtk.openmm.app import Modeller
 
 import requests
@@ -195,6 +195,29 @@ def save_pdb_chain(pdb_input_path, pdb_output_path, chain):
         cmd.delete('all')
     return pdb_output_path
 
+def get_rmsd(pdb1_path, pdb2_path, pdb1_chain=None, pdb2_chain=None):
+
+    pdb1_model_name = get_model_name(pdb1_path)
+    pdb2_model_name = get_model_name(pdb2_path)
+    
+    cmd.reinitialize()
+    cmd.load(pdb1_path)
+    cmd.load(pdb2_path)
+
+    s1 = get_pymol_cmd_superimpose(pdb1_model_name, pdb1_chain)
+    s2 = get_pymol_cmd_superimpose(pdb2_model_name, pdb2_chain)
+
+    out = cmd.super(s2,s1) #this superimposes s2 onto s1
+    rmsd = out[0]*10 #convert to angstrom
+
+    if rmsd < 0:
+        logger.info("RMSD < 0")
+        rmsd = 0 
+
+    cmd.delete('all')
+
+    return rmsd 
+
 
 def align_and_get_rmsd(pdb1_path, pdb2_path, pdb1_chain=None, pdb2_chain=None):
 
@@ -223,6 +246,16 @@ def align_and_get_rmsd(pdb1_path, pdb2_path, pdb1_chain=None, pdb2_chain=None):
     cmd.delete('all')
 
     return rmsd 
+
+def fetch_mmcif(pdb_id: str, save_dir: str):
+
+    """
+    Args:
+        pdb_id: e.g 1xyz
+    """     
+    pdb_list = PDBList()
+    cif_fname = pdb_list.retrieve_pdb_file(pdb_id, file_format='mmCif', pdir=save_dir)
+    return cif_fname
 
 
 def fetch_pdb(pdb_id: str, save_dir: str, clean=False) -> str:
@@ -626,9 +659,6 @@ def get_residues_idx_in_seq2_not_seq1(seq1: str, seq2: str):
             num_gaps = seq2_aligned[0:i].count('-')
             residues_idx.append(i-num_gaps)
 
-    #print(residues_idx)
-    #for r in residues_idx:
-    #    print(seq2[r])
     return residues_idx
    
 
@@ -694,20 +724,31 @@ def get_pdb_disordered_residues_idx(af_seq: str, pdb_seq: str, af_disordered_dom
     return pdb_disordered_idx, pdb_disordered_seq 
    
 
-def delete_residues(pdb_input_path: str, pdb_output_path: str, residues_delete_idx: List[int]):
-
-    pdb = PDBFile(pdb_input_path)
+def select_rel_chain_and_delete_residues(cif_input_path: str, cif_output_path: str, chain_id: str, residues_delete_idx: List[int]):
+    
+    pdb = PDBxFile(cif_input_path)
     modeller = Modeller(pdb.topology, pdb.positions)
 
-    residues_delete = [] 
+    chains_to_delete = [] 
+    for chain in modeller.getTopology().chains():
+        if chain.id != chain_id:
+            chains_to_delete.append(chain)
+        else:
+            print('keeping:')
+            print(chain)
+    print('deleting chains:')
+    print(chains_to_delete)
+    modeller.delete(chains_to_delete)    
+
+    residues_to_delete = [] 
     for residue in modeller.topology.residues(): 
         if residue.index in residues_delete_idx:
-            residues_delete.append(residue)
-            print('deleting:')
-            print(residue)
+            residues_to_delete.append(residue)
+    print('deleting:')
+    print(residues_to_delete)
+    modeller.delete(residues_to_delete) 
 
-    modeller.delete(residues_delete) 
-    with open(pdb_output_path, 'w') as f:
-        PDBFile.writeFile(modeller.topology, modeller.positions, f)
+    with open(cif_output_path, 'w') as f:
+        PDBxFile.writeFile(modeller.topology, modeller.positions, f)
 
  

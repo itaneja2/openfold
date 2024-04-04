@@ -45,6 +45,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                  alignment_index: Optional[Any] = None,
                  _output_raw: bool = False,
                  _structure_index: Optional[Any] = None,
+                 custom_template_pdb_id: str = None,
                  ):
         """
             Args:
@@ -103,6 +104,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
         self.alignment_index = alignment_index
         self._output_raw = _output_raw
         self._structure_index = _structure_index
+        self.custom_template_pdb_id = custom_template_pdb_id 
 
         self.supported_exts = [".cif", ".core", ".pdb"]
 
@@ -176,7 +178,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
         if not self._output_raw:
             self.feature_pipeline = feature_pipeline.FeaturePipeline(config)
 
-    def _parse_mmcif(self, path, file_id, chain_id, alignment_dir, alignment_index, feature_dict=None):
+    def _parse_mmcif(self, path, file_id, chain_id, alignment_dir, alignment_index, feature_dict=None, custom_template_pdb_id=None):
         with open(path, 'r') as f:
             mmcif_string = f.read()
 
@@ -197,7 +199,8 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
             chain_id=chain_id,
             alignment_index=alignment_index,
             seqemb_mode=self.config.seqemb_mode.enabled,
-            feature_dict=feature_dict
+            feature_dict=feature_dict,
+            custom_template_pdb_id=custom_template_pdb_id
         )
 
         return data
@@ -253,12 +256,13 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
             path += ext
             if ext == ".cif":
                 data = self._parse_mmcif(
-                    path, file_id, chain_id, alignment_dir, alignment_index, feature_dict,
+                    path, file_id, chain_id, alignment_dir, alignment_index, feature_dict, self.custom_template_pdb_id,
                 )
             elif ext == ".core":
                 data = self.data_pipeline.process_core(
                     path, alignment_dir, alignment_index,
                     seqemb_mode=self.config.seqemb_mode.enabled,
+                    custom_template_pdb_id=self.custom_template_pdb_id,
                 )
             elif ext == ".pdb":
                 structure_index = None
@@ -273,6 +277,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                     _structure_index=structure_index,
                     seqemb_mode=self.config.seqemb_mode.enabled,
                     feature_dict=feature_dict,
+                    custom_template_pdb_id=self.custom_template_pdb_id,
                 )
             else:
                 raise ValueError("Extension branch missing")
@@ -283,6 +288,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                 alignment_dir=alignment_dir,
                 alignment_index=alignment_index,
                 seqemb_mode=self.config.seqemb_mode.enabled,
+                custom_template_pdb_id=self.custom_template_pdb_id,
             )
 
         if self._output_raw:
@@ -928,6 +934,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
                  _distillation_structure_index_path: Optional[str] = None,
                  alignment_index_path: Optional[str] = None,
                  distillation_alignment_index_path: Optional[str] = None,
+                 custom_template_pdb_id: Optional[str] = None, 
                  **kwargs
                  ):
         super(OpenFoldDataModule, self).__init__()
@@ -935,6 +942,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
         self.config = config
         self.template_mmcif_dir = template_mmcif_dir
         self.max_template_date = max_template_date
+        self.custom_template_pdb_id = custom_template_pdb_id 
         self.train_data_dir = train_data_dir
         self.train_alignment_dir = train_alignment_dir
         self.train_chain_data_cache_path = train_chain_data_cache_path
@@ -1002,6 +1010,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
         dataset_gen = partial(OpenFoldSingleDataset,
                               template_mmcif_dir=self.template_mmcif_dir,
                               max_template_date=self.max_template_date,
+                              custom_template_pdb_id=self.custom_template_pdb_id,
                               config=self.config,
                               kalign_binary_path=self.kalign_binary_path,
                               template_release_dates_cache_path=self.template_release_dates_cache_path,

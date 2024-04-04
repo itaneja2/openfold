@@ -715,12 +715,16 @@ def run_rw_pipeline(args):
 
     os.makedirs(output_dir, exist_ok=True)
     alignment_dir = args.alignment_dir
-    file_id = os.listdir(alignment_dir)
-    if len(file_id) > 1:
-        raise ValueError("should only be a single directory under %s" % alignment_dir)
+    msa_files = glob.glob('%s/*.a3m' % alignment_dir)
+    if len(msa_files) == 0:
+        file_id = os.listdir(alignment_dir)
+        if len(file_id) > 1:
+            raise ValueError("should only be a single directory under %s" % alignment_dir)
+        else:
+            file_id = file_id[0] #e.g 1xyz-1xyz
+        alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
     else:
-        file_id = file_id[0] #e.g 1xyz-1xyz
-    alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+        alignment_dir_w_file_id = alignment_dir
     logger.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
     
     if args.fasta_file is None:

@@ -650,9 +650,6 @@ class ConformationFold(nn.Module):
 
         self.globals = config.globals
         self.config = config.model
-        self.template_config = self.config.template
-        self.extra_msa_config = self.config.extra_msa
-        self.seqemb_mode = config.globals.seqemb_mode_enabled
 
         self.conformation_module = StructureModule(
             is_multimer=self.globals.is_multimer,
@@ -757,7 +754,7 @@ class ConformationFold(nn.Module):
         outputs["final_atom_mask"] = feats["atom37_atom_exists"]
         outputs["final_affine_tensor"] = outputs["sm"]["frames"][-1]
 
-        outputs["num_recycles"] = 0
+        outputs["num_recycles"] = torch.tensor(0, device=feats["aatype"].device)
 
         if "asym_id" in batch:
             outputs["asym_id"] = feats["asym_id"]

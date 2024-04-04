@@ -94,8 +94,6 @@ def model_config(
 
         c.loss.fape.backbone.weight = 1
         c.loss.fape.sidechain.weight = 0
-        c.loss.fape.backbone.clamp_distance = 3.5 
-        c.loss.fape.backbone.loss_unit_distance = 3.5 
 
         if 'conformation_module' in ft_method:
             c.data.data_module.data_loaders.num_workers = 2 

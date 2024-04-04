@@ -304,9 +304,9 @@ def run_rw_all_custom_template():
         pdb_id_state_i = str(row['pdb_id_state_i'])
         seg_len = int(row['seg_len'])
 
-        alignment_dir = './conformational_states_training_data/alignment_data/%s' % uniprot_id
-
         for j,template_pdb_id in enumerate([pdb_id_ref, pdb_id_state_i]):
+
+            alignment_dir = './conformational_states_training_data/alignment_data/%s/%s' % (uniprot_id,template_pdb_id)
 
             seed = (index*2)+j
             print(asterisk_line)
@@ -330,43 +330,6 @@ def run_rw_all_custom_template():
                 logger.info("RUNNING %s" % output_dir)'''
             
             run_rw_pipeline(args)
-
-
-def run_rw_all_standard_template():
- 
-    conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
-    conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
-
-    for index,row in conformational_states_df.iterrows():
-
-        logger.info('On row %d of %d' % (index, len(conformational_states_df)))   
-        print(row)
-     
-        uniprot_id = str(row['uniprot_id'])
-        pdb_id_ref = str(row['pdb_id_ref'])
-        pdb_id_state_i = str(row['pdb_id_state_i'])
-        seg_len = int(row['seg_len'])
-        
-        template_pdb_id = None
-        alignment_dir = './conformational_states_training_data/alignment_data/%s' % uniprot_id
-
-        output_dir_base = './conformational_states_training_data/rw_predictions/%s' % uniprot_id 
-        args = gen_args(template_pdb_id, alignment_dir, output_dir_base, index)
-        output_dir = '%s/%s/%s/rw-%s' % (output_dir_base, 'rw', args.module_config, args.rw_hp_config)
-        l1_output_dir = '%s/%s/%s' % (output_dir_base, 'rw', args.module_config)
-        initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir
-        bootstrap_output_dir = '%s/bootstrap' % output_dir
-
-        conformation_info_fname = '%s/conformation_info.pkl' % bootstrap_output_dir
-        pdb_path_initial = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir  
-
-        if os.path.exists(conformation_info_fname) and os.path.exists(pdb_path_initial):
-            logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir)
-            continue 
-        else:
-            logger.info("RUNNING %s" % output_dir)
-        
-        run_rw_pipeline(args)
 
 
 

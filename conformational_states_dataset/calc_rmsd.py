@@ -96,7 +96,7 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, save_dir: 
 def get_rmsd_dict(chunk_num):
     
     print('reading conformation_states_dict.pkl')
-    with open("./data/conformation_states_dict.pkl", "rb") as f:
+    with open("./dataset/conformation_states_dict.pkl", "rb") as f:
         conformation_states_dict = pickle.load(f)
 
     chunked_dict = np.array_split(conformation_states_dict, 100)
@@ -119,7 +119,7 @@ def get_rmsd_dict(chunk_num):
         print(rmsd_dict[uniprot_id])
 
     print('saving rmsd_dict')
-    output_fname = './data/rmsd_dict_chunk_%d.pkl' % chunk_num
+    output_fname = './dataset/rmsd_dict_chunk_%d.pkl' % chunk_num
     with open(output_fname, "wb") as f:
         pickle.dump(rmsd_dict, f)
 

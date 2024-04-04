@@ -642,7 +642,11 @@ if __name__ == "__main__":
         "--template_mmcif_dir", type=str, 
         help="Directory containing mmCIF files to search for templates"
     )
-
+    parser.add_argument(
+        "--custom_template_pdb_id", type=str, default=None, 
+        help="""String of the format PDB-ID_CHAIN-ID (e.g 4ake_A). If provided,
+              this structure is used as the only template."""
+    )
     parser.add_argument(
         "--max_template_date", type=str,
         help='''Cutoff for all templates. In training mode, templates are also 

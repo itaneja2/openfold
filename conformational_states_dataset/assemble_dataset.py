@@ -28,7 +28,7 @@ def get_rmsd_list(rmsd_dict_all, uniprot_id, segment_id):
 
 rmsd_dict_all = {} 
 for i in range(0,100):
-    output_fname = './data/rmsd_dict_chunk_%d.pkl' % i 
+    output_fname = './dataset/rmsd_dict_chunk_%d.pkl' % i 
     with open(output_fname, "rb") as f:
         rmsd_dict_chunk_i = pickle.load(f)
     rmsd_dict_all.update(rmsd_dict_chunk_i)
@@ -37,7 +37,7 @@ for i in range(0,100):
 conformational_states_dataset = [] 
 
 print('reading conformation_states_dict.pkl')
-with open("./data/conformation_states_dict.pkl", "rb") as f:
+with open("./dataset/conformation_states_dict.pkl", "rb") as f:
     conformation_states_dict = pickle.load(f)
 
 for i,conformation_info in enumerate(conformation_states_dict):
@@ -60,5 +60,5 @@ for i,conformation_info in enumerate(conformation_states_dict):
 
 
 df = pd.DataFrame(conformational_states_dataset, columns=['uniprot_id', 'seg_start', 'seg_end', 'pdb_id_ref', 'pdb_id_state_i', 'rmsd_wrt_pdb_id_ref'])
-df.to_csv('./data/conformational_states_df.csv', index=False)
+df.to_csv('./dataset/conformational_states_df.csv', index=False)
 print(df)

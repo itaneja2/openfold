@@ -198,37 +198,22 @@ def load_model_w_intrinsic_param(config, module_config_data, model_device, openf
 
     return af_model_w_intrinsic_param
 
-def load_conformation_module(config, model_device, conformation_module_checkpoint_path):
+def load_conformationfold(config, model_device, conformationfold_checkpoint_path):
  
-    af_model = AlphaFold(config)
-    af_model = af_model.eval()
+    model = ConformationFold(config)
+    model = model.eval()
    
-    if openfold_checkpoint_path: 
-        ckpt_path = openfold_checkpoint_path
-        d = torch.load(ckpt_path)
-        if "ema" in d:
-            # The public weights have had this done to them already
-            d = d["ema"]["params"]
-        import_openfold_weights_(model=af_model, state_dict=d)
-        logger.info(
-            f"Loaded OpenFold parameters at {ckpt_path}..."
-        )
-    elif jax_param_path:
-        ckpt_path = jax_param_path
-        checkpoint_basename = get_model_basename(ckpt_path)
-        model_version = "_".join(checkpoint_basename.split("_")[1:])
-        import_jax_weights_(
-            config, af_model, ckpt_path, version=model_version
-        )
-        logger.info(
-            f"Successfully loaded JAX parameters at {ckpt_path}..."
-        )
+    ckpt_path = conformationfold_checkpoint_path
+    d = torch.load(ckpt_path)
+    sd = d["state_dict"]
+    sd = {k.replace('model.',''):v for k,v in sd.items()}
+    import_openfold_weights_(model=model, state_dict=sd)
+    logger.info(
+        f"Loaded ConformationFold parameters at {ckpt_path}..."
+    )
+    model = model.to(model_device)
 
-    af_model = af_model.to(model_device)
-
-    return af_model
-
-
+    return model
 
 
 def parse_fasta(data):
@@ -312,14 +297,18 @@ def run_model_w_intrinsic_dim(model, batch, tag, output_dir, return_inference_ti
 
 
 def prep_output(out, batch, feature_dict, feature_processor, config_preset, multimer_ri_gap, subtract_plddt):
-    plddt = out["plddt"]
 
-    plddt_b_factors = numpy.repeat(
-        plddt[..., None], residue_constants.atom_type_num, axis=-1
-    )
+    if "plddt" in out:
+        plddt = out["plddt"]
 
-    if subtract_plddt:
-        plddt_b_factors = 100 - plddt_b_factors
+        plddt_b_factors = numpy.repeat(
+            plddt[..., None], residue_constants.atom_type_num, axis=-1
+        )
+
+        if subtract_plddt:
+            plddt_b_factors = 100 - plddt_b_factors
+    else:
+        plddt_b_factors = None 
 
     # Prep protein metadata
     template_domain_names = []

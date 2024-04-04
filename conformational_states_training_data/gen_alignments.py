@@ -59,17 +59,18 @@ for index,row in conformational_states_df.iterrows():
         print(cmd_to_run_str)
         subprocess.run(cmd_to_run)
         
-        curr_folder_name =  './alignment_data/%s' % uniprot_id_from_sifts
-        new_folder_name = './alignment_data/%s' % uniprot_id
-        pdb_curr_folder = '%s/%s' % (curr_folder_name, pdb_id_ref)
-        pdb_new_folder = '%s/%s' % (new_folder_name, pdb_id_ref)
-        if not(os.path.exists(new_folder_name)):
-            print('renaming %s to %s' % (curr_folder_name,new_folder_name))
-            os.rename(curr_folder_name, new_folder_name)
-        else:
-            print('copying %s to %s' % (pdb_curr_folder, new_folder_name))
-            shutil.copytree(pdb_curr_folder, pdb_new_folder, dirs_exist_ok=True)
-            shutil.rmtree(curr_folder_name)
+        if uniprot_id != uniprot_id_from_sifts:
+            curr_folder_name =  './alignment_data/%s' % uniprot_id_from_sifts
+            new_folder_name = './alignment_data/%s' % uniprot_id
+            pdb_curr_folder = '%s/%s' % (curr_folder_name, pdb_id_ref)
+            pdb_new_folder = '%s/%s' % (new_folder_name, pdb_id_ref)
+            if not(os.path.exists(new_folder_name)):
+                print('renaming %s to %s' % (curr_folder_name,new_folder_name))
+                os.rename(curr_folder_name, new_folder_name)
+            else:
+                print('copying %s to %s' % (pdb_curr_folder, new_folder_name))
+                shutil.copytree(pdb_curr_folder, pdb_new_folder, dirs_exist_ok=True)
+                shutil.rmtree(curr_folder_name)
     else:
         print('%s already exists' % features_path)
 
@@ -108,18 +109,19 @@ for index,row in conformational_states_df.iterrows():
         print("RUNNING THE FOLLOWING COMMAND:")
         print(cmd_to_run_str)
         subprocess.run(cmd_to_run)
-        
-        curr_folder_name =  './alignment_data/%s' % uniprot_id_from_sifts
-        new_folder_name = './alignment_data/%s' % uniprot_id
-        pdb_curr_folder = '%s/%s' % (curr_folder_name, pdb_id_state_i)
-        pdb_new_folder = '%s/%s' % (new_folder_name, pdb_id_state_i)
-        if not(os.path.exists(new_folder_name)):
-            print('renaming %s to %s' % (curr_folder_name,new_folder_name))
-            os.rename(curr_folder_name, new_folder_name)
-        else:
-            print('copying %s to %s' % (pdb_curr_folder, new_folder_name))
-            shutil.copytree(pdb_curr_folder, pdb_new_folder, dirs_exist_ok=True)
-            shutil.rmtree(curr_folder_name)
+       
+        if uniprot_id != uniprot_id_from_sifts: 
+            curr_folder_name =  './alignment_data/%s' % uniprot_id_from_sifts
+            new_folder_name = './alignment_data/%s' % uniprot_id
+            pdb_curr_folder = '%s/%s' % (curr_folder_name, pdb_id_state_i)
+            pdb_new_folder = '%s/%s' % (new_folder_name, pdb_id_state_i)
+            if not(os.path.exists(new_folder_name)):
+                print('renaming %s to %s' % (curr_folder_name,new_folder_name))
+                os.rename(curr_folder_name, new_folder_name)
+            else:
+                print('copying %s to %s' % (pdb_curr_folder, new_folder_name))
+                shutil.copytree(pdb_curr_folder, pdb_new_folder, dirs_exist_ok=True)
+                shutil.rmtree(curr_folder_name)
     else:
         print('%s already exists' % features_path)
 

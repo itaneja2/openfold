@@ -55,9 +55,19 @@ import pandas as pd
 from pdb_utils.pdb_utils import align_and_get_rmsd
 from rw_helper_functions import write_timings, remove_files, calc_disordered_percentage
 
-logging.basicConfig(filename='benchmark_monomer.log', filemode='w')
-logger = logging.getLogger(__file__)
-logger.setLevel(level=logging.INFO)
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  
+logger.propagate = False
+formatter = logging.Formatter('%(asctime)s - %(filename)s - %(levelname)s : %(message)s')
+console_handler = logging.StreamHandler() 
+console_handler.setLevel(logging.INFO) 
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+file_handler = logging.FileHandler('./benchmark_monomer.log', mode='w') 
+file_handler.setLevel(logging.INFO) 
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
 
 TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'

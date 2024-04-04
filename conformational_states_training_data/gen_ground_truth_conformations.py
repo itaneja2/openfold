@@ -25,7 +25,8 @@ from pdb_utils.pdb_utils import (
     get_residues_idx_in_seq2_not_seq1,
     get_af_disordered_residues, 
     get_pdb_disordered_residues_idx,
-    delete_residues
+    fetch_mmcif,
+    select_rel_chain_and_delete_residues
 )
 
 asterisk_line = '*********************************'
@@ -65,25 +66,18 @@ for index,row in conformational_states_df.iterrows():
     seg_len = int(row['seg_len'])
 
     alignment_dir = './alignment_data/%s' % uniprot_id
-    output_dir_base = './rw_predictions/%s' % uniprot_id 
+    rw_dir = './rw_predictions/%s' % uniprot_id 
+    pdb_preds = [f for f in glob.glob('%s/*/*/*/initial_pred/*' % rw_dir) if os.path.isfile(f)]
 
-    module_config = 'module_config_0'
-    rw_hp_config = 'hp_config_0-0' 
-    output_dir = '%s/%s/%s/rw-%s' % (output_dir_base, 'rw', module_config, rw_hp_config)
-    l1_output_dir = '%s/%s/%s' % (output_dir_base, 'rw', module_config)
-    initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir
-    bootstrap_output_dir = '%s/bootstrap' % output_dir
-
-    conformation_info_fname = '%s/conformation_info.pkl' % bootstrap_output_dir
-    pdb_pred_path = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir 
-
-    if not(os.path.exists(pdb_pred_path)):
-        print('%s does not exist' % pdb_pred_path)
+    if len(pdb_preds) == 0:
+        print('no pdb predictions exist in %s' % rw_dir)
         continue
     else:
+        print(pdb_preds)
+        pdb_pred_path = pdb_preds[0]
         print('reading %s' % pdb_pred_path) 
 
-    #these pdbs have already been cleaned 
+    #these pdbs have already been cleaned via openMM, so all correspond to chain A in the file  
     pdb_ref_path = '../conformational_states_dataset/pdb_structures/pdb_ref_structure/%s.pdb' % pdb_id_ref
     pdb_state_i_path = '../conformational_states_dataset/pdb_structures/pdb_superimposed_structures/%s.pdb' % pdb_id_state_i
 
@@ -128,20 +122,28 @@ for index,row in conformational_states_df.iterrows():
         print('Residues in PDB, but not AF:')
         print(exclusive_pdb_residues_idx)
 
-        residues_delete_idx = pdb_disordered_idx + exclusive_pdb_residues_idx
+        residues_ignore_idx = pdb_disordered_idx + exclusive_pdb_residues_idx
         print('PDB RESIDUES TO REMOVE IDX:')
-        print(residues_delete_idx)
+        print(residues_ignore_idx)
 
         state_num = uniprot_pdb_dict[uniprot_id].index(rel_pdb_id)
 
         if len(exclusive_pdb_residues_idx) <= 5:
-            pdb_model_name = rel_pdb_path.split('/')[-1]
-            pdb_id = pdb_model_name.split('_')[0]
-            pdb_output_dir = './ground_truth_conformation_data/%s' % uniprot_id
-            os.makedirs(pdb_output_dir, exist_ok=True)
-            pdb_output_path = '%s/%s.pdb' % (pdb_output_dir, pdb_id)
-            print('pdb output path: %s' % pdb_output_path)
-            delete_residues(rel_pdb_path, pdb_output_path, residues_delete_idx)
+            pdb_model_name = rel_pdb_path.split('/')[-1].split('.')[0]
+            pdb_id, chain_id = pdb_model_name.split('_')
+            cif_output_dir = './ground_truth_conformation_data/%s' % uniprot_id
+            os.makedirs(cif_output_dir, exist_ok=True)
+            print('fetching %s' % pdb_id)
+            fetch_mmcif(pdb_id, cif_output_dir)
+            cif_input_path = '%s/%s.cif' % (cif_output_dir, pdb_id)
+            cif_output_path = '%s/%s.cif' % (cif_output_dir, pdb_model_name)
+            os.rename(cif_input_path, cif_output_path)
+            residues_ignore_idx_fname = '%s/%s-residues_ignore_idx.pkl' % (cif_output_dir, pdb_model_name)
+            with open(residues_ignore_idx_fname, 'wb') as f:
+                pickle.dump(residues_ignore_idx, f)
+            #print('cif output path: %s' % cif_output_path)
+            #select_rel_chain_and_delete_residues(cif_input_path, cif_output_path, chain_id, residues_ignore_idx) 
+            #os.remove(cif_input_path) 
         else:
             print("SKIPPING this PDB because more than 5 residues exist in PDB but not in AF")
 

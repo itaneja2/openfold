@@ -798,13 +798,17 @@ def run_rw_pipeline(args):
 
     os.makedirs(output_dir, exist_ok=True)
     alignment_dir = args.alignment_dir
-    file_id = os.listdir(alignment_dir)
-    if len(file_id) > 1:
-        raise ValueError("should only be a single directory under %s" % alignment_dir)
+    msa_files = glob.glob('%s/*.a3m' % alignment_dir)
+    if len(msa_files) == 0: 
+        file_id = os.listdir(alignment_dir)
+        if len(file_id) > 1:
+            raise ValueError("should only be a single directory under %s" % alignment_dir)
+        else:
+            file_id = file_id[0] #e.g 1xyz_A
+            file_id_wo_chain = file_id.split('_')[0]
+        alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
     else:
-        file_id = file_id[0] #e.g 1xyz_A
-        file_id_wo_chain = file_id.split('_')[0]
-    alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+        alignment_dir_w_file_id = alignment_dir
     logger.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
 
     if args.fasta_file is None:
@@ -839,12 +843,6 @@ def run_rw_pipeline(args):
     train_hp_config_data = rw_config_data['hyperparameter']['train'][args.train_hp_config]
     intrinsic_dim = module_config_data['intrinsic_dim']
 
-    if not(args.custom_template_pdb_id): 
-        pattern = "%s/features.pkl" % alignment_dir_w_file_id
-    else:   
-        template_pdb_id, template_chain_id = args.custom_template_pdb_id.split('_')
-        pattern = "%s/features_template=%s.pkl" % (alignment_dir_w_file_id, template_pdb_id)
-
     pattern = "%s/features.pkl" % alignment_dir_w_file_id
     files = glob.glob(pattern, recursive=True)
     if len(files) == 1:
@@ -868,7 +866,7 @@ def run_rw_pipeline(args):
             template_featurizer=template_featurizer,
         )
         feature_dict = data_processor.process_fasta(
-            fasta_path=fasta_file, alignment_dir=alignment_dir_w_file_id, custom_template_pdb_id=args.custom_template_pdb_id
+            fasta_path=fasta_file, alignment_dir=alignment_dir_w_file_id
         )
         features_output_path = os.path.join(alignment_dir_w_file_id, 'features.pkl')
         with open(features_output_path, 'wb') as f:
@@ -1019,12 +1017,13 @@ def run_rw_pipeline(args):
             arg10 = '--config_preset=custom_finetuning-SAID-all'
             arg11 = '--module_config=%s' % args.module_config
             arg12 = '--hp_config=%s' % args.train_hp_config
-            arg13 = '--save_structure_output'
+            arg13 = '--custom_template_pdb_id=%s' % args.custom_template_pdb_id
+            arg14 = '--save_structure_output'
      
             if args.save_training_conformations:       
-                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13]
+                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13,arg14]
             else:
-                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12]
+                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13]
 
             cmd_to_run = ["python", finetune_openfold_path] + script_arguments
             cmd_to_run_str = s = ' '.join(cmd_to_run)

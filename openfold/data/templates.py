@@ -832,10 +832,12 @@ def _read_file(path):
         pdb_id = path.split('/')[-1].split('.')[0]
         print('%s does not exist, fetching...' % pdb_id)
         path = fetch_mmcif(pdb_id, './mmcif_files')
-    with open(path, 'r') as f:
-        file_data = f.read()
-
-    return file_data
+    try:
+        with open(path, 'r') as f:
+            file_data = f.read()
+        return file_data 
+    except FileNotFoundError as e:
+        return None
 
 
 def _process_single_hit(

@@ -270,11 +270,6 @@ class OpenFoldWrapper(pl.LightningModule):
     def resume_last_lr_step(self, lr_step):
         self.last_lr_step = lr_step
 
-    def load_from_jax(self, jax_path):
-        model_basename = get_model_basename(jax_path)
-        model_version = "_".join(model_basename.split("_")[1:])
-        import_jax_weights_(self.config, self.model, jax_path, version=model_version)
-
 
 def main(args):
     
@@ -315,7 +310,7 @@ def main(args):
     #######
 
     if args.fine_tuning_save_dir is None:
-        log_parent_dir = './conformation_module_training_logs'
+        log_parent_dir = './conformationfold_training_logs'
         log_child_dir = 'tmp'
         fine_tuning_save_dir = '%s/%s' % (log_parent_dir, log_child_dir)
     else:
@@ -403,7 +398,7 @@ def main(args):
 
     trainer = pl.Trainer.from_argparse_args(
         args,
-        max_epochs = 25,
+        max_epochs = 10,
         log_every_n_steps = 1,
         default_root_dir='./',
         strategy=strategy,
@@ -546,10 +541,6 @@ if __name__ == "__main__":
         help="Whether to load just model weights as opposed to training state"
     )
     parser.add_argument(
-        "--resume_from_jax_params", type=str, default=None,
-        help="""Path to an .npz JAX parameter file with which to initialize the model"""
-    )
-    parser.add_argument(
         "--log_performance", type=bool_type, default=False,
         help="Measure performance"
     )
@@ -659,9 +650,6 @@ if __name__ == "__main__":
 
     if(str(args.precision) == "16" and args.deepspeed_config_path is not None):
         raise ValueError("DeepSpeed and FP16 training are not compatible")
-
-    if(args.resume_from_jax_params is not None and args.openfold_checkpoint_path is not None):
-        raise ValueError("Choose between loading pretrained Jax-weights and a checkpoint-path")
 
     # This re-applies the training-time filters at the beginning of every epoch
     args.reload_dataloaders_every_n_epochs = 1

@@ -332,6 +332,7 @@ class InvariantPointAttention(nn.Module):
         Returns:
             [*, N_res, C_s] single representation update
         """
+
         if (_offload_inference and inplace_safe):
             z = _z_reference_list
         else:

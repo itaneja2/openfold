@@ -417,6 +417,7 @@ def make_pseudo_beta(protein, prefix=""):
         protein[prefix + "all_atom_positions"],
         protein["template_all_atom_mask" if prefix else "all_atom_mask"],
     )
+         
     return protein
 
 

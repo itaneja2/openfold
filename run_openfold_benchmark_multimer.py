@@ -59,6 +59,19 @@ import pandas as pd
 from rw_helper_functions import write_timings, remove_files, calc_disordered_percentage
 from pdb_utils.pdb_utils import align_and_get_rmsd
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)  
+logger.propagate = False
+formatter = logging.Formatter('%(asctime)s - %(filename)s - %(levelname)s : %(message)s')
+console_handler = logging.StreamHandler() 
+console_handler.setLevel(logging.INFO) 
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+file_handler = logging.FileHandler('./benchmark_multimer.log', mode='w') 
+file_handler.setLevel(logging.INFO) 
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
 
 TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
