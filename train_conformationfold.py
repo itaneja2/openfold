@@ -18,7 +18,7 @@ from pytorch_lightning.plugins.training_type import DeepSpeedPlugin, DDPPlugin
 import torch
 
 from openfold.config import model_config
-from openfold.data.conformation_data_module import OpenFoldConformationDataModule 
+from openfold.data.conformation_data_module import ConformationFoldDataModule 
 from openfold.data import feature_pipeline
 from openfold.model.model import ConformationFold
 from openfold.model.torchscript import script_preset_
@@ -325,7 +325,7 @@ def main(args):
         script_preset_(model_module)
 
     logger.info("Loading Monomer Data")
-    data_module = OpenFoldConformationDataModule(
+    data_module = ConformationFoldDataModule(
         config=config.data, 
         batch_seed=args.seed,
         **vars(args)
@@ -398,7 +398,7 @@ def main(args):
 
     trainer = pl.Trainer.from_argparse_args(
         args,
-        max_epochs = 10,
+        max_epochs = 100,
         log_every_n_steps = 1,
         default_root_dir='./',
         strategy=strategy,

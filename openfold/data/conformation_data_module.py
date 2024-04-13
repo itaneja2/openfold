@@ -35,7 +35,7 @@ sys.path.insert(0, '../../')
 from pdb_utils.pdb_utils import get_rmsd
 
 
-class OpenFoldSingleConformationDataset(torch.utils.data.Dataset):
+class ConformationFoldSingleDataset(torch.utils.data.Dataset):
     def __init__(self,
                  ground_truth_data_dir: str,
                  rw_data_dir: str,
@@ -96,7 +96,7 @@ class OpenFoldSingleConformationDataset(torch.utils.data.Dataset):
                 mode:
                     "train", "val", or "predict"
         """
-        super(OpenFoldSingleConformationDataset, self).__init__()
+        super(ConformationFoldSingleDataset, self).__init__()
         self.ground_truth_data_dir = ground_truth_data_dir
         self.rw_data_dir = rw_data_dir 
         self.alignment_dir = alignment_dir
@@ -201,7 +201,7 @@ class OpenFoldSingleConformationDataset(torch.utils.data.Dataset):
             _, seq = parse_fasta(fasta_data)
             seq = seq[0]
 
-            #print('rw conformation: %s' % rw_conformation_path)
+            print('rw conformation: %s' % rw_conformation_path)
 
             rw_conformation_name = rw_conformation_path.split('/')[-1].split('.')[0]
             rw_conformation_name = rw_conformation_name.replace('_unrelaxed','')
@@ -220,6 +220,7 @@ class OpenFoldSingleConformationDataset(torch.utils.data.Dataset):
             for gtc in ground_truth_conformations:
                 rmsd = get_rmsd(rw_conformation_path, gtc)
                 rmsd_dict[gtc] = rmsd
+            print(rmsd_dict)
             nearest_gtc_path = min(rmsd_dict, key=rmsd_dict.get) 
 
             residues_ignore_idx_fname = nearest_gtc_path.replace('.cif', '-residues_ignore_idx.pkl')
@@ -277,7 +278,7 @@ class OpenFoldSingleConformationDataset(torch.utils.data.Dataset):
 
 
 
-class OpenFoldConformationDataModule(pl.LightningDataModule):
+class ConformationFoldDataModule(pl.LightningDataModule):
     def __init__(self,
                  config: mlc.ConfigDict,
                  template_mmcif_dir: str,
@@ -305,7 +306,7 @@ class OpenFoldConformationDataModule(pl.LightningDataModule):
                  distillation_alignment_index_path: Optional[str] = None,
                  **kwargs
                  ):
-        super(OpenFoldConformationDataModule, self).__init__()
+        super(ConformationFoldDataModule, self).__init__()
 
         self.config = config
         self.template_mmcif_dir = template_mmcif_dir
@@ -375,7 +376,7 @@ class OpenFoldConformationDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         # Most of the arguments are the same for the three datasets 
-        dataset_gen = partial(OpenFoldSingleConformationDataset,
+        dataset_gen = partial(ConformationFoldSingleDataset,
                               template_mmcif_dir=self.template_mmcif_dir,
                               max_template_date=self.max_template_date,
                               config=self.config,

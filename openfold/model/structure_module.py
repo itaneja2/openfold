@@ -928,18 +928,33 @@ class StructureModule(nn.Module):
         self.linear_in = Linear(self.c_s, self.c_s)
 
         ipa = InvariantPointAttention if not self.is_multimer else InvariantPointAttentionMultimer
-        self.ipa = ipa(
-            self.c_s,
-            self.c_z,
-            self.c_ipa,
-            self.no_heads_ipa,
-            self.no_qk_points,
-            self.no_v_points,
-            inf=self.inf,
-            eps=self.epsilon,
-            is_multimer=self.is_multimer,
-            conformation_pred=self.conformation_pred
-        )
+
+        if not self.is_multimer:
+            self.ipa = ipa(
+                self.c_s,
+                self.c_z,
+                self.c_ipa,
+                self.no_heads_ipa,
+                self.no_qk_points,
+                self.no_v_points,
+                inf=self.inf,
+                eps=self.epsilon,
+                is_multimer=self.is_multimer,
+                conformation_pred=self.conformation_pred,
+            )
+        else:
+            self.ipa = ipa(
+                self.c_s,
+                self.c_z,
+                self.c_ipa,
+                self.no_heads_ipa,
+                self.no_qk_points,
+                self.no_v_points,
+                inf=self.inf,
+                eps=self.epsilon,
+                is_multimer=self.is_multimer,
+            )
+
 
         self.ipa_dropout = nn.Dropout(self.dropout_rate)
         self.layer_norm_ipa = LayerNorm(self.c_s)

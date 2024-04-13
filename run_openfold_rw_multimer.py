@@ -228,14 +228,13 @@ def update_config(
         config.model.extra_msa.extra_msa_stack.chain_mask_col = chain_mask_col_all
         config.model.evoformer_stack.chain_mask_row = chain_mask_row_all 
         config.model.evoformer_stack.chain_mask_col = chain_mask_col_all
+        config.custom_fine_tuning.num_chains = num_chains
     else:
         config.model.extra_msa.extra_msa_stack.chain_mask_row = None
         config.model.extra_msa.extra_msa_stack.chain_mask_col = None
         config.model.evoformer_stack.chain_mask_row = None 
         config.model.evoformer_stack.chain_mask_col = None 
-
-    config.custom_fine_tuning.num_chains = num_chains
-    
+ 
     return config
 
 

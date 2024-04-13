@@ -84,9 +84,7 @@ for index,row in conformational_states_df.iterrows():
     print('sequence length: %d, seg_len: %d' % (len(seq), seg_len))
 
 
-####we only ran for reference so far###
 
-'''
 for index,row in conformational_states_df.iterrows():
 
     print('On row %d of %d' % (index, len(conformational_states_df)))   
@@ -136,4 +134,4 @@ for index,row in conformational_states_df.iterrows():
 
 
 print('FINISHED PDB_STATE_I')
-'''
+

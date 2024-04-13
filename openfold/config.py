@@ -92,18 +92,19 @@ def model_config(
         c.custom_fine_tuning.loss_type = loss_type
         c.custom_fine_tuning.ft_method = ft_method
 
-        c.loss.fape.backbone.weight = 1
-        c.loss.fape.sidechain.weight = 0
+        c.loss.fape.backbone.weight = 1.
+        c.loss.fape.sidechain.weight = 0.0
+        c.loss.supervised_chi.weight = 0.0
+        c.loss.plddt_loss.weight = 0.0
 
         if 'conformation_module' in ft_method:
-            c.data.data_module.data_loaders.num_workers = 2 
-            c.data.data_module.data_loaders.batch_size = 32
+            c.data.data_module.data_loaders.num_workers = 1 
+            c.data.data_module.data_loaders.batch_size = 1
             c.model.use_conformation_module = True
             c.data.common.max_recycling_iters = 0 
             c.loss.distogram.weight = 0.0
             c.loss.masked_msa.weight = 0.0
-            c.loss.supervised_chi.weight = 0.0
-            c.loss.plddt_loss.weight = 0.0
+            c.loss.violation.weight = .1 
 
     elif name == "finetuning":
         # AF2 Suppl. Table 4, "finetuning" setting
@@ -248,8 +249,12 @@ def model_config(
             c.custom_fine_tuning.ft_method = ft_method
             c.custom_fine_tuning.model_name = model_name
             c.data.data_module.data_loaders.num_workers = 1
-            c.loss.fape.intra_chain_backbone.weight = 0 
-            c.loss.fape.interface_backbone.weight = 1 
+            c.loss.fape.intra_chain_backbone.weight = 0.0 
+            c.loss.fape.interface_backbone.weight = 1. 
+            c.loss.supervised_chi.weight = 0.0
+            c.loss.tm.weight = 0.0
+            c.loss.chain_center_of_mass.weight = 0.0
+            c.loss.plddt_loss.weight = 0.0
         # TODO: Change max_msa_clusters and max_extra_msa to multimer feats within model
         if re.fullmatch("^model_[1-5]_multimer(_v2)?$", name):
             #c.model.input_embedder.num_msa = 252

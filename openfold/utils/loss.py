@@ -55,11 +55,57 @@ def sigmoid_cross_entropy(logits, labels):
     return loss
 
 
+def r_loss(
+    r: torch.Tensor, # [*, N, 1]
+    r_gt: torch.Tensor,  # [*, N, 1]
+):
+
+    # [*, N, 2]
+    r_l2 = torch.sqrt(
+        torch.sum((r - r_gt) ** 2, dim=-1)
+    )
+    loss = torch.mean(r_l2, dim=(-1, -2))
+    loss = torch.mean(loss)
+
+    return loss 
+
+
+def theta_phi_loss(
+    unnormalized_theta_phi: torch.Tensor, # [*, N, 2, 2]
+    normalized_theta_phi: torch.Tensor,  # [*, N, 2, 2]
+    normalized_theta_phi_gt: torch.Tensor,  # [*, N, 2, 2]
+    eps: float = 1e-4
+):
+
+    # [*, N, 2]
+    theta_phi_norm = torch.sqrt(
+        torch.sum(unnormalized_theta_phi ** 2, dim=-1) + eps
+    )
+    
+    # [*, N, 2]
+    theta_phi_l2 = torch.sqrt(
+        torch.sum((normalized_theta_phi - normalized_theta_phi_gt) ** 2, dim=-1)
+    )
+
+
+    # [*]
+    l_theta_phi = torch.mean(theta_phi_l2, dim=(-1, -2))
+    l_angle_norm = torch.mean(torch.abs(norm - 1), dim=(-1, -2))
+
+    an_weight = 0.02
+    loss = l_theta_phi + an_weight * l_angle_norm
+    loss = torch.mean(loss)
+
+    return loss 
+
+
+
 def torsion_angle_loss(
     a,  # [*, N, 7, 2]
     a_gt,  # [*, N, 7, 2]
     a_alt_gt,  # [*, N, 7, 2]
 ):
+
     # [*, N, 7]
     norm = torch.norm(a, dim=-1)
 
@@ -131,6 +177,9 @@ def compute_fape(
         torch.sum((local_pred_pos - local_target_pos) ** 2, dim=-1) + eps
     )
 
+    #print(error_dist)
+    #print(error_dist.shape)
+
     if l1_clamp_distance is not None:
         error_dist = torch.clamp(error_dist, min=0, max=l1_clamp_distance)
 
@@ -195,6 +244,9 @@ def backbone_loss(
     # outright. This one hasn't been composed a bunch of times, though, so
     # it might be fine.
     gt_aff = Rigid.from_tensor_4x4(backbone_rigid_tensor)
+
+    print(backbone_rigid_mask)
+    print(backbone_rigid_mask.shape)
 
     fape_loss = compute_fape(
         pred_aff,
@@ -311,13 +363,15 @@ def fape_loss(
         )
         weighted_bb_loss = bb_loss * config.backbone.weight
 
-    sc_loss = sidechain_loss(
-        out["sm"]["sidechain_frames"],
-        out["sm"]["positions"],
-        **{**batch, **config.sidechain},
-    )
-
-    loss = weighted_bb_loss + config.sidechain.weight * sc_loss
+    if config.sidechain.weight > 0:
+        sc_loss = sidechain_loss(
+            out["sm"]["sidechain_frames"],
+            out["sm"]["positions"],
+            **{**batch, **config.sidechain},
+        )
+        loss = weighted_bb_loss + config.sidechain.weight * sc_loss
+    else:
+        loss = weighted_bb_loss
 
     # Average over the batch dimension
     loss = torch.mean(loss)
