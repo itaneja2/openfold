@@ -639,6 +639,74 @@ def get_flanking_residues_idx(seq1: str, seq2: str):
     return flanking_residues_dict
 
 
+def get_starting_idx_aligned(aligned_seq):
+    #becase of issues with aligning n/c terminal regions of sequences, we want to start where there are 
+    #consecutive hits
+    for i in range(0,len(aligned_seq)-1):
+        if aligned_seq[i] != '-':
+            if aligned_seq[i+1] != '-':
+                return i 
+    
+    return -1
+
+
+def get_ending_idx_aligned(aligned_seq):
+    #becase of issues with aligning n/c terminal regions of sequences, we want to start where there are 
+    #consecutive hits
+    for i in range(len(aligned_seq)-1,1,-1):
+        if aligned_seq[i] != '-':
+            if aligned_seq[i-1] != '-':
+                return i 
+    
+    return -1
+
+def get_common_aligned_residues_idx_excluding_flanking_regions(seq1: str, seq2: str):
+
+    seq1_start_idx = get_starting_idx_aligned(seq1)
+    seq2_start_idx = get_starting_idx_aligned(seq2)
+
+    seq1_end_idx = get_ending_idx_aligned(seq1)
+    seq2_end_idx = get_ending_idx_aligned(seq2)
+
+    start_idx = max(seq1_start_idx, seq2_start_idx)
+    end_idx = min(seq1_end_idx, seq2_end_idx)
+
+    return start_idx, end_idx
+    
+
+def get_residues_idx_in_seq1_and_seq2(seq1: str, seq2: str):
+    """
+    seq1: MS-E-
+    seq2: MSDER
+    return: [0,1,2], [0,1,3]
+    """ 
+
+    alignments = pairwise2.align.globalxx(seq1, seq2)
+    print('Aligned seq1 with seq2:')
+    print(format_alignment(*alignments[0]))
+
+    seq1_aligned = alignments[0].seqA
+    seq2_aligned = alignments[0].seqB
+
+    start_aligned_to_original_idx, end_aligned_to_original_idx = get_common_aligned_residues_idx_excluding_flanking_regions(seq1_aligned, seq2_aligned)
+
+    print('start_idx: %s' % start_aligned_to_original_idx)
+    print('end_idx: %s' % end_aligned_to_original_idx)
+
+    seq1_residues_idx = [] 
+    seq2_residues_idx = [] 
+
+    for i in range(start_aligned_to_original_idx, end_aligned_to_original_idx+1):
+        if seq1_aligned[i] != '-' and seq2_aligned[i] != '-':
+            num_gaps_seq1 = seq1_aligned[0:i].count('-')
+            num_gaps_seq2 = seq2_aligned[0:i].count('-')
+            seq1_residues_idx.append(i-num_gaps_seq1)
+            seq2_residues_idx.append(i-num_gaps_seq2)
+
+    return seq1_residues_idx, seq2_residues_idx
+
+
+
 def get_residues_idx_in_seq2_not_seq1(seq1: str, seq2: str):
     """
     seq1: MS-E-
@@ -662,8 +730,33 @@ def get_residues_idx_in_seq2_not_seq1(seq1: str, seq2: str):
     return residues_idx
    
 
-def get_af_disordered_residues(pdb_path: str):
-    """pdb_path assumes AF structure"""
+def align_seqs(seq1, seq2):
+
+    alignments = pairwise2.align.globalxx(seq1, seq2)
+    print('Aligned PDB1 seq with PDB2 seq:')
+    print(format_alignment(*alignments[0]))
+    seq1_aligned = alignments[0].seqA
+    seq2_aligned = alignments[0].seqB
+
+    seq1_aligned_to_original_idx_mapping = {} #maps each index in pdb_seq_aligned to the corresponding index in pdb_seq (i.e accounting for gaps) 
+    for i in range(0,len(seq1_aligned)):
+        if seq1_aligned[i] != '-': 
+            seq1_aligned_to_original_idx_mapping[i] = i-seq1_aligned[0:i].count('-')
+
+    seq2_aligned_to_original_idx_mapping = {} #maps each index in pdb_seq_aligned to the corresponding index in pdb_seq (i.e accounting for gaps) 
+    for i in range(0,len(seq2_aligned)):
+        if seq2_aligned[i] != '-': 
+            seq2_aligned_to_original_idx_mapping[i] = i-seq2_aligned[0:i].count('-')
+
+    print(seq1_aligned_to_original_idx_mapping)
+    print(seq2_aligned_to_original_idx_mapping)
+
+    return seq1_aligned, seq2_aligned, seq1_aligned_to_original_idx_mapping, seq2_aligned_to_original_idx_mapping
+
+
+def get_af_disordered_domains(pdb_path: str):
+    """pdb_path assumes AF structure. for region to be considered disordered domain, must be >=3 residues in length
+    """
     #plddt_threshold sourced from https://onlinelibrary.wiley.com/doi/10.1002/pro.4466
 
     cif_path = convert_pdb_to_mmcif(pdb_path, './cif_temp')
@@ -699,7 +792,7 @@ def get_af_disordered_residues(pdb_path: str):
     return af_disordered_domains_idx, af_disordered_domains_seq
     
 
-def get_pdb_disordered_residues_idx(af_seq: str, pdb_seq: str, af_disordered_domains_idx: List[List[int]]):
+def get_pdb_disordered_domains(af_seq: str, pdb_seq: str, af_disordered_domains_idx: List[List[int]]):
 
     alignments = pairwise2.align.globalxx(af_seq, pdb_seq)
     print('Aligned AF seq with PDB seq:')
@@ -707,22 +800,213 @@ def get_pdb_disordered_residues_idx(af_seq: str, pdb_seq: str, af_disordered_dom
     af_seq_aligned = alignments[0].seqA
     pdb_seq_aligned = alignments[0].seqB
 
-    pdb_disordered_idx = [] 
-    pdb_disordered_seq = [] 
+    af_seq_original_to_aligned_idx_mapping = {} #maps each index in af_seq to the corresponding index in af_seq_aligned (i.e accounting for gaps) 
+    for i in range(0,len(af_seq_aligned)):
+        if af_seq_aligned[i] != '-':
+            af_seq_original_to_aligned_idx_mapping[i-af_seq_aligned[0:i].count('-')] = i 
+
+    pdb_disordered_domains_idx = [] 
+    pdb_disordered_domains_seq = [] 
+
+    #if ith residue of af_seq is disordered
+    #then, to get the corresponding index in pdb_seq
+    #we need to subtract num_gaps(pdb_seq_aligned[0:i]) from i 
 
     for i in range(0,len(af_disordered_domains_idx)):
         d = af_disordered_domains_idx[i]
-        start_idx = d[0]
-        end_idx = d[1]
-        for j in range(start_idx, end_idx+1):
+        af_start_idx = d[0]
+        af_end_idx = d[1]
+        af_start_idx_aligned = af_seq_original_to_aligned_idx_mapping[af_start_idx]
+        af_end_idx_aligned = af_seq_original_to_aligned_idx_mapping[af_end_idx]
+        for j in range(af_start_idx_aligned, af_end_idx_aligned+1): 
             if pdb_seq_aligned[j] != '-':
                 num_gaps = pdb_seq_aligned[0:j].count('-')
-                pdb_seq_idx = j-num_gaps
-                pdb_disordered_idx.append(pdb_seq_idx)
-                pdb_disordered_seq.append(pdb_seq[pdb_seq_idx])
+                pdb_seq_original_idx = j-num_gaps
+                pdb_disordered_domains_idx.append(pdb_seq_original_idx)
+                pdb_disordered_domains_seq.append(pdb_seq[pdb_seq_original_idx])
 
-    return pdb_disordered_idx, pdb_disordered_seq 
+    return pdb_disordered_domains_idx, pdb_disordered_domains_seq 
    
+
+def get_ca_coords_dict(pdb_path):
+
+    parser = PDBParser()
+    structure = parser.get_structure('protein', pdb_path)
+    model = structure[0]
+    chain = model['A']
+    
+    residue_idx_ca_coords_dict = {} #maps residue index to ca coordinates 
+
+    for residue in chain:
+        if 'CA' in residue:
+            ca_atom = residue['CA']
+            ca_coords = ca_atom.get_coord()
+            residue_name = residue.get_resname()
+            residue_idx = residue.get_id()[1]-1
+            residue_idx_ca_coords_dict[residue_idx] = (ca_coords[0], ca_coords[1], ca_coords[2], residue_name)
+
+    return residue_idx_ca_coords_dict
+
+
+def get_residue_idx_below_rmsf_threshold(pdb1_seq, pdb2_seq, pdb1_path, pdb2_path, pdb1_include_idx, pdb2_include_idx, pdb1_exclude_idx, pdb2_exclude_idx, rmsf_threshold = 2.0):
+
+    pdb1_seq_aligned, pdb2_seq_aligned, pdb1_seq_aligned_to_original_idx_mapping, pdb2_seq_aligned_to_original_idx_mapping = align_seqs(pdb1_seq, pdb2_seq)
+
+    pdb1_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb1_path)
+    pdb2_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb2_path)
+ 
+    pdb1_ca_pos_aligned = []
+    pdb2_ca_pos_aligned = [] 
+
+    pdb1_residue_idx_below_threshold = []
+    pdb2_residue_idx_below_threshold = [] 
+
+    for i in range(0,len(pdb1_seq_aligned)):
+        if (pdb1_seq_aligned[i] == pdb2_seq_aligned[i]) and (pdb1_seq_aligned[i] != '-'):
+            pdb1_seq_original_idx = pdb1_seq_aligned_to_original_idx_mapping[i]
+            pdb2_seq_original_idx = pdb2_seq_aligned_to_original_idx_mapping[i]
+            valid_idx = (pdb1_seq_original_idx in pdb1_include_idx) and (pdb2_seq_original_idx in pdb2_include_idx) and (pdb1_seq_original_idx not in pdb1_exclude_idx) and (pdb2_seq_original_idx not in pdb2_exclude_idx)
+            if valid_idx:
+                print("aligned idx for pdb1: %d, seq idx: %d:" % (i, pdb1_seq_original_idx))
+                print("aligned idx for pdb2: %d, seq idx: %d:" % (i, pdb2_seq_original_idx))
+                pdb1_ca_pos = list(pdb1_residue_idx_ca_coords_dict[pdb1_seq_original_idx][0:3])
+                pdb2_ca_pos = list(pdb2_residue_idx_ca_coords_dict[pdb2_seq_original_idx][0:3])
+                curr_ca_rmsf = np.linalg.norm(np.array(pdb1_ca_pos) - np.array(pdb2_ca_pos))
+                print(curr_ca_rmsf)
+                if curr_ca_rmsf < rmsf_threshold:
+                    pdb1_residue_idx_below_threshold.append(pdb1_seq_original_idx)
+                    pdb2_residue_idx_below_threshold.append(pdb2_seq_original_idx)
+                pdb1_ca_pos_aligned.append(pdb1_ca_pos)
+                pdb2_ca_pos_aligned.append(pdb2_ca_pos)
+                
+    pdb1_ca_pos_aligned = np.array(pdb1_ca_pos_aligned)
+    pdb2_ca_pos_aligned = np.array(pdb2_ca_pos_aligned)
+
+    ca_rmsf = np.linalg.norm(pdb1_ca_pos_aligned-pdb2_ca_pos_aligned, axis=1)
+
+    print(ca_rmsf)
+    print(pdb1_residue_idx_below_threshold)
+    print(pdb2_residue_idx_below_threshold)
+
+    return pdb1_residue_idx_below_threshold, pdb2_residue_idx_below_threshold
+
+def get_residues_ignore_idx_between_pdb_conformations(state1_pdb_path, state2_pdb_path, state1_af_path, state2_af_path):
+
+    """Ignore residues based on:
+        1. disorder
+        2. common residues
+        3. rmsf threshold
+    """  
+
+    state1_pdb_seq = get_pdb_path_seq(state1_pdb_path, None)
+    state2_pdb_seq = get_pdb_path_seq(state2_pdb_path, None)
+    state1_af_seq = get_pdb_path_seq(state1_af_path, None)
+    state2_af_seq = get_pdb_path_seq(state2_af_path, None)
+
+    try: 
+        state1_af_disordered_domains_idx, _ = get_af_disordered_domains(state1_af_seq)      
+    except ValueError as e:
+        print('TROUBLE PARSING AF PREDICTION') 
+        print(e)
+        state1_af_disordered_domains_idx = [] 
+
+    try: 
+        state2_af_disordered_domains_idx, _ = get_af_disordered_domains(state2_af_seq)      
+    except ValueError as e:
+        print('TROUBLE PARSING AF PREDICTION') 
+        print(e)
+        state2_af_disordered_domains_idx = [] 
+
+    state1_pdb_disordered_domains_idx, _ = get_pdb_disordered_domains(state1_af_seq, state1_pdb_seq, state1_af_disordered_domains_idx) 
+    state2_pdb_disordered_domains_idx, _ = get_pdb_disordered_domains(state2_af_seq, state2_pdb_seq, state2_af_disordered_domains_idx) 
+    
+    state1_pdb_exclusive_residues_idx = get_residues_idx_in_seq2_not_seq1(state1_af_seq, state1_pdb_seq)
+    if len(state1_pdb_exclusive_residues_idx) > 0:
+        print('Residues in PDB, but not AF:')
+        print(pdb_exclusive_residues_idx)
+        print('This should be empty')
+        print('exiting...')
+        sys.exit()
+           
+    state1_pdb_common_residues_idx, state2_pdb_common_residues_idx = get_residues_idx_in_seq1_and_seq2(state1_pdb_seq, state2_pdb_seq)
+    state1_pdb_rmsf_below_threshold_idx, state2_pdb_rmsf_below_threshold_idx = get_residue_idx_below_rmsf_threshold(
+                                                                                                state1_pdb_seq,
+                                                                                                state2_pdb_seq,
+                                                                                                state1_pdb_path,
+                                                                                                state2_pdb_path,
+                                                                                                state1_pdb_common_residues_idx,
+                                                                                                state2_pdb_common_residues_idx,
+                                                                                                state1_pdb_disordered_domains_idx,
+                                                                                                state2_pdb_disordered_domains_idx)
+
+    state1_pdb_common_residues_idx_complement = sorted(list(set(range(len(state1_pdb_seq))) - set(state1_pdb_common_residues_idx)))
+    state2_pdb_common_residues_idx_complement = sorted(list(set(range(len(state2_pdb_seq))) - set(state2_pdb_common_residues_idx)))
+
+    print('STATE 1 PDB disordered:')
+    print(state1_pdb_disordered_domains_idx)
+    print('STATE 1 PDB intersection complement:')
+    print(state1_pdb_common_residues_idx_complement)
+    print('STATE 1 PDB below RMSF:')
+    print(state1_pdb_rmsf_below_threshold_idx)
+
+    print('STATE 2 PDB disordered:')
+    print(state2_pdb_disordered_domains_idx)
+    print('STATE 2 PDB intersection complement:')
+    print(state2_pdb_common_residues_idx_complement)
+    print('STATE 2 PDB below RMSF:')
+    print(state2_pdb_rmsf_below_threshold_idx)
+    
+    state1_pdb_residues_ignore_idx = state1_pdb_disordered_domains_idx+state1_pdb_common_residues_idx_complement+state1_pdb_rmsf_below_threshold_idx
+    state2_pdb_residues_ignore_idx = state2_pdb_disordered_domains_idx+state2_pdb_common_residues_idx_complement+state2_pdb_rmsf_below_threshold_idx
+
+    state1_pdb_residues_ignore_idx = list(set(state1_pdb_residues_ignore_idx))
+    state2_pdb_residues_ignore_idx = list(set(state2_pdb_residues_ignore_idx))
+
+    return state1_pdb_residues_ignore_idx, state2_pdb_residues_ignore_idx
+ 
+
+def cartesian_to_spherical(ca_pos_diff):
+    """Converts a cartesian coordinate (x, y, z) into a spherical one (radius, theta, phi)."""
+
+    #utilizing this convention: https://dynref.engr.illinois.edu/rvs.html
+    radius = np.linalg.norm(ca_pos_diff, axis=1)
+    xy_norm = np.linalg.norm(ca_pos_diff[:,0:2], axis=1)
+    phi = np.arctan2(xy_norm, ca_pos_diff[:,2])
+    theta = np.arctan2(ca_pos_diff[:,1], ca_pos_diff[:,0])
+
+    return phi, theta, radius
+
+
+def get_spherical_coordinate_vector_diff(af_pred_path, pdb_path, pdb_residues_ignore_idx):
+
+    af_pred_seq = get_pdb_path_seq(af_pred_path, None)
+    pdb_seq = get_pdb_path_seq(pdb_path, None)
+    af_pred_seq_aligned, pdb_seq_aligned, af_pred_seq_aligned_to_original_idx_mapping, pdb_seq_aligned_to_original_idx_mapping = align_seqs(af_pred_seq, pdb_seq)
+
+    af_pred_residue_idx_ca_coords_dict = get_ca_coords_dict(af_pred_path)
+    pdb_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb_path)
+    
+    pdb_ca_pos_aligned = []
+    af_pred_ca_pos_aligned = [] 
+
+    for i in range(0,len(pdb_seq_aligned)):
+        if (pdb_seq_aligned[i] == af_pred_seq_aligned[i]) and (pdb_seq_aligned[i] != '-'):
+            pdb_seq_original_idx = pdb_seq_aligned_to_original_idx_mapping[i]
+            af_pred_seq_original_idx = af_pred_seq_aligned_to_original_idx_mapping[i]
+            if pdb_seq_original_idx not in pdb_residues_ignore_idx:
+                pdb_ca_pos = list(pdb_residue_idx_ca_coords_dict[pdb_seq_original_idx][0:3])
+                af_pred_ca_pos = list(af_residue_idx_ca_coords_dict[af_pred_seq_original_idx][0:3])
+                pdb_ca_pos_aligned.append(pdb_ca_pos)
+                af_pred_ca_pos_aligned.append(af_pred_ca_pos)
+
+    pdb_ca_pos_aligned = np.array(pdb_ca_pos_aligned)
+    af_pred_ca_pos_aligned = np.array(af_pred_ca_pos_aligned)
+
+    ca_pos_diff = pdb_ca_pos_aligned - af_pred_ca_pos_aligned
+    phi, theta, radius = cartesian_to_spherical(ca_pos_diff)
+
+    return np.array([phi, theta, radius])
+
 
 def select_rel_chain_and_delete_residues(cif_input_path: str, cif_output_path: str, chain_id: str, residues_delete_idx: List[int]):
     
@@ -751,4 +1035,3 @@ def select_rel_chain_and_delete_residues(cif_input_path: str, cif_output_path: s
     with open(cif_output_path, 'w') as f:
         PDBxFile.writeFile(modeller.topology, modeller.positions, f)
 
- 
