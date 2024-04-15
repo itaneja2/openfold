@@ -904,14 +904,14 @@ def get_residues_ignore_idx_between_pdb_conformations(state1_pdb_path, state2_pd
     state2_af_seq = get_pdb_path_seq(state2_af_path, None)
 
     try: 
-        state1_af_disordered_domains_idx, _ = get_af_disordered_domains(state1_af_seq)      
+        state1_af_disordered_domains_idx, _ = get_af_disordered_domains(state1_af_path)      
     except ValueError as e:
         print('TROUBLE PARSING AF PREDICTION') 
         print(e)
         state1_af_disordered_domains_idx = [] 
 
     try: 
-        state2_af_disordered_domains_idx, _ = get_af_disordered_domains(state2_af_seq)      
+        state2_af_disordered_domains_idx, _ = get_af_disordered_domains(state2_af_path)      
     except ValueError as e:
         print('TROUBLE PARSING AF PREDICTION') 
         print(e)
@@ -977,7 +977,9 @@ def cartesian_to_spherical(ca_pos_diff):
     return phi, theta, radius
 
 
-def get_spherical_coordinate_vector_diff(af_pred_path, pdb_path, pdb_residues_ignore_idx):
+def get_vector_diff_spherical_coordinates(af_pred_path, pdb_path, pdb_residues_ignore_idx):
+
+    #transformation taking af_pred_path --> pdb_path
 
     af_pred_seq = get_pdb_path_seq(af_pred_path, None)
     pdb_seq = get_pdb_path_seq(pdb_path, None)
@@ -986,6 +988,8 @@ def get_spherical_coordinate_vector_diff(af_pred_path, pdb_path, pdb_residues_ig
     af_pred_residue_idx_ca_coords_dict = get_ca_coords_dict(af_pred_path)
     pdb_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb_path)
     
+    pdb_residues_include_idx = [] 
+
     pdb_ca_pos_aligned = []
     af_pred_ca_pos_aligned = [] 
 
@@ -994,8 +998,9 @@ def get_spherical_coordinate_vector_diff(af_pred_path, pdb_path, pdb_residues_ig
             pdb_seq_original_idx = pdb_seq_aligned_to_original_idx_mapping[i]
             af_pred_seq_original_idx = af_pred_seq_aligned_to_original_idx_mapping[i]
             if pdb_seq_original_idx not in pdb_residues_ignore_idx:
+                pdb_residues_include_idx.append(pdb_seq_original_idx)
                 pdb_ca_pos = list(pdb_residue_idx_ca_coords_dict[pdb_seq_original_idx][0:3])
-                af_pred_ca_pos = list(af_residue_idx_ca_coords_dict[af_pred_seq_original_idx][0:3])
+                af_pred_ca_pos = list(af_pred_residue_idx_ca_coords_dict[af_pred_seq_original_idx][0:3])
                 pdb_ca_pos_aligned.append(pdb_ca_pos)
                 af_pred_ca_pos_aligned.append(af_pred_ca_pos)
 
@@ -1005,7 +1010,7 @@ def get_spherical_coordinate_vector_diff(af_pred_path, pdb_path, pdb_residues_ig
     ca_pos_diff = pdb_ca_pos_aligned - af_pred_ca_pos_aligned
     phi, theta, radius = cartesian_to_spherical(ca_pos_diff)
 
-    return np.array([phi, theta, radius])
+    return np.array([pdb_residues_include_idx, phi, theta, radius]), af_pred_ca_pos_aligned, pdb_ca_pos_aligned
 
 
 def select_rel_chain_and_delete_residues(cif_input_path: str, cif_output_path: str, chain_id: str, residues_delete_idx: List[int]):
