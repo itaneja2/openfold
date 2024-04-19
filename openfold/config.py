@@ -99,7 +99,7 @@ def model_config(
 
         if 'conformation_module' in ft_method:
             c.data.data_module.data_loaders.num_workers = 1 
-            c.data.data_module.data_loaders.batch_size = 1
+            c.data.data_module.data_loaders.batch_size = 64
             c.model.use_conformation_module = True
             c.data.common.max_recycling_iters = 0 
             c.loss.distogram.weight = 0.0
@@ -699,6 +699,27 @@ config = mlc.ConfigDict(
                 "inf": 1e5,
                 "save_intermediates": False,
             },
+            "conformation_vectorfield_module": {
+                "c_s": c_s,
+                "c_z": c_z,
+                "c_s_attn": 16,
+                "c_ipa": 16,
+                "c_resnet": 128,
+                "no_heads_s_attn": 12,
+                "no_heads_ipa": 12,
+                "no_qk_points": 4,
+                "no_v_points": 8,
+                "dropout_rate": 0.1,
+                "no_blocks": 8,
+                "no_transition_layers": 1,
+                "no_resnet_blocks": 2,
+                "no_angles": 7,
+                "trans_scale_factor": 10,
+                "epsilon": eps,  # 1e-12,
+                "inf": 1e5,
+                "save_intermediates": False,
+            },
+
             "heads": {
                 "lddt": {
                     "no_bins": 50,
@@ -805,6 +826,15 @@ config = mlc.ConfigDict(
                 "weight": 0.,
                 "eps": eps,
                 "enabled": False,
+            },
+            "phi_theta": {
+                "weight": 1.0,
+            },
+            "r": { 
+                "weight": 0.0,
+            },
+            "vector_dot_product": {
+                "weight": 0.0,
             },
             "eps": eps,
         },

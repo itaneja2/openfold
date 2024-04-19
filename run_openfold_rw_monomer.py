@@ -387,7 +387,7 @@ def run_rw_monomer(
             intrinsic_param_prev = intrinsic_param_proposed
             curr_step_iter_n += 1
             num_accepted_steps += 1
-            rmsd = align_and_get_rmsd(pdb_path_initial, pdb_path_rw) #important that we align prior to training
+            rmsd = align_and_get_rmsd(pdb_path_initial, pdb_path_rw) 
             if save_intrinsic_param:
                 conformation_info.append((pdb_path_rw, rmsd, mean_plddt, disordered_percentage, inference_time, intrinsic_param_proposed, rw_hp_dict['epsilon_scaling_factor'], curr_step_aggregate))
             else:

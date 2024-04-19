@@ -2,6 +2,7 @@ import argparse
 import logging
 import math
 import numpy as np
+import pandas as pd 
 import os
 import shutil
 import json
@@ -13,7 +14,7 @@ from datetime import date
 import itertools
 import time 
 
-from openfold.utils.script_utils import load_conformationfold, parse_fasta, run_model, prep_output, \
+from openfold.utils.script_utils import load_conformation_vectorfield, parse_fasta, prep_output, \
     update_timings, relax_protein
 
 import subprocess 
@@ -47,6 +48,7 @@ from openfold.utils.trace_utils import (
 )
 from scripts.utils import add_data_args
 import pandas as pd 
+pd.set_option('display.max_rows', 500)
 
 from pdb_utils.pdb_utils import get_rmsd, align_and_get_rmsd
 from rw_helper_functions import write_timings, remove_files, calc_disordered_percentage
@@ -59,7 +61,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO) 
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
-file_handler = logging.FileHandler('./run_conformationfold.log', mode='w') 
+file_handler = logging.FileHandler('./run_conformation_vectorfield.log', mode='w') 
 file_handler.setLevel(logging.INFO) 
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
@@ -69,56 +71,39 @@ TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
 
 
-def eval_model(model, args, config, feature_processor, feature_dict, processed_feature_dict, tag, nearest_gtc_path, nearest_gtc_rmsd, output_dir):
-
-    logging.info('Tag: %s' % tag)
-    os.makedirs(output_dir, exist_ok=True)
-
-    out, inference_time = run_model(model, processed_feature_dict, tag, output_dir, return_inference_time=True)
-
-    #print(out)
-
-    # Toss out the recycling dimensions --- we don't need them anymore
-    processed_feature_dict = tensor_tree_map(
-        lambda x: np.array(x[..., -1].cpu()),
-        processed_feature_dict
-    )
+def eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_conformation_path, nearest_aligned_gtc_path):
+ 
+    with torch.no_grad():
+        t = time.perf_counter()
+        out = model(feature_dict)
+        inference_time = time.perf_counter() - t
 
     out = tensor_tree_map(lambda x: np.array(x.cpu()), out)
+    vectorfield_gt_feats = tensor_tree_map(lambda x: np.array(x), vectorfield_gt_feats)
 
-    unrelaxed_protein = prep_output(
-        out,
-        processed_feature_dict,
-        feature_dict,
-        feature_processor,
-        args.config_preset,
-        args.multimer_ri_gap,
-        args.subtract_plddt
-    )
+    # [N,2]
+    phi_pred = out["normalized_phi_theta"][..., 0, :]
+    # [N,2]
+    theta_pred = out["normalized_phi_theta"][..., 1, :]
 
-    output_name = '%s-CF' % tag
-    model_output_dir = output_dir
+    phi_gt = np.squeeze(vectorfield_gt_feats["normalized_phi_theta_gt"][..., 0, :], axis=-1)
+    theta_gt = np.squeeze(vectorfield_gt_feats["normalized_phi_theta_gt"][..., 1, :], axis=-1)
 
-    unrelaxed_file_suffix = "_unrelaxed.pdb"
-    if args.cif_output:
-        unrelaxed_file_suffix = "_unrelaxed.cif"
-    unrelaxed_output_path = os.path.join(
-        model_output_dir, f'{output_name}{unrelaxed_file_suffix}'
-    )
- 
-    with open(unrelaxed_output_path, 'w') as fp:
-        if args.cif_output:
-            fp.write(protein.to_modelcif(unrelaxed_protein))
-        else:
-            fp.write(protein.to_pdb(unrelaxed_protein))
+    residues_mask = np.squeeze(vectorfield_gt_feats["residues_mask"], axis=-1)
+    print(residues_mask)
 
-    rmsd = align_and_get_rmsd(nearest_gtc_path, unrelaxed_output_path) #aligns unrelaxed_output_path to nearest_gtc_path, we don't want to overwrite gtc
+    out_df = pd.DataFrame({'phi_pred_x': phi_pred[:,0], 'phi_pred_y': phi_pred[:,1], 
+                           'phi_gt_x': phi_gt[:,0], 'phi_gt_y': phi_gt[:,1],
+                           'theta_pred_x': theta_pred[:,0], 'theta_pred_y': theta_pred[:,1],
+                           'theta_gt_x': theta_gt[:,0], 'theta_gt_y': theta_gt[:,1], 
+                           'residues_mask': residues_mask, 'rw_conformation_path': rw_conformation_path, 
+                           'nearest_aligned_gtc_path': nearest_aligned_gtc_path})  
+    out_df_subset = out_df[out_df['residues_mask'] == 1]
+    rel_cols = list(out_df.columns[0:-2])
+    print(out_df_subset[rel_cols])
 
-    logger.info(f"Output written to {unrelaxed_output_path}...")
-    logger.info("Output aligned to %s. RMSD = %.3f" % (nearest_gtc_path, rmsd))
-    logger.info("Initial RMSD: %.3f --- Post ConformationFold RMSD: %.3f" % (nearest_gtc_rmsd , rmsd))
-
-    return inference_time, unrelaxed_output_path 
+    
+    return out_df
 
 
 def main(args):
@@ -137,7 +122,7 @@ def main(args):
     config.model.heads.tm.enabled = False
 
     feature_processor = feature_pipeline.FeaturePipeline(config.data)
-    model = load_conformationfold(config, args.model_device, args.conformationfold_checkpoint_path)
+    model = load_conformation_vectorfield(config, args.model_device, args.conformation_vectorfield_checkpoint_path)
 
     children_dirs = glob.glob('%s/*/' % args.alignment_dir) #UNIPROT_ID
     children_dirs = [f[0:-1] for f in children_dirs] #remove trailing forward slash
@@ -151,7 +136,19 @@ def main(args):
             rw_conformations.extend(rw_conformations_curr_uniprot_id)
             uniprot_ids.extend([uniprot_id]*len(rw_conformations_curr_uniprot_id))
 
+    conformation_vectorfield_path = os.path.join(args.ground_truth_data_dir, 'conformation_vectorfield_dict.pkl')
+    residues_mask_path = os.path.join(args.ground_truth_data_dir, 'residues_mask_dict.pkl')
+   
+    with open(conformation_vectorfield_path, 'rb') as f:
+        conformation_vectorfield_dict = pickle.load(f) 
+    with open(residues_mask_path, 'rb') as f:
+        residues_mask_dict = pickle.load(f) 
+
+    out_df_all = [] 
+
     for i,rw_conformation_path in enumerate(rw_conformations):
+        
+        rw_conformation_path = os.path.abspath(rw_conformation_path)
 
         logger.info('rw_conformation_path: %s' % rw_conformation_path)
         uniprot_id = uniprot_ids[i]
@@ -174,17 +171,6 @@ def main(args):
         logger.info("PROTEIN SEQUENCE:")
         logger.info(seq)
 
-        msa_features = data_pipeline.make_dummy_msa_feats(seq)
-        seq_features = data_pipeline.make_sequence_features(seq, template_pdb_id, len(seq)) 
-        feature_dict = {**msa_features, **seq_features}
-
-        processed_feature_dict = feature_processor.process_features(
-            feature_dict, mode='predict'
-        )
-        for key in processed_feature_dict:
-            processed_feature_dict[key] = processed_feature_dict[key].to(args.model_device)
-
-
         rw_conformation_name = rw_conformation_path.split('/')[-1].split('.')[0]
         rw_conformation_name = rw_conformation_name.replace('_unrelaxed','')
         rw_conformation_name = rw_conformation_name.replace('_relaxed','')
@@ -194,31 +180,48 @@ def main(args):
         with open(rw_conformation_input, 'rb') as f:
             conformation_module_input = pickle.load(f) 
 
-        ground_truth_conformations_path = os.path.join(args.ground_truth_data_dir, uniprot_id)
-        ground_truth_conformations = sorted(glob.glob('%s/*.cif' % ground_truth_conformations_path)) 
-        
-        rmsd_dict = {} 
-        for gtc in ground_truth_conformations:
-            rmsd = get_rmsd(rw_conformation_path, gtc) 
-            rmsd_dict[gtc] = rmsd
-        print(rmsd_dict)
-        nearest_gtc_path = min(rmsd_dict, key=rmsd_dict.get) #outputs the path to the ground_truth_conformation with the min RMSD w.r.t to random_rw_conformtion 
-        nearest_gtc_rmsd = rmsd_dict[nearest_gtc_path]
+        residues_mask = residues_mask_dict[rw_conformation_path]
+        conformation_vectorfield_spherical_coords, nearest_aligned_gtc_path = conformation_vectorfield_dict[rw_conformation_path]
 
-        with open(rw_conformation_input, 'rb') as f:
-            conformation_module_input = pickle.load(f) 
+        logger.info('nearest_aligned_gtc_path: %s' % nearest_aligned_gtc_path)
+
+        seq_features = data_pipeline.make_sequence_features(seq, template_pdb_id, len(seq)) 
+        seq_features = feature_processor.process_features(
+            seq_features, 'predict'
+        )
+
+        phi = conformation_vectorfield_spherical_coords[1]
+        theta = conformation_vectorfield_spherical_coords[2]
+        r = conformation_vectorfield_spherical_coords[3]
+
+        phi_norm = np.stack((np.cos(phi), np.sin(phi)), axis=-1) # [N,2]
+        theta_norm = np.stack((np.cos(theta), np.sin(theta)), axis=-1) # [N,2]
+        normalized_phi_theta = np.stack((phi_norm,theta_norm), axis=-1) # [N,2,2]
+        raw_phi_theta = np.stack((phi,theta), axis=-1) # [N,2]
+
+        vectorfield_gt_feats = {} 
+        vectorfield_gt_feats['normalized_phi_theta_gt'] = torch.from_numpy(normalized_phi_theta).to(torch.float32)
+        vectorfield_gt_feats['raw_phi_theta_gt'] = torch.from_numpy(raw_phi_theta).to(torch.float32)
+        vectorfield_gt_feats['residues_mask'] = torch.tensor(residues_mask, dtype=torch.int)
+        vectorfield_gt_feats['r_gt'] = torch.unsqueeze(torch.from_numpy(r).to(torch.float32), dim=-1)
+      
+        vectorfield_gt_feats = {k: torch.unsqueeze(v, dim=-1) for k, v in vectorfield_gt_feats.items()} 
 
         conformation_module_input['single'] = torch.unsqueeze(conformation_module_input['single'], dim=-1)
         conformation_module_input['rigid_rotation'] = torch.unsqueeze(conformation_module_input['rigid_rotation'], dim=-1) #add recycling dimension
         conformation_module_input['rigid_translation'] = torch.unsqueeze(conformation_module_input['rigid_translation'], dim=-1) #add recycling dimension
 
-        processed_feature_dict = {**processed_feature_dict, **conformation_module_input}
-        #print(processed_feature_dict)
 
-        gtc_name = nearest_gtc_path.split('/')[-1].split('.')[0]
-        output_dir = '%s/conformationfold_predictions/gtc=%s' % (rw_conformation_parent_dir, gtc_name)
-        eval_model(model, args, config, feature_processor, feature_dict, processed_feature_dict, rw_conformation_name, nearest_gtc_path, nearest_gtc_rmsd, output_dir)
+        feature_dict = {**seq_features, **conformation_module_input}
 
+        gtc_name = nearest_aligned_gtc_path.split('/')[-1].split('.')[0]
+        out_df = eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_conformation_path, nearest_aligned_gtc_path)
+        out_df_all.append(out_df)
+
+    sdf
+    output_dir = '%s/conformation_vectorfield_predictions' % (rw_conformation_parent_dir)
+    os.makedirs(output_dir, exist_ok=True)
+    out_df_all.to_csv('%s/phi_theta_pred.csv' % output_dir, index=False)
 
            
 if __name__ == "__main__":
@@ -254,7 +257,7 @@ if __name__ == "__main__":
         help="""Name of a model config preset defined in openfold/config.py"""
     )
     parser.add_argument(
-        "--conformationfold_checkpoint_path", type=str, default=None,
+        "--conformation_vectorfield_checkpoint_path", type=str, default=None,
         help="Path to a model checkpoint from which to restore training state"
     )
     parser.add_argument(

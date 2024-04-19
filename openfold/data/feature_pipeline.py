@@ -97,6 +97,9 @@ def np_example_to_features(
         np_example=np_example, features=feature_names
     )
 
+    if "msa" not in tensor_dict:
+        return tensor_dict
+
     with torch.no_grad():
         if is_multimer:
             features = input_pipeline_multimer.process_tensors_from_config(

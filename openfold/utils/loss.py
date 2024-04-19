@@ -56,44 +56,122 @@ def sigmoid_cross_entropy(logits, labels):
 
 
 def r_loss(
-    r: torch.Tensor, # [*, N, 1]
-    r_gt: torch.Tensor,  # [*, N, 1]
+    r: torch.Tensor, # [*, N]
+    r_gt: torch.Tensor,  # [*, N]
+    residues_mask: torch.Tensor,
+    eps: float = 1e-4,
 ):
 
-    # [*, N, 2]
+    r = torch.clamp(r, max=2.0) #cap at 2nm
+    r_gt = torch.clamp(r_gt, max=2.0) #cap at 2nm 
+
+    # [*, N]
     r_l2 = torch.sqrt(
         torch.sum((r - r_gt) ** 2, dim=-1)
     )
-    loss = torch.mean(r_l2, dim=(-1, -2))
+    loss = torch.sum(r_l2*residues_mask, dim=-1) / (eps + torch.sum(residues_mask, dim=-1))
+    loss = torch.mean(loss)
+
+    return loss 
+
+def vector_dot_product_loss(
+    unnormalized_phi_theta: torch.Tensor, # [*, N, 2, 2]
+    normalized_phi_theta: torch.Tensor,  # [*, N, 2, 2]
+    raw_phi_theta_gt: torch.Tensor,  # [*, N, 2]
+    residues_mask: torch.Tensor,
+    eps: float = 1e-4,
+):
+
+    # [*, N, 2]
+    phi_theta_norm = torch.sqrt(
+        torch.sum(unnormalized_phi_theta ** 2, dim=-1) + eps
+    )
+
+    # [*, N, 2]
+    phi_theta = torch.acos(torch.clamp(normalized_phi_theta[..., 0], min=-1,max=1)) #convert x-y on unit circle to radians 
+    sin_phi_prod = torch.sin(phi_theta[..., 0])*torch.sin(raw_phi_theta_gt[..., 0])
+    cos_theta_diff = torch.cos(phi_theta[..., 1]-raw_phi_theta_gt[..., 1])
+    cos_phi_prod = torch.cos(phi_theta[..., 0])*torch.cos(raw_phi_theta_gt[..., 0])
+    # [*, N]
+    vector_dot_product = torch.acos(torch.clamp(sin_phi_prod*cos_theta_diff + cos_phi_prod, min=-1,max=1))
+    
+    print(vector_dot_product)
+    print(vector_dot_product.shape)
+    
+    # [*]
+    l_phi_theta = torch.sum(vector_dot_product*residues_mask, dim=-1) / (eps + torch.sum(residues_mask, dim=-1))
+    #print(l_phi_theta)
+    #print(l_phi_theta.shape)
+    l_angle_norm = masked_mean(residues_mask[..., None], torch.abs(phi_theta_norm - 1.0), dim=(-1,-2))
+
+    an_weight = 0.02
+    loss = l_phi_theta + an_weight * l_angle_norm
     loss = torch.mean(loss)
 
     return loss 
 
 
-def theta_phi_loss(
-    unnormalized_theta_phi: torch.Tensor, # [*, N, 2, 2]
-    normalized_theta_phi: torch.Tensor,  # [*, N, 2, 2]
-    normalized_theta_phi_gt: torch.Tensor,  # [*, N, 2, 2]
-    eps: float = 1e-4
+
+def phi_theta_loss(
+    unnormalized_phi_theta: torch.Tensor, # [*, N, 2, 2]
+    normalized_phi_theta: torch.Tensor,  # [*, N, 2, 2]
+    normalized_phi_theta_gt: torch.Tensor,  # [*, N, 2, 2]
+    raw_phi_theta_gt: torch.Tensor,
+    residues_mask: torch.Tensor,
+    eps: float = 1e-4,
 ):
 
+    normalized_phi_theta_gt_alt = normalized_phi_theta_gt.clone().detach()
+    normalized_phi_theta_gt_alt[..., 0, 1] = -1*normalized_phi_theta_gt_alt[..., 0, 1] #negative y-val for phi  
+
     # [*, N, 2]
-    theta_phi_norm = torch.sqrt(
-        torch.sum(unnormalized_theta_phi ** 2, dim=-1) + eps
+    phi_theta_norm = torch.sqrt(
+        torch.sum(unnormalized_phi_theta ** 2, dim=-1) + eps
     )
+
+    # [*, N, 2]
+    phi_theta = torch.acos(torch.clamp(normalized_phi_theta[..., 0], min=-1,max=1)) #convert x-y on unit circle to radians 
+    sin_phi_prod = torch.sin(phi_theta[..., 0])*torch.sin(raw_phi_theta_gt[..., 0])
+    cos_theta_diff = torch.cos(phi_theta[..., 1]-raw_phi_theta_gt[..., 1])
+    cos_phi_prod = torch.cos(phi_theta[..., 0])*torch.cos(raw_phi_theta_gt[..., 0])
+    # [*, N]
+    vector_angle = torch.acos(torch.clamp(sin_phi_prod*cos_theta_diff + cos_phi_prod, min=-1,max=1))
+    print('vector angle loss:')
+    l_vector_angle = torch.sum(vector_angle*residues_mask, dim=-1) / (eps + torch.sum(residues_mask, dim=-1))
+    print(l_vector_angle)
+
+
+    #print(phi_theta_norm.shape)
+    #print(normalized_phi_theta.shape)
+    #print(normalized_phi_theta_gt.shape)
     
     # [*, N, 2]
-    theta_phi_l2 = torch.sqrt(
-        torch.sum((normalized_theta_phi - normalized_theta_phi_gt) ** 2, dim=-1)
+    phi_theta_l2 = torch.sqrt(
+        torch.sum((normalized_phi_theta - normalized_phi_theta_gt) ** 2, dim=-1)
     )
+    phi_theta_alt_l2 = torch.sqrt(
+        torch.sum((normalized_phi_theta - normalized_phi_theta_gt_alt) ** 2, dim=-1)
+    )
+    phi_theta_l2_min = torch.minimum(phi_theta_l2, phi_theta_alt_l2)
 
+    #print(phi_theta_l2)
+    #print('***')
+    #print(phi_theta_alt_l2)
+    #print('***')
+    #print(phi_theta_l2_min)
+    #print('***')
 
+    #print(phi_theta_l2)
+    #print(phi_theta_l2.shape)
     # [*]
-    l_theta_phi = torch.mean(theta_phi_l2, dim=(-1, -2))
-    l_angle_norm = torch.mean(torch.abs(norm - 1), dim=(-1, -2))
+    l_phi_theta = masked_mean(residues_mask[..., None], phi_theta_l2_min, dim=(-1,-2))
+
+    #print(l_phi_theta)
+    #print(l_phi_theta.shape)
+    l_angle_norm = masked_mean(residues_mask[..., None], torch.abs(phi_theta_norm - 1.0), dim=(-1,-2))
 
     an_weight = 0.02
-    loss = l_theta_phi + an_weight * l_angle_norm
+    loss = l_phi_theta + an_weight * l_angle_norm
     loss = torch.mean(loss)
 
     return loss 
@@ -103,7 +181,7 @@ def theta_phi_loss(
 def torsion_angle_loss(
     a,  # [*, N, 7, 2]
     a_gt,  # [*, N, 7, 2]
-    a_alt_gt,  # [*, N, 7, 2]
+    a_alt_gt,  # [*, N, 7, 2] 
 ):
 
     # [*, N, 7]
@@ -1829,13 +1907,7 @@ class AlphaFoldLoss(nn.Module):
                 loss = loss.new_tensor(0., requires_grad=True)
             cum_loss = cum_loss + weight * loss
             losses[loss_name] = loss.detach().clone()
-        losses["unscaled_loss"] = cum_loss.detach().clone()
 
-        # Scale the loss by the square root of the minimum of the crop size and
-        # the (average) sequence length. See subsection 1.9.
-        seq_len = torch.mean(batch["seq_length"].float())
-        crop_len = batch["aatype"].shape[-1]
-        cum_loss = cum_loss * torch.sqrt(min(seq_len, crop_len))
         print('scaled loss: %.3f' % cum_loss)
         losses["loss"] = cum_loss.detach().clone()
 
@@ -1851,3 +1923,75 @@ class AlphaFoldLoss(nn.Module):
         else:
             cum_loss, losses = self.loss(out, batch, _return_breakdown)
             return cum_loss, losses
+
+class ConformationVectorFieldLoss(nn.Module):
+
+    def __init__(self, config):
+        super(ConformationVectorFieldLoss, self).__init__()
+        self.config = config
+
+    def loss(self, out, batch, _return_breakdown=False):
+        """
+        Rename previous forward() as loss()
+        so that can be reused in the subclass 
+        """
+
+        loss_fns = {
+            "phi_theta": lambda: phi_theta_loss(
+                out["unnormalized_phi_theta"],
+                out["normalized_phi_theta"],
+                batch["normalized_phi_theta_gt"],
+                batch["raw_phi_theta_gt"],
+                batch["residues_mask"],
+            ),
+            "r": lambda: r_loss(
+                out["r"],
+                batch["r_gt"],
+                batch["residues_mask"],
+            ),
+            "vector_dot_product": lambda: vector_dot_product_loss(
+                out["unnormalized_phi_theta"],
+                out["normalized_phi_theta"],
+                batch["raw_phi_theta_gt"],
+                batch["residues_mask"],
+            ),
+        }
+
+        cum_loss = 0.
+        losses = {}
+        for loss_name, loss_fn in loss_fns.items():
+            weight = self.config[loss_name].weight
+            if weight > 0:
+                loss = loss_fn()
+            else:
+                continue
+            print("loss component: %s" % loss_name)
+            print('weight: %.2f' % weight)
+            print('loss: %.3f' % loss)
+            if torch.isnan(loss) or torch.isinf(loss):
+                # for k,v in batch.items():
+                #    if torch.any(torch.isnan(v)) or torch.any(torch.isinf(v)):
+                #        logging.warning(f"{k}: is nan")
+                # logging.warning(f"{loss_name}: {loss}")
+                logging.warning(f"{loss_name} loss is NaN. Skipping...")
+                loss = loss.new_tensor(0., requires_grad=True)
+            cum_loss = cum_loss + weight * loss
+            losses[loss_name] = loss.detach().clone()
+        losses["loss"] = cum_loss.detach().clone()
+
+        if not _return_breakdown:
+            return cum_loss
+
+        return cum_loss, losses
+
+    def forward(self, out, batch, _return_breakdown=False):
+        if not _return_breakdown:
+            cum_loss = self.loss(out, batch, _return_breakdown)
+            return cum_loss
+        else:
+            cum_loss, losses = self.loss(out, batch, _return_breakdown)
+            return cum_loss, losses
+
+
+
+

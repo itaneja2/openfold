@@ -225,8 +225,7 @@ def compare_benchmark_conformations_to_structure_monomer(uniprot_id, pdb_ref_id,
         rmsd = round(rmsd,2)
         rmsd_list.append(rmsd)
 
-    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'pdb_id_reference_structure': pdb_ref_id, 'pdb_pred_path': pdb_pred_path_list, 'max_extra_msa': max_extra_msa_list, 
-                           'max_msa_clusters': max_msa_clusters_list, 'mean_plddt': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list})
+    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'pdb_id_reference_structure': pdb_ref_id, 'pdb_pred_path': pdb_pred_path_list, 'max_extra_msa': max_extra_msa_list, 'max_msa_clusters': max_msa_clusters_list, 'mean_plddt': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list})
  
     return out_df
 

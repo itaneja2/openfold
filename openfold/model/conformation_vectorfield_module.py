@@ -22,7 +22,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Sequence, Union
 
-from openfold.model.primitives import Linear, LayerNorm, s_attn_point_weights_init_
+from openfold.model.primitives import Linear, LayerNorm 
 from openfold.np.residue_constants import (
     restype_rigid_group_default_frame,
     restype_atom14_to_rigid_group,
@@ -44,7 +44,11 @@ from openfold.utils.tensor_utils import (
     flatten_final_dims,
 )
 
-from openfold.model.structure_module import AngleResnetBlock, StructureModuleTransition 
+from openfold.model.structure_module import (
+    AngleResnetBlock, 
+    StructureModuleTransition,
+    InvariantPointAttention,
+)
 
 attn_core_inplace_cuda = importlib.import_module("attn_core_inplace_cuda")
 
@@ -78,8 +82,8 @@ class SphericalCoordsResnet(nn.Module):
             layer = AngleResnetBlock(c_hidden=self.c_hidden)
             self.layers.append(layer)
 
-        self.linear_theta = Linear(self.c_hidden, 2)
         self.linear_phi = Linear(self.c_hidden, 2)
+        self.linear_theta = Linear(self.c_hidden, 2)
         self.linear_r = Linear(self.c_hidden, 1)
 
 
@@ -127,7 +131,7 @@ class SphericalCoordsResnet(nn.Module):
 
         # [*, 2]
         phi = self.linear_phi(s)
-        phi[:,1] = self.relu(phi[:,1]) #so y-values are between 0 and 1 because phi is between [0,Pi]
+        #phi[:,1] = torch.abs(phi[:,1]) #so y-values are between 0 and 1 because phi is between [0,Pi]
         unnormalized_phi = phi
         phi_norm_denom = torch.sqrt(
             torch.clamp(
@@ -138,13 +142,13 @@ class SphericalCoordsResnet(nn.Module):
         phi = phi / phi_norm_denom
 
         # [*, 1]
-        r = self.linear_r(s)
+        r = self.relu(self.linear_r(s)) #r > 0
 
         # [*, 2, 2]
-        unnormalized_theta_phi = torch.stack((unnormalized_theta, unnormalized_phi), dim=-2)
-        normalized_theta_phi = torch.stack((normalized_theta, normalized_phi), dim=-2)
+        unnormalized_phi_theta = torch.stack((unnormalized_phi, unnormalized_theta), dim=-2)
+        normalized_phi_theta = torch.stack((phi, theta), dim=-2)
         
-        return unnormalized_theta_phi, normalized_theta_phi, r
+        return unnormalized_phi_theta, normalized_phi_theta, r
 
 
 class SAttention(nn.Module):
@@ -160,6 +164,7 @@ class SAttention(nn.Module):
         no_v_points: int,
         inf: float = 1e5,
         eps: float = 1e-8,
+        is_multimer: bool = False,
     ):
         """
         Args:
@@ -201,15 +206,12 @@ class SAttention(nn.Module):
     def forward(
         self,
         s: torch.Tensor,
-        mask: torch.Tensor,
         inplace_safe: bool = False,
     ) -> torch.Tensor:
         """
         Args:
             s:
                 [*, N_res, C_s] single representation
-            mask:
-                [*, N_res] mask
         Returns:
             [*, N_res, C_s] single representation update
         """
@@ -252,7 +254,6 @@ class SAttention(nn.Module):
             )
 
         if (inplace_safe):
-            a += square_mask.unsqueeze(-3)
             # in-place softmax
             attn_core_inplace_cuda.forward_(
                 a,
@@ -260,7 +261,6 @@ class SAttention(nn.Module):
                 a.shape[-1],
             )
         else:
-            a = a + square_mask.unsqueeze(-3)
             a = self.softmax(a)
 
         ################
@@ -280,7 +280,7 @@ class SAttention(nn.Module):
 
 
 
-class ConformationVectorModule(nn.Module):
+class ConformationVectorFieldModuleOld(nn.Module):
     def __init__(
         self,
         c_s,
@@ -294,7 +294,6 @@ class ConformationVectorModule(nn.Module):
         no_blocks,
         no_transition_layers,
         no_resnet_blocks,
-        no_angles,
         trans_scale_factor,
         epsilon,
         inf,
@@ -325,8 +324,6 @@ class ConformationVectorModule(nn.Module):
                 (Alg. 23 lines 8-9)
             no_resnet_blocks:
                 Number of blocks in the angle resnet
-            no_angles:
-                Number of angles to generate in the angle resnet
             trans_scale_factor:
                 Scale of single representation transition hidden dimension
             epsilon:
@@ -336,7 +333,7 @@ class ConformationVectorModule(nn.Module):
             save_intermediates:
                 Whether to save s (i.e first row of MSA) and backbone frames representation 
         """
-        super(ConformationVectorModule, self).__init__()
+        super(ConformationVectorFieldModuleOld, self).__init__()
 
         self.c_s = c_s
         self.c_z = c_z
@@ -349,7 +346,6 @@ class ConformationVectorModule(nn.Module):
         self.no_blocks = no_blocks
         self.no_transition_layers = no_transition_layers
         self.no_resnet_blocks = no_resnet_blocks
-        self.no_angles = no_angles
         self.trans_scale_factor = trans_scale_factor
         self.epsilon = epsilon
         self.inf = inf
@@ -394,7 +390,6 @@ class ConformationVectorModule(nn.Module):
     def forward(
         self,
         evoformer_output_dict,
-        mask=None,
         inplace_safe=False,
     ):
         """
@@ -412,9 +407,172 @@ class ConformationVectorModule(nn.Module):
         """
         s = evoformer_output_dict["single"]
 
-        if mask is None:
-            # [*, N]
-            mask = s.new_ones(s.shape[:-1])
+        # [*, N, C_s]
+        s = self.layer_norm_s(s)
+
+        # [*, N, C_s]
+        s_initial = s
+        s = self.linear_in(s)
+                
+        outputs = []
+        for i in range(self.no_blocks):
+            # [*, N, C_s]
+            s = s + self.s_attn(
+                s, 
+                inplace_safe=inplace_safe
+            )
+            s = self.s_attn_dropout(s)
+            s = self.layer_norm_s_attn(s)
+            s = self.transition(s)
+           
+        unnormalized_phi_theta, normalized_phi_theta, r = self.spherical_coords_resnet(s, s_initial)
+
+        outputs = {
+            "unnormalized_phi_theta": unnormalized_phi_theta,
+            "normalized_phi_theta": normalized_phi_theta,
+            "r": r
+        }
+        outputs["single"] = s
+
+        return outputs
+
+
+
+#############################
+
+
+class ConformationVectorFieldModule(nn.Module):
+    def __init__(
+        self,
+        c_s,
+        c_z,
+        c_ipa,
+        c_resnet,
+        no_heads_ipa,
+        no_qk_points,
+        no_v_points,
+        dropout_rate,
+        no_blocks,
+        no_transition_layers,
+        no_resnet_blocks,
+        trans_scale_factor,
+        epsilon,
+        inf,
+        **kwargs,
+    ):
+        """
+        Args:
+            c_s:
+                Single representation channel dimension
+            c_z:
+                Pair representation channel dimension
+            c_ipa:
+                IPA hidden channel dimension
+            c_resnet:
+                Angle resnet (Alg. 23 lines 11-14) hidden channel dimension
+            no_heads_ipa:
+                Number of IPA heads
+            no_qk_points:
+                Number of query/key points to generate during IPA
+            no_v_points:
+                Number of value points to generate during IPA
+            dropout_rate:
+                Dropout rate used throughout the layer
+            no_blocks:
+                Number of structure module blocks
+            no_transition_layers:
+                Number of layers in the single representation transition
+                (Alg. 23 lines 8-9)
+            no_resnet_blocks:
+                Number of blocks in the angle resnet
+            trans_scale_factor:
+                Scale of single representation transition hidden dimension
+            epsilon:
+                Small number used in angle resnet normalization
+            inf:
+                Large number used for attention masking
+            save_intermediates:
+                Whether to save s (i.e first row of MSA) and backbone frames representation 
+        """
+        super(ConformationVectorFieldModule, self).__init__()
+
+        self.c_s = c_s
+        self.c_z = c_z
+        self.c_ipa = c_ipa
+        self.c_resnet = c_resnet
+        self.no_heads_ipa = no_heads_ipa
+        self.no_qk_points = no_qk_points
+        self.no_v_points = no_v_points
+        self.dropout_rate = dropout_rate
+        self.no_blocks = no_blocks
+        self.no_transition_layers = no_transition_layers
+        self.no_resnet_blocks = no_resnet_blocks
+        self.trans_scale_factor = trans_scale_factor
+        self.epsilon = epsilon
+        self.inf = inf
+
+        # Buffers to be lazily initialized later
+        # self.default_frames
+        # self.group_idx
+        # self.atom_mask
+        # self.lit_positions
+
+        self.layer_norm_s = LayerNorm(self.c_s)
+        self.layer_norm_z = LayerNorm(self.c_z)
+
+        self.linear_in = Linear(self.c_s, self.c_s)
+
+        self.ipa = InvariantPointAttention(
+            self.c_s,
+            self.c_z,
+            self.c_ipa,
+            self.no_heads_ipa,
+            self.no_qk_points,
+            self.no_v_points,
+            inf=self.inf,
+            eps=self.epsilon,
+            is_multimer=False,
+            conformation_pred=True,
+        )
+
+
+        self.ipa_dropout = nn.Dropout(self.dropout_rate)
+        self.layer_norm_ipa = LayerNorm(self.c_s)
+
+        self.transition = StructureModuleTransition(
+            self.c_s,
+            self.no_transition_layers,
+            self.dropout_rate,
+        )
+
+        self.spherical_coords_resnet = SphericalCoordsResnet(
+            self.c_s,
+            self.c_resnet,
+            self.no_resnet_blocks,
+            self.epsilon,
+        )
+
+    def forward(
+        self,
+        evoformer_output_dict,
+        inplace_safe=False,
+    ):
+        """
+        Args:
+            evoformer_output_dict:
+                Dictionary containing:
+                    "single":
+                        [*, N_res, C_s] single representation
+                    "pair":
+                        [*, N_res, N_res, C_z] pair representation
+            mask:
+                Optional [*, N_res] sequence mask
+        Returns:
+            A dictionary of outputs
+        """
+        s = evoformer_output_dict["single"]
+        mask = s.new_ones(s.shape[:-1])
+        z = None
 
         # [*, N, C_s]
         s = self.layer_norm_s(s)
@@ -423,35 +581,44 @@ class ConformationVectorModule(nn.Module):
         s_initial = s
         s = self.linear_in(s)
 
+        rigids = Rigid(
+            Rotation(
+                rot_mats=evoformer_output_dict["rigid_rotation"], 
+                quats=None
+            ),
+            evoformer_output_dict["rigid_translation"],
+        )
+        rigids = rigids.stop_rot_gradient()
                 
         outputs = []
         for i in range(self.no_blocks):
             # [*, N, C_s]
-            s = s + self.s_attn(
+            s = s + self.ipa(
                 s, 
+                z, 
+                rigids, 
                 mask, 
-                inplace_safe=inplace_safe
+                inplace_safe=inplace_safe,
+                _offload_inference=False, 
+                _z_reference_list=None
             )
-            s = self.s_attn_dropout(s)
-            s = self.layer_norm_s_attn(s)
+
+            s = self.ipa_dropout(s)
+            s = self.layer_norm_ipa(s)
             s = self.transition(s)
            
-            unnormalized_theta, theta, unnormalized_phi, phi, r = self.spherical_coords_resnet(s, s_initial)
- 
-            preds = {
-                "unnormalized_theta": unnormalized_theta,   
-                "theta": theta,
-                "unnormalized_phi": unnormalized_phi,
-                "phi": phi,
-                "r": r
-            }
+        unnormalized_phi_theta, normalized_phi_theta, r = self.spherical_coords_resnet(s, s_initial)
 
-            outputs.append(preds)
-
-
-        outputs = dict_multimap(torch.stack, outputs)
+        outputs = {
+            "unnormalized_phi_theta": unnormalized_phi_theta,
+            "normalized_phi_theta": normalized_phi_theta,
+            "r": r
+        }
         outputs["single"] = s
 
         return outputs
+
+
+
 
 

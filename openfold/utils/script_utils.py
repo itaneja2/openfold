@@ -8,7 +8,7 @@ import numpy
 import torch
 from torch import nn
 
-from openfold.model.model import AlphaFold, ConformationFold
+from openfold.model.model import AlphaFold, ConformationFold, ConformationVectorField
 from openfold.np import residue_constants, protein
 from openfold.np.relax import relax
 from openfold.utils.import_weights import (
@@ -210,6 +210,23 @@ def load_conformationfold(config, model_device, conformationfold_checkpoint_path
     import_openfold_weights_(model=model, state_dict=sd)
     logger.info(
         f"Loaded ConformationFold parameters at {ckpt_path}..."
+    )
+    model = model.to(model_device)
+
+    return model
+
+def load_conformation_vectorfield(config, model_device, conformation_vectorfield_checkpoint_path):
+ 
+    model = ConformationVectorField(config)
+    model = model.eval()
+   
+    ckpt_path = conformation_vectorfield_checkpoint_path
+    d = torch.load(ckpt_path)
+    sd = d["state_dict"]
+    sd = {k.replace('model.',''):v for k,v in sd.items()}
+    import_openfold_weights_(model=model, state_dict=sd)
+    logger.info(
+        f"Loaded ConformationVectorField parameters at {ckpt_path}..."
     )
     model = model.to(model_device)
 

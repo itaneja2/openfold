@@ -39,7 +39,7 @@ from openfold.model.evoformer import EvoformerStack, ExtraMSAStack
 from openfold.model.evoformer_chainmask import EvoformerStackChainMask, ExtraMSAStackChainMask
 from openfold.model.heads import AuxiliaryHeads
 from openfold.model.structure_module import StructureModule
-from openfold.model.conformation_vector_module import ConformationVectorModule
+from openfold.model.conformation_vectorfield_module import ConformationVectorFieldModule
 from openfold.model.template import (
     TemplatePairStack,
     TemplatePointwiseAttention,
@@ -763,7 +763,7 @@ class ConformationFold(nn.Module):
         return outputs
 
 
-class ConformationVec(nn.Module):
+class ConformationVectorField(nn.Module):
 
     def __init__(self, config):
         """
@@ -771,13 +771,13 @@ class ConformationVec(nn.Module):
             config:
                 A dict-like config object (like the one in config.py)
         """
-        super(ConformationFold, self).__init__()
+        super(ConformationVectorField, self).__init__()
 
         self.globals = config.globals
         self.config = config.model
 
-        self.conformation_vector_module = ConformationVectorModule(
-            **self.config["structure_module"],
+        self.conformation_vectorfield_module = ConformationVectorFieldModule(
+            **self.config["conformation_vectorfield_module"],
         )
 
 
@@ -844,9 +844,9 @@ class ConformationVec(nn.Module):
             if feats[k].dtype == torch.float32:
                 feats[k] = feats[k].to(dtype=dtype)
 
-        output = self.conformation_vector_module(
+        output = self.conformation_vectorfield_module(
             feats,
-            mask=feats["seq_mask"].to(dtype=feats["single"].dtype),
+            #mask=feats["seq_mask"].to(dtype=feats["single"].dtype),
             inplace_safe=not(self.training or torch.is_grad_enabled()),
         )
             

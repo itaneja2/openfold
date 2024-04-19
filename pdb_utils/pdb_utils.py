@@ -962,6 +962,7 @@ def get_residues_ignore_idx_between_pdb_conformations(state1_pdb_path, state2_pd
     state1_pdb_residues_ignore_idx = list(set(state1_pdb_residues_ignore_idx))
     state2_pdb_residues_ignore_idx = list(set(state2_pdb_residues_ignore_idx))
 
+
     return state1_pdb_residues_ignore_idx, state2_pdb_residues_ignore_idx
  
 
@@ -977,7 +978,7 @@ def cartesian_to_spherical(ca_pos_diff):
     return phi, theta, radius
 
 
-def get_vector_diff_spherical_coordinates(af_pred_path, pdb_path, pdb_residues_ignore_idx):
+def get_conformation_vectorfield_spherical_coordinates(af_pred_path, pdb_path, pdb_residues_ignore_idx):
 
     #transformation taking af_pred_path --> pdb_path
 
@@ -988,21 +989,28 @@ def get_vector_diff_spherical_coordinates(af_pred_path, pdb_path, pdb_residues_i
     af_pred_residue_idx_ca_coords_dict = get_ca_coords_dict(af_pred_path)
     pdb_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb_path)
     
-    pdb_residues_include_idx = [] 
+    af_residues_include_idx = [] 
 
     pdb_ca_pos_aligned = []
     af_pred_ca_pos_aligned = [] 
 
-    for i in range(0,len(pdb_seq_aligned)):
-        if (pdb_seq_aligned[i] == af_pred_seq_aligned[i]) and (pdb_seq_aligned[i] != '-'):
+    for i in range(0,len(af_pred_seq_aligned)):
+        if af_pred_seq_aligned[i] != '-' and pdb_seq_aligned[i] != '-':
             pdb_seq_original_idx = pdb_seq_aligned_to_original_idx_mapping[i]
             af_pred_seq_original_idx = af_pred_seq_aligned_to_original_idx_mapping[i]
             if pdb_seq_original_idx not in pdb_residues_ignore_idx:
-                pdb_residues_include_idx.append(pdb_seq_original_idx)
+                af_residues_include_idx.append(af_pred_seq_original_idx)
                 pdb_ca_pos = list(pdb_residue_idx_ca_coords_dict[pdb_seq_original_idx][0:3])
                 af_pred_ca_pos = list(af_pred_residue_idx_ca_coords_dict[af_pred_seq_original_idx][0:3])
                 pdb_ca_pos_aligned.append(pdb_ca_pos)
                 af_pred_ca_pos_aligned.append(af_pred_ca_pos)
+            else:
+                pdb_ca_pos_aligned.append([0,0,0])
+                af_pred_ca_pos_aligned.append([0,0,0])
+        elif af_pred_seq_aligned[i] != '-' and pdb_seq_aligned[i] == '-':
+            pdb_ca_pos_aligned.append([0,0,0])
+            af_pred_ca_pos_aligned.append([0,0,0])
+            
 
     pdb_ca_pos_aligned = np.array(pdb_ca_pos_aligned)
     af_pred_ca_pos_aligned = np.array(af_pred_ca_pos_aligned)
@@ -1010,7 +1018,14 @@ def get_vector_diff_spherical_coordinates(af_pred_path, pdb_path, pdb_residues_i
     ca_pos_diff = pdb_ca_pos_aligned - af_pred_ca_pos_aligned
     phi, theta, radius = cartesian_to_spherical(ca_pos_diff)
 
-    return np.array([pdb_residues_include_idx, phi, theta, radius]), af_pred_ca_pos_aligned, pdb_ca_pos_aligned
+    af_residues_mask = [] 
+    for i in range(0, len(af_pred_seq)):
+        if i in af_residues_include_idx:
+            af_residues_mask.append(1)
+        else:
+            af_residues_mask.append(0)
+
+    return np.array([af_residues_include_idx, phi, theta, radius]), af_residues_mask, af_pred_ca_pos_aligned, pdb_ca_pos_aligned
 
 
 def select_rel_chain_and_delete_residues(cif_input_path: str, cif_output_path: str, chain_id: str, residues_delete_idx: List[int]):
