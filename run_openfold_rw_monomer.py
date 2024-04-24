@@ -18,7 +18,7 @@ from typing import Tuple, List, Mapping, Optional, Sequence, Any, MutableMapping
 import contextlib 
 import copy 
 
-from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
+from openfold.utils.script_utils import load_model_w_intrinsic_param, load_model_w_cvf_and_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
 from openfold.data.data_pipeline import make_template_features 
 
@@ -57,7 +57,7 @@ from openfold.utils.trace_utils import (
 from scripts.utils import add_data_args
 
 from random_corr_sap import gen_randcorr_sap
-from pdb_utils.pdb_utils import align_and_get_rmsd
+from pdb_utils.pdb_utils import align_and_get_rmsd, get_ca_coords_matrix, save_ca_coords
 import rw_helper_functions
 
 FeatureDict = MutableMapping[str, np.ndarray]
@@ -106,6 +106,37 @@ def local_np_seed(seed):
     finally:
         np.random.set_state(state)
 
+
+
+def save_cvf_output(rw_conformation_path, model_output, output_dir):
+
+    rw_conformation_ca_coords = get_ca_coords_matrix(rw_conformation_path)
+
+    # [N,2]
+    norm_phi_pred = model_output["conformation_vectorfield"]["normalized_phi_theta"][..., 0, :]
+    norm_theta_pred = model_output["conformation_vectorfield"]["normalized_phi_theta"][..., 1, :]
+
+    #phi is between 0 and Pi, so y-val is between 0 and 1
+    norm_phi_pred[:,1] = np.abs(norm_phi_pred[:,1]) 
+
+    #convert normalized phi/theta to radians 
+    raw_phi_pred = np.arctan2(np.clip(norm_phi_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_phi_pred[..., 0], a_min=-1,a_max=1))
+    raw_theta_pred = np.arctan2(np.clip(norm_theta_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_theta_pred[..., 0], a_min=-1,a_max=1))
+
+    delta_x_pred = np.cos(raw_theta_pred)*np.sin(raw_phi_pred)
+    delta_y_pred = np.sin(raw_theta_pred)*np.sin(raw_phi_pred)
+    delta_z_pred = np.cos(raw_phi_pred)
+
+    delta_xyz_pred = np.transpose(np.array([delta_x_pred,delta_y_pred,delta_z_pred]))*2.0
+
+    ca_coords_pred = rw_conformation_ca_coords + delta_xyz_pred
+
+    rw_conformation_name = rw_conformation_path.split('/')[-1].split('.')[0]
+    output_name = '%s-CVF.pdb' % rw_conformation_name
+    pdb_output_path = '%s/%s' % (output_dir, output_name)
+    save_ca_coords(rw_conformation_path, ca_coords_pred, pdb_output_path)
+
+
 def eval_model(model, config, intrinsic_parameter, feature_processor, feature_dict, processed_feature_dict, tag, output_dir, phase, args):
 
     model.intrinsic_parameter = nn.Parameter(torch.tensor(intrinsic_parameter, dtype=torch.float).to(args.model_device))
@@ -119,7 +150,7 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
         processed_feature_dict
     )
     
-    if 'rigid_rotation' in out['sm']:
+    if args.save_structure_module_intermediates and 'rigid_rotation' in out['sm']:
         out_tensor = copy.deepcopy(out) #this is to keep a copy of out where values are of type torch.Tensor (as opposed to numpy) 
         keys_to_remove = [key for key in out_tensor['sm'] if key not in ['single', 'rigid_rotation', 'rigid_translation']]
         for key in keys_to_remove:
@@ -144,7 +175,7 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
 
     unrelaxed_file_suffix = "_unrelaxed.pdb"
     if args.cif_output:
-        unrelaxed_file_suffix = "_unrelaxed.cif"
+        unrelaxed_file_suffix = "_unrelaxed.cif" #save bootstrap as cif because we are training w.r.t bootstrap and that needs .cif 
     unrelaxed_output_path = os.path.join(
         model_output_dir_temp, f'{output_name}{unrelaxed_file_suffix}'
     )
@@ -204,7 +235,7 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
             pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info(f"Model embeddings written to {output_dict_path}...")
 
-    if args.save_structure_module_intermediates and accept_conformation and 'warmup' not in model_output_dir:
+    if args.save_structure_module_intermediates and accept_conformation and phase in ['initial', 'bootstrap']:
         sm_intermediates_output_dir = '%s/structure_module_intermediates' % model_output_dir
         os.makedirs(sm_intermediates_output_dir, exist_ok=True)
 
@@ -214,6 +245,9 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
         with open(sm_output_dict_path, "wb") as fp:
             pickle.dump(out_tensor["sm"], fp, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info(f"Structure module intermediates written to {sm_output_dict_path}...")
+
+    if args.use_conformation_vectorfield_module:
+        save_cvf_output(unrelaxed_output_path, out, model_output_dir)
 
 
     return mean_plddt, disordered_percentage, inference_time, accept_conformation, unrelaxed_output_path 
@@ -324,7 +358,7 @@ def propose_new_intrinsic_param_rw_w_momentum(
 
 
 def run_rw_monomer(
-    pdb_path_initial: str, 
+    initial_pred_path: str, 
     intrinsic_dim: int, 
     rw_type: str, 
     rw_hp_dict: Mapping[str, List[float]], 
@@ -387,7 +421,7 @@ def run_rw_monomer(
             intrinsic_param_prev = intrinsic_param_proposed
             curr_step_iter_n += 1
             num_accepted_steps += 1
-            rmsd = align_and_get_rmsd(pdb_path_initial, pdb_path_rw) 
+            rmsd = align_and_get_rmsd(initial_pred_path, pdb_path_rw) 
             if save_intrinsic_param:
                 conformation_info.append((pdb_path_rw, rmsd, mean_plddt, disordered_percentage, inference_time, intrinsic_param_proposed, rw_hp_dict['epsilon_scaling_factor'], curr_step_aggregate))
             else:
@@ -620,7 +654,7 @@ def run_grid_search_monomer(
     state_history_dict: Optional[Mapping[Tuple[float, ...], int]], 
     source_str: str, 
     target_str: str, 
-    pdb_path_initial: str, 
+    initial_pred_path: str, 
     intrinsic_dim: int, 
     rw_type: str, 
     num_total_steps: int, 
@@ -633,7 +667,6 @@ def run_grid_search_monomer(
     processed_feature_dict: FeatureDict, 
     rw_hp_config_data: Mapping[str, Any], 
     output_dir: str, 
-    phase: str, 
     args: argparse.Namespace
 ):
     """Runs a random walk for each set of hyperparameters in grid_search_combinations
@@ -668,7 +701,7 @@ def run_grid_search_monomer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -709,7 +742,7 @@ def run_grid_search_monomer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -772,7 +805,7 @@ def run_rw_pipeline(args):
     os.makedirs(args.output_dir_base, exist_ok=True)
     output_dir_name = args.output_dir_base.split('/')[-1]
 
-    config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference, save_structure_module_intermediates=args.save_structure_module_intermediates)
+    config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference, use_conformation_vectorfield_module=args.use_conformation_vectorfield_module, save_structure_module_intermediates=args.save_structure_module_intermediates)
 
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
@@ -893,8 +926,12 @@ def run_rw_pipeline(args):
 
     feature_processor = feature_pipeline.FeaturePipeline(config.data)
     intrinsic_param_zero = np.zeros(intrinsic_dim)
-    model = load_model_w_intrinsic_param(config, module_config_data, args.model_device, args.openfold_checkpoint_path, args.jax_param_path, intrinsic_param_zero)
-
+    
+    if not(args.use_conformation_vectorfield_module):
+        model = load_model_w_intrinsic_param(config, module_config_data, args.model_device, args.openfold_checkpoint_path, args.jax_param_path, intrinsic_param_zero)
+    else:
+        model = load_model_w_cvf_and_intrinsic_param(config, module_config_data, args.model_device, args.openfold_checkpoint_path, args.conformation_vectorfield_checkpoint_path, intrinsic_param_zero)
+ 
     #for m_name, module in dict(model.named_modules()).items():
     #    logger.info(m_name)
     #    logger.info('****')
@@ -914,9 +951,9 @@ def run_rw_pipeline(args):
 
     if args.skip_bootstrap_phase:
         conformation_info_fname = '%s/conformation_info.pkl' % bootstrap_output_dir
-        pdb_path_initial = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir   
+        initial_pred_path = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir   
         seed_fname = '%s/seed.txt' % bootstrap_output_dir
-        if os.path.exists(conformation_info_fname) and os.path.exists(pdb_path_initial) and os.path.exists(seed_fname):
+        if os.path.exists(conformation_info_fname) and os.path.exists(initial_pred_path) and os.path.exists(seed_fname):
             with open(conformation_info_fname, 'rb') as f:
                 conformation_info = pickle.load(f)
             random_seed = int(np.loadtxt(seed_fname))
@@ -942,7 +979,7 @@ def run_rw_pipeline(args):
         t0 = time.perf_counter()
 
         logger.info('PREDICTING INITIAL STRUCTURE FROM ORIGINAL MODEL') 
-        mean_plddt_initial, disordered_percentage_initial, _, _, pdb_path_initial = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
+        mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
         logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
 
         scaling_factor_bootstrap = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
@@ -954,9 +991,9 @@ def run_rw_pipeline(args):
         rw_hp_dict['epsilon_scaling_factor'] = scaling_factor_bootstrap 
         if args.use_local_context_manager:
             with local_np_seed(random_seed):
-                state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
+                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
         else:
-                state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
+                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
  
         bootstrap_acceptance_rate = sum(state_history)/len(state_history)
         logger.info('BOOTSTRAP ACCEPTANCE RATE: %.3f' % bootstrap_acceptance_rate)
@@ -998,8 +1035,8 @@ def run_rw_pipeline(args):
             os.makedirs(bootstrap_training_conformations_dir_conformation_i, exist_ok=True)
             rw_helper_functions.remove_files_in_dir(bootstrap_training_conformations_dir_conformation_i) #this directory should contain a single conformation so we can run train_openfold on it 
             curr_pdb_path = conformation_info_i[2]
-            curr_pdb_fname = '%s.pdb' % file_id_wo_chain #during training, expected filename is without chain_id (i.e 1xyz)
-            dst_path = '%s/%s' % (bootstrap_training_conformations_dir_conformation_i,curr_pdb_fname)
+            dst_fname = '%s.pdb' % file_id_wo_chain #during training, expected filename is without chain_id (i.e 1xyz)
+            dst_path = '%s/%s' % (bootstrap_training_conformations_dir_conformation_i,dst_fname)
             shutil.copy(curr_pdb_path,dst_path)
 
             target_str = 'target=conformation%d' % iter_num
@@ -1014,16 +1051,16 @@ def run_rw_pipeline(args):
             arg7 = '--gpus=1'
             arg8 = '--openfold_checkpoint_path=%s' % args.openfold_checkpoint_path 
             arg9 = '--resume_model_weights_only=True'
-            arg10 = '--config_preset=custom_finetuning-SAID-all'
+            arg10 = '--config_preset=custom_finetuning-SAID'
             arg11 = '--module_config=%s' % args.module_config
             arg12 = '--hp_config=%s' % args.train_hp_config
             arg13 = '--custom_template_pdb_id=%s' % args.custom_template_pdb_id
-            arg14 = '--save_structure_output'
-     
-            if args.save_training_conformations:       
-                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13,arg14]
-            else:
-                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13]
+            arg14 = '--initial_pred_path=%s' % initial_pred_path
+            arg15 = '--save_structure_output'
+
+            script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13,arg14]
+            if args.save_training_conformations:      
+                script_arguments.append(arg15) 
 
             cmd_to_run = ["python", finetune_openfold_path] + script_arguments
             cmd_to_run_str = s = ' '.join(cmd_to_run)
@@ -1108,7 +1145,7 @@ def run_rw_pipeline(args):
                 else:
                     L = None 
 
-                state_history_dict = run_grid_search_monomer(grid_search_combinations, state_history_dict, None, target_str, pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args)
+                state_history_dict = run_grid_search_monomer(grid_search_combinations, state_history_dict, None, target_str, initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, args)
                 hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, iter_num, args)
                 
                 if exit_status == 1:
@@ -1185,9 +1222,9 @@ def run_rw_pipeline(args):
 
         if args.use_local_context_manager:
             with local_np_seed(random_seed):
-                state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
         else:
-            state_history, conformation_info = run_rw_monomer(pdb_path_initial, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
         conformation_info_dict[iter_num] = conformation_info
 
         acceptance_rate = sum(state_history)/len(state_history)
@@ -1251,6 +1288,10 @@ if __name__ == "__main__":
         "--openfold_checkpoint_path", type=str, default=None,
         help="""Path to OpenFold checkpoint. Can be either a DeepSpeed 
              checkpoint directory or a .pt file"""
+    )
+    parser.add_argument(
+        "--conformation_vectorfield_checkpoint_path", type=str, default=None,
+        help="Path to a model checkpoint from which to restore training state"
     )
     parser.add_argument(
         "--num_bootstrap_steps", type=int, default=50
@@ -1344,6 +1385,14 @@ if __name__ == "__main__":
             "train_hp_config_x wheire x is a number"
         )
     )
+    parser.add_argument(
+        "--use_conformation_vectorfield_module", action="store_true", default=False,
+        help=(
+            """whether to run use_conformation_vectorfield_module after
+               generating structure prediction."""
+        )
+    )
+
     parser.add_argument(
         "--use_local_context_manager", action="store_true", default=False,
         help=(

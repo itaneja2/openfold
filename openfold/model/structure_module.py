@@ -221,7 +221,7 @@ class InvariantPointAttention(nn.Module):
         inf: float = 1e5,
         eps: float = 1e-8,
         is_multimer: bool = False,
-        conformation_pred: bool = False,
+        ignore_pairwise: bool = False,
     ):
         """
         Args:
@@ -249,7 +249,7 @@ class InvariantPointAttention(nn.Module):
         self.inf = inf
         self.eps = eps
         self.is_multimer = is_multimer
-        self.conformation_pred = conformation_pred #if true, does not use pair representation for prediction 
+        self.ignore_pairwise = ignore_pairwise #if true, does not use pair representation for prediction 
 
         # These linear layers differ from their specifications in the
         # supplement. There, they lack bias and use Glorot initialization.
@@ -295,13 +295,13 @@ class InvariantPointAttention(nn.Module):
         self.head_weights = nn.Parameter(torch.zeros((no_heads)))
         ipa_point_weights_init_(self.head_weights)
 
-        if not(conformation_pred):
+        if ignore_pairwise:
             concat_out_dim = self.no_heads * (
-                self.c_z + self.c_hidden + self.no_v_points * 4
+                self.c_hidden + self.no_v_points * 4
             )
         else:
             concat_out_dim = self.no_heads * (
-                self.c_hidden + self.no_v_points * 4
+                self.c_z + self.c_hidden + self.no_v_points * 4
             )
 
         self.linear_out = Linear(concat_out_dim, self.c_s, init="final")
@@ -854,7 +854,6 @@ class StructureModule(nn.Module):
         inf,
         save_intermediates,
         is_multimer=False,
-        conformation_pred=False,
         output_rigid=False,
         **kwargs,
     ):
@@ -913,7 +912,6 @@ class StructureModule(nn.Module):
         self.inf = inf
         self.save_intermediates = save_intermediates
         self.is_multimer = is_multimer
-        self.conformation_pred = conformation_pred #doesn't use z and utilizes an existing rigid representation  
         self.output_rigid = output_rigid
 
         # Buffers to be lazily initialized later
@@ -940,7 +938,6 @@ class StructureModule(nn.Module):
                 inf=self.inf,
                 eps=self.epsilon,
                 is_multimer=self.is_multimer,
-                conformation_pred=self.conformation_pred,
             )
         else:
             self.ipa = ipa(
@@ -1011,10 +1008,7 @@ class StructureModule(nn.Module):
         s = self.layer_norm_s(s)
 
         # [*, N, N, C_z]
-        if not(self.conformation_pred):
-            z = self.layer_norm_z(evoformer_output_dict["pair"])
-        else:
-            z = None 
+        z = self.layer_norm_z(evoformer_output_dict["pair"])
 
         z_reference_list = None
         if (_offload_inference):
@@ -1027,22 +1021,21 @@ class StructureModule(nn.Module):
         s_initial = s
         s = self.linear_in(s)
 
-        if not(self.conformation_pred):
-            rigids = Rigid.identity(
-                s.shape[:-1], 
-                s.dtype, 
-                s.device, 
-                self.training,
-                fmt="quat",
-            )
-        else:
-            rigids = Rigid(
-                Rotation(
-                    rot_mats=evoformer_output_dict["rigid_rotation"], 
-                    quats=None
-                ),
-                evoformer_output_dict["rigid_translation"],
-            )
+        rigids = Rigid.identity(
+            s.shape[:-1], 
+            s.dtype, 
+            s.device, 
+            self.training,
+            fmt="quat",
+        )
+        #else:
+        #    rigids = Rigid(
+        #        Rotation(
+        #            rot_mats=evoformer_output_dict["rigid_rotation"], 
+        #            quats=None
+        #        ),
+        #        evoformer_output_dict["rigid_translation"],
+        #    )
                 
 
         outputs = []

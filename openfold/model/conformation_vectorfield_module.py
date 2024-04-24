@@ -86,7 +86,6 @@ class SphericalCoordsResnet(nn.Module):
         self.linear_theta = Linear(self.c_hidden, 2)
         self.linear_r = Linear(self.c_hidden, 1)
 
-
         self.relu = nn.ReLU()
 
     def forward(
@@ -131,7 +130,6 @@ class SphericalCoordsResnet(nn.Module):
 
         # [*, 2]
         phi = self.linear_phi(s)
-        #phi[:,1] = torch.abs(phi[:,1]) #so y-values are between 0 and 1 because phi is between [0,Pi]
         unnormalized_phi = phi
         phi_norm_denom = torch.sqrt(
             torch.clamp(
@@ -141,14 +139,11 @@ class SphericalCoordsResnet(nn.Module):
         )
         phi = phi / phi_norm_denom
 
-        # [*, 1]
-        r = self.relu(self.linear_r(s)) #r > 0
-
         # [*, 2, 2]
         unnormalized_phi_theta = torch.stack((unnormalized_phi, unnormalized_theta), dim=-2)
         normalized_phi_theta = torch.stack((phi, theta), dim=-2)
         
-        return unnormalized_phi_theta, normalized_phi_theta, r
+        return unnormalized_phi_theta, normalized_phi_theta
 
 
 class SAttention(nn.Module):
@@ -429,8 +424,7 @@ class ConformationVectorFieldModuleOld(nn.Module):
 
         outputs = {
             "unnormalized_phi_theta": unnormalized_phi_theta,
-            "normalized_phi_theta": normalized_phi_theta,
-            "r": r
+            "normalized_phi_theta": normalized_phi_theta
         }
         outputs["single"] = s
 
@@ -532,7 +526,7 @@ class ConformationVectorFieldModule(nn.Module):
             inf=self.inf,
             eps=self.epsilon,
             is_multimer=False,
-            conformation_pred=True,
+            ignore_pairwise=True,
         )
 
 
@@ -607,12 +601,11 @@ class ConformationVectorFieldModule(nn.Module):
             s = self.layer_norm_ipa(s)
             s = self.transition(s)
            
-        unnormalized_phi_theta, normalized_phi_theta, r = self.spherical_coords_resnet(s, s_initial)
+        unnormalized_phi_theta, normalized_phi_theta = self.spherical_coords_resnet(s, s_initial)
 
         outputs = {
             "unnormalized_phi_theta": unnormalized_phi_theta,
-            "normalized_phi_theta": normalized_phi_theta,
-            "r": r
+            "normalized_phi_theta": normalized_phi_theta
         }
         outputs["single"] = s
 

@@ -268,7 +268,7 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
     args.model_device = 'cuda:0'
     args.bootstrap_phase_only = True
     args.data_random_seed = seed 
-    args.num_bootstrap_steps = 50 
+    args.num_bootstrap_steps = 500 
         
     if(args.jax_param_path is None and args.openfold_checkpoint_path is None):
         args.jax_param_path = os.path.join(

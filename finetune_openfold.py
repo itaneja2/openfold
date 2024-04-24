@@ -59,10 +59,10 @@ import re
 from intrinsic_ft import modify_with_intrinsic_model
 from collections import defaultdict
 
-from pdb_utils.pdb_utils import align_and_get_rmsd
+from pdb_utils.pdb_utils import convert_pdb_to_mmcif, align_and_get_rmsd, get_residues_ignore_idx_between_af_conformations
 
 class OpenFoldWrapper(pl.LightningModule):
-    def __init__(self, config, module_config_data, hp_config_data, target_pdb_path, train_alignment_dir_w_file_id, save_structure_ouptut):
+    def __init__(self, config, module_config_data, hp_config_data, target_structure_path, train_alignment_dir_w_file_id, save_structure_ouptut):
         super(OpenFoldWrapper, self).__init__()
         self.model = AlphaFold(config)
         self.is_multimer = config.globals.is_multimer
@@ -70,7 +70,7 @@ class OpenFoldWrapper(pl.LightningModule):
         self.config = config
         self.module_config_data = module_config_data
         self.hp_config_data = hp_config_data
-        self.target_pdb_path = target_pdb_path
+        self.target_structure_path = target_structure_path
         self.train_alignment_dir_w_file_id = train_alignment_dir_w_file_id 
         self.save_structure_output = save_structure_ouptut
  
@@ -162,8 +162,8 @@ class OpenFoldWrapper(pl.LightningModule):
             with open(unrelaxed_output_path, 'w') as fp:
                 fp.write(protein.to_pdb(unrelaxed_protein))
 
-            print('ALIGNING WRT TO %s' % self.target_pdb_path)
-            rmsd = align_and_get_rmsd(self.target_pdb_path, unrelaxed_output_path)
+            print('ALIGNING WRT TO %s' % self.target_structure_path)
+            rmsd = align_and_get_rmsd(self.target_structure_path, unrelaxed_output_path)
             print('SAVING ALIGNED PDB AT %s' % unrelaxed_output_path)
             if weighted_ptm_score is not None:
                 print('pLDDT: %.2f, RMSD: %.2f, IPTM_PTM SCORE: %.2f' % (mean_plddt,rmsd,weighted_ptm_score))
@@ -419,7 +419,6 @@ def main(args):
 
     if config.globals.is_multimer:
         source_str = 'source=%s' % config.custom_fine_tuning.model_name         
-    loss_type_str = 'loss_type=%s' % config.custom_fine_tuning.loss_type
     ft_method_str = 'ft_method=%s' % config.custom_fine_tuning.ft_method
     conformation_parent_dir = args.train_data_dir.split('/')[-1]
     target_str = 'target=%s' % conformation_parent_dir
@@ -430,9 +429,9 @@ def main(args):
         else:
             log_parent_dir = './training_logs/%s' % args.target_name
         if config.globals.is_multimer:
-            log_child_dir = '%s/%s/%s/%s/%s/%s' % (source_str, target_str, ft_method_str, loss_type_str, args.module_config, args.hp_config) 
+            log_child_dir = '%s/%s/%s/%s/%s' % (source_str, target_str, ft_method_str, args.module_config, args.hp_config) 
         else:
-            log_child_dir = '%s/%s/%s/%s/%s/%s' % (target_str, ft_method_str, loss_type_str, args.module_config, args.hp_config) 
+            log_child_dir = '%s/%s/%s/%s/%s' % (target_str, ft_method_str, args.module_config, args.hp_config) 
 
         fine_tuning_save_dir = '%s/%s' % (log_parent_dir, log_child_dir)
     else:
@@ -462,11 +461,14 @@ def main(args):
     pattern = "%s/*.pdb" % args.train_data_dir
     files = glob.glob(pattern, recursive=True)
     if len(files) == 1:
-        target_pdb_path = files[0]
+        target_structure_path = files[0]
     else:
-        raise ValueError("Either no pdb files or multiple pdb files found at %s" % args.train_data_dir) 
+        raise ValueError("Either no pdb files or multiple pdb files found at %s" % args.train_data_dir)
 
-    model_module = OpenFoldWrapper(config, module_config_data, hp_config_data, target_pdb_path, train_alignment_dir_w_file_id, args.save_structure_output)
+    if not(config.globals.is_multimer):
+        residues_ignore_idx = get_residues_ignore_idx_between_af_conformations(args.initial_pred_path, target_structure_path, args.initial_pred_path) 
+
+    model_module = OpenFoldWrapper(config, module_config_data, hp_config_data, target_structure_path, train_alignment_dir_w_file_id, args.save_structure_output)
 
     valid_trainable_module = ['input_embedder', 'recycling_embedder', 'template_angle_embedder', 'template_pair_embedder', 
                               'template_pair_stack', 'extra_msa_stack', 'evoformer', 'structure_module', 'aux_heads', 'all']
@@ -801,7 +803,9 @@ if __name__ == "__main__":
             "hp_config_x where x is a number"
         )
     )
-
+    parser.add_argument(
+        "--initial_pred_path", action="store_true", default=False,
+    )
     parser.add_argument(
         "--save_structure_output", action="store_true", default=False,
     )

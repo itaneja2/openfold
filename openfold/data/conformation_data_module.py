@@ -197,7 +197,7 @@ class ConformationVectorFieldSingleDataset(torch.utils.data.Dataset):
             conformation_module_input = pickle.load(f) 
 
         residues_mask = self._residues_mask_dict[rw_conformation_path]
-        conformation_vectorfield_spherical_coords, nearest_aligned_gtc_path = self._conformation_vectorfield_dict[rw_conformation_path]
+        conformation_vectorfield_spherical_coords, nearest_aligned_gtc_path, nearest_pdb_model_name = self._conformation_vectorfield_dict[rw_conformation_path]
 
         #print('residues mask:')
         #print(residues_mask)
@@ -215,7 +215,7 @@ class ConformationVectorFieldSingleDataset(torch.utils.data.Dataset):
 
         phi = conformation_vectorfield_spherical_coords[1]
         theta = conformation_vectorfield_spherical_coords[2]
-        r = conformation_vectorfield_spherical_coords[3]
+        #r = conformation_vectorfield_spherical_coords[3]
 
         phi_norm = np.stack((np.cos(phi), np.sin(phi)), axis=-1) # [N,2]
         theta_norm = np.stack((np.cos(theta), np.sin(theta)), axis=-1) # [N,2]
@@ -226,7 +226,7 @@ class ConformationVectorFieldSingleDataset(torch.utils.data.Dataset):
         vectorfield_feats['normalized_phi_theta_gt'] = torch.from_numpy(normalized_phi_theta).to(torch.float32)
         vectorfield_feats['raw_phi_theta_gt'] = torch.from_numpy(raw_phi_theta).to(torch.float32)
         vectorfield_feats['residues_mask'] = torch.tensor(residues_mask, dtype=torch.int)
-        vectorfield_feats['r_gt'] = torch.unsqueeze(torch.from_numpy(r).to(torch.float32), dim=-1)
+        #vectorfield_feats['r_gt'] = torch.unsqueeze(torch.from_numpy(r).to(torch.float32), dim=-1)
       
         vectorfield_feats = {k: torch.unsqueeze(v, dim=-1) for k, v in vectorfield_feats.items()} 
 

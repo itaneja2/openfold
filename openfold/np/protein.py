@@ -16,7 +16,7 @@
 """Protein data type."""
 import dataclasses
 import io
-from typing import Any, Sequence, Mapping, Optional
+from typing import Any, Sequence, Mapping, Optional, Tuple
 import re
 import string
 
@@ -86,7 +86,7 @@ class Protein:
             )
 
 
-def from_pdb_string(pdb_str: str, chain_id: Optional[str] = None) -> Protein:
+def from_pdb_string(pdb_str: str, chain_id: Optional[str] = None, residues_ignore_idx: Tuple[int] = None) -> Protein:
     """Takes a PDB string and constructs a Protein object.
 
     WARNING: All non-standard residue types will be converted into UNK. All
@@ -127,6 +127,7 @@ def from_pdb_string(pdb_str: str, chain_id: Optional[str] = None) -> Protein:
                     f"PDB contains an insertion code at chain {chain.id} and residue "
                     f"index {res.id[1]}. These are not supported."
                 )
+            residue_idx = res.get_id()[1]-1
             res_shortname = residue_constants.restype_3to1.get(res.resname, "X")
             restype_idx = residue_constants.restype_order.get(
                 res_shortname, residue_constants.restype_num
@@ -138,7 +139,8 @@ def from_pdb_string(pdb_str: str, chain_id: Optional[str] = None) -> Protein:
                 if atom.name not in residue_constants.atom_types:
                     continue
                 pos[residue_constants.atom_order[atom.name]] = atom.coord
-                mask[residue_constants.atom_order[atom.name]] = 1.0
+                if residues_ignore_idx is None or residue_idx not in residues_ignore_idx: 
+                    mask[residue_constants.atom_order[atom.name]] = 1.0
                 res_b_factors[
                     residue_constants.atom_order[atom.name]
                 ] = atom.bfactor

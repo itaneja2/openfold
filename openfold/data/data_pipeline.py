@@ -20,7 +20,7 @@ import contextlib
 import dataclasses
 from multiprocessing import cpu_count
 import tempfile
-from typing import Mapping, Optional, Sequence, Any, MutableMapping, Union
+from typing import Mapping, Optional, Sequence, Any, MutableMapping, Union, Tuple
 import numpy as np
 import torch
 from openfold.data import templates, parsers, mmcif_parsing, msa_identifiers, msa_pairing, feature_processing_multimer
@@ -1021,7 +1021,8 @@ class DataPipeline:
         alignment_index: Optional[Any] = None,
         seqemb_mode: bool = False,
         feature_dict: FeatureDict = None,
-        custom_template_pdb_id: str = None 
+        custom_template_pdb_id: str = None,
+        residues_ignore_idx: Tuple[int] = None
     ) -> FeatureDict:
         """
             Assembles features for a protein in a PDB file.
@@ -1039,7 +1040,7 @@ class DataPipeline:
             with open(pdb_path, 'r') as f:
                 pdb_str = f.read()
 
-        protein_object = protein.from_pdb_string(pdb_str, chain_id)
+        protein_object = protein.from_pdb_string(pdb_str, chain_id, residues_ignore_idx)
         input_sequence = _aatype_to_str_sequence(protein_object.aatype)
         description = os.path.splitext(os.path.basename(pdb_path))[0].upper()
         pdb_feats = make_pdb_features(

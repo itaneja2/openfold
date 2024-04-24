@@ -120,7 +120,7 @@ class AlphaFold(nn.Module):
                 **self.extra_msa_config["extra_msa_embedder"],
             )
 
-            if not(config.model.use_chainmask):
+            if not(self.config.use_chainmask):
                 self.extra_msa_stack = ExtraMSAStack(
                     **self.extra_msa_config["extra_msa_stack"],
                 )
@@ -129,7 +129,7 @@ class AlphaFold(nn.Module):
                     **self.extra_msa_config["extra_msa_stack"],
                 )
 
-        if not(config.model.use_chainmask):
+        if not(self.config.use_chainmask):
             self.evoformer = EvoformerStack(
                 **self.config["evoformer_stack"],
             )
@@ -138,23 +138,18 @@ class AlphaFold(nn.Module):
                 **self.config["evoformer_stack"],
             )
 
-        if config.model.use_conformation_module:
+        if self.config.use_conformation_vectorfield_module:
             self.structure_module = StructureModule(
                 is_multimer=self.globals.is_multimer,
-                conformation_pred=False,
                 output_rigid=True,
                 **self.config["structure_module"],
             )
-            self.conformation_module = StructureModule(
-                is_multimer=self.globals.is_multimer,
-                conformation_pred=True,
-                output_rigid=False
-                **self.config["structure_module"],
+            self.conformation_vectorfield_module = ConformationVectorFieldModule(
+                **self.config["conformation_vectorfield_module"],
             )
         else:
             self.structure_module = StructureModule(
                 is_multimer=self.globals.is_multimer,
-                conformation_pred=False,
                 output_rigid=False,
                 **self.config["structure_module"],
             )
@@ -612,15 +607,12 @@ class AlphaFold(nn.Module):
                 else:
                     break
 
-        if self.config.use_conformation_module:
-            outputs["sm"] = self.conformation_module(
-                outputs,
-                feats["aatype"],
-                mask=feats["seq_mask"].to(dtype=outputs["single"].dtype),
+        if self.config.use_conformation_vectorfield_module:
+            outputs["conformation_vectorfield"] = self.conformation_vectorfield_module(
+                feats,
                 inplace_safe=not(self.training or torch.is_grad_enabled()),
-                _offload_inference=self.globals.offload_inference,
             )
-            
+
         outputs["final_atom_positions"] = atom14_to_atom37(
             outputs["sm"]["positions"][-1], feats
         )
@@ -846,7 +838,6 @@ class ConformationVectorField(nn.Module):
 
         output = self.conformation_vectorfield_module(
             feats,
-            #mask=feats["seq_mask"].to(dtype=feats["single"].dtype),
             inplace_safe=not(self.training or torch.is_grad_enabled()),
         )
             

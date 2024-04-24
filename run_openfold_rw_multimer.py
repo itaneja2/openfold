@@ -317,7 +317,7 @@ def propose_new_epsilon_vanila_rw(
 
 
 def run_rw_multimer(
-    pdb_path_initial: str, 
+    initial_pred_path: str, 
     intrinsic_dim: int, 
     rw_type: str, 
     rw_hp_dict: Mapping[str, List[float]], 
@@ -376,7 +376,7 @@ def run_rw_multimer(
             epsilon_prev = epsilon_cummulative #x_i = x_i-1 + eps_i*s --> = s*sum(eps_i)
             curr_step_iter_n += 1
             num_accepted_steps += 1
-            rmsd = align_and_get_rmsd(pdb_path_initial, pdb_path_rw)
+            rmsd = align_and_get_rmsd(initial_pred_path, pdb_path_rw)
             if save_intrinsic_param:
                 conformation_info.append((pdb_path_rw, rmsd, mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, inference_time, epsilon_cummulative, rw_hp_dict['epsilon_scaling_factor']))
             else:
@@ -535,7 +535,7 @@ def run_grid_search_multimer(
     state_history_dict: Optional[Mapping[Tuple[float, ...], int]], 
     source_str: str, 
     target_str: str, 
-    pdb_path_initial: str, 
+    initial_pred_path: str, 
     intrinsic_dim: int, 
     rw_type: str, 
     num_total_steps: int, 
@@ -548,7 +548,6 @@ def run_grid_search_multimer(
     processed_feature_dict: FeatureDict, 
     rw_hp_config_data: Mapping[str, Any], 
     output_dir: str, 
-    phase: str, 
     args: argparse.Namespace
 ):
     """Runs a random walk for each set of hyperparameters in grid_search_combinations
@@ -583,7 +582,7 @@ def run_grid_search_multimer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_multimer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -624,7 +623,7 @@ def run_grid_search_multimer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_multimer(pdb_path_initial, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -901,10 +900,10 @@ def run_rw_pipeline(args):
             initial_pred_output_dir = '%s/%s' %  (initial_pred_dir, model_name)
             tag = 'initial_pred_model_%d' % (i+1)
             logger.info('RUNNING %s' % model_name)
-            mean_plddt_initial, weighted_ptm_score_initial,  disordered_percentage_initial, _, _, _, pdb_path_initial = eval_model(model_dict[model_name], config, intrinsic_param_zero, intrinsic_param_zero, [0]*num_chains, feature_processor, feature_dict, processed_feature_dict, tag, initial_pred_output_dir, 'initial', args)   
+            mean_plddt_initial, weighted_ptm_score_initial,  disordered_percentage_initial, _, _, _, initial_pred_path = eval_model(model_dict[model_name], config, intrinsic_param_zero, intrinsic_param_zero, [0]*num_chains, feature_processor, feature_dict, processed_feature_dict, tag, initial_pred_output_dir, 'initial', args)   
             logger.info('pLDDT: %.3f, IPTM_PTM SCORE: %.3f, disordered percentage: %.3f' % (mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial)) 
-            conformation_info_dict[model_name] = (pdb_path_initial, mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial) 
-            initial_pred_path_dict[model_name] = pdb_path_initial 
+            conformation_info_dict[model_name] = (initial_pred_path, mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial) 
+            initial_pred_path_dict[model_name] = initial_pred_path 
 
         run_time = time.perf_counter() - t0
         timing_dict = {'initial_pred': run_time} 
@@ -964,11 +963,10 @@ def run_rw_pipeline(args):
             arg11 = '--module_config=%s' % args.module_config
             arg12 = '--hp_config=%s' % args.train_hp_config
             arg13 = '--save_structure_output'
-     
+    
+            script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12] 
             if args.save_training_conformations:       
-                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13]
-            else:
-                script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12]
+                script_arguments.append(arg13)
      
             cmd_to_run = ["python", finetune_openfold_path] + script_arguments
             cmd_to_run_str = s = ' '.join(cmd_to_run)
@@ -1051,7 +1049,7 @@ def run_rw_pipeline(args):
                 else:
                     L = None 
 
-                state_history_dict = run_grid_search_multimer(grid_search_combinations, state_history_dict, source_str, target_str, source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, 'rw', args)
+                state_history_dict = run_grid_search_multimer(grid_search_combinations, state_history_dict, source_str, target_str, source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, args)
                 hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, i, args)
 
                 if exit_status == 1:

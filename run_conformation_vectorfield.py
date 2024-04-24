@@ -50,7 +50,7 @@ from scripts.utils import add_data_args
 import pandas as pd 
 pd.set_option('display.max_rows', 500)
 
-from pdb_utils.pdb_utils import get_rmsd, align_and_get_rmsd
+from pdb_utils.pdb_utils import get_ca_coords_matrix, save_ca_coords
 from rw_helper_functions import write_timings, remove_files, calc_disordered_percentage
 
 logger = logging.getLogger(__name__)
@@ -71,7 +71,11 @@ TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
 
 
-def eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_conformation_path, nearest_aligned_gtc_path):
+def eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_conformation_path, nearest_aligned_gtc_path, output_dir):
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    rw_conformation_ca_coords = get_ca_coords_matrix(rw_conformation_path)
  
     with torch.no_grad():
         t = time.perf_counter()
@@ -82,24 +86,55 @@ def eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_confo
     vectorfield_gt_feats = tensor_tree_map(lambda x: np.array(x), vectorfield_gt_feats)
 
     # [N,2]
-    phi_pred = out["normalized_phi_theta"][..., 0, :]
-    # [N,2]
-    theta_pred = out["normalized_phi_theta"][..., 1, :]
+    norm_phi_pred = out["normalized_phi_theta"][..., 0, :]
+    norm_theta_pred = out["normalized_phi_theta"][..., 1, :]
 
-    phi_gt = np.squeeze(vectorfield_gt_feats["normalized_phi_theta_gt"][..., 0, :], axis=-1)
-    theta_gt = np.squeeze(vectorfield_gt_feats["normalized_phi_theta_gt"][..., 1, :], axis=-1)
+    #phi is between 0 and Pi, so y-val is between 0 and 1
+    norm_phi_pred[:,1] = np.abs(norm_phi_pred[:,1]) 
+
+    #convert normalized phi/theta to radians 
+    raw_phi_pred = np.arctan2(np.clip(norm_phi_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_phi_pred[..., 0], a_min=-1,a_max=1))
+    raw_theta_pred = np.arctan2(np.clip(norm_theta_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_theta_pred[..., 0], a_min=-1,a_max=1))
+
+
+    norm_phi_gt = np.squeeze(vectorfield_gt_feats["normalized_phi_theta_gt"][..., 0, :], axis=-1)
+    norm_theta_gt = np.squeeze(vectorfield_gt_feats["normalized_phi_theta_gt"][..., 1, :], axis=-1)
+    r_gt = vectorfield_gt_feats["r_gt"]
+
+    raw_phi_gt = vectorfield_gt_feats["raw_phi_theta_gt"][..., 0, :]
+    raw_theta_gt = vectorfield_gt_feats["raw_phi_theta_gt"][..., 1, :]
+
+    delta_x_pred = np.cos(raw_theta_pred)*np.sin(raw_phi_pred)
+    delta_y_pred = np.sin(raw_theta_pred)*np.sin(raw_phi_pred)
+    delta_z_pred = np.cos(raw_phi_pred)
+
+    delta_x_gt = r_gt*np.cos(raw_theta_gt)*np.sin(raw_phi_gt)
+    delta_y_gt = r_gt*np.sin(raw_theta_gt)*np.sin(raw_phi_gt)
+    delta_z_gt = r_gt*np.cos(raw_phi_gt)
+
+    delta_xyz_pred = np.transpose(np.array([delta_x_pred,delta_y_pred,delta_z_pred]))*2.0
+    delta_xyz_gt = np.transpose(np.array([delta_x_gt,delta_y_gt,delta_z_gt]))
+
+    ca_coords_pred = rw_conformation_ca_coords + delta_xyz_pred
+    ca_coords_gt = rw_conformation_ca_coords + delta_xyz_gt
+
+    rw_conformation_name = rw_conformation_path.split('/')[-1].split('.')[0]
+    output_name = '%s-CVF.pdb' % rw_conformation_name
+    pdb_output_path = '%s/%s' % (output_dir, output_name)
+
+    save_ca_coords(rw_conformation_path, ca_coords_pred, pdb_output_path)
 
     residues_mask = np.squeeze(vectorfield_gt_feats["residues_mask"], axis=-1)
     print(residues_mask)
 
-    out_df = pd.DataFrame({'phi_pred_x': phi_pred[:,0], 'phi_pred_y': phi_pred[:,1], 
-                           'phi_gt_x': phi_gt[:,0], 'phi_gt_y': phi_gt[:,1],
-                           'theta_pred_x': theta_pred[:,0], 'theta_pred_y': theta_pred[:,1],
-                           'theta_gt_x': theta_gt[:,0], 'theta_gt_y': theta_gt[:,1], 
+    out_df = pd.DataFrame({'norm_phi_pred_x': norm_phi_pred[:,0], 'norm_phi_pred_y': norm_phi_pred[:,1], 
+                           'norm_phi_gt_x': norm_phi_gt[:,0], 'norm_phi_gt_y': norm_phi_gt[:,1],
+                           'norm_theta_pred_x': norm_theta_pred[:,0], 'norm_theta_pred_y': norm_theta_pred[:,1],
+                           'norm_theta_gt_x': norm_theta_gt[:,0], 'norm_theta_gt_y': norm_theta_gt[:,1], 
                            'residues_mask': residues_mask, 'rw_conformation_path': rw_conformation_path, 
                            'nearest_aligned_gtc_path': nearest_aligned_gtc_path})  
     out_df_subset = out_df[out_df['residues_mask'] == 1]
-    rel_cols = list(out_df.columns[0:-2])
+    rel_cols = list(out_df.columns[0:-3])
     print(out_df_subset[rel_cols])
 
     
@@ -181,7 +216,7 @@ def main(args):
             conformation_module_input = pickle.load(f) 
 
         residues_mask = residues_mask_dict[rw_conformation_path]
-        conformation_vectorfield_spherical_coords, nearest_aligned_gtc_path = conformation_vectorfield_dict[rw_conformation_path]
+        conformation_vectorfield_spherical_coords, nearest_aligned_gtc_path, nearest_pdb_model_name = conformation_vectorfield_dict[rw_conformation_path]
 
         logger.info('nearest_aligned_gtc_path: %s' % nearest_aligned_gtc_path)
 
@@ -202,8 +237,8 @@ def main(args):
         vectorfield_gt_feats = {} 
         vectorfield_gt_feats['normalized_phi_theta_gt'] = torch.from_numpy(normalized_phi_theta).to(torch.float32)
         vectorfield_gt_feats['raw_phi_theta_gt'] = torch.from_numpy(raw_phi_theta).to(torch.float32)
+        vectorfield_gt_feats['r_gt'] = torch.from_numpy(r).to(torch.float32)
         vectorfield_gt_feats['residues_mask'] = torch.tensor(residues_mask, dtype=torch.int)
-        vectorfield_gt_feats['r_gt'] = torch.unsqueeze(torch.from_numpy(r).to(torch.float32), dim=-1)
       
         vectorfield_gt_feats = {k: torch.unsqueeze(v, dim=-1) for k, v in vectorfield_gt_feats.items()} 
 
@@ -214,14 +249,14 @@ def main(args):
 
         feature_dict = {**seq_features, **conformation_module_input}
 
-        gtc_name = nearest_aligned_gtc_path.split('/')[-1].split('.')[0]
-        out_df = eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_conformation_path, nearest_aligned_gtc_path)
+        output_dir = '%s/conformation_vectorfield_predictions/gtc=%s' % (rw_conformation_parent_dir, nearest_pdb_model_name)
+        out_df = eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_conformation_path, nearest_aligned_gtc_path, output_dir)
         out_df_all.append(out_df)
 
-    sdf
-    output_dir = '%s/conformation_vectorfield_predictions' % (rw_conformation_parent_dir)
+    output_dir = '%s/conformation_vectorfield_predictions' % rw_conformation_parent_dir
     os.makedirs(output_dir, exist_ok=True)
-    out_df_all.to_csv('%s/phi_theta_pred.csv' % output_dir, index=False)
+    out_df_all = pd.concat(out_df_all)
+    out_df_all.to_csv('%s/phi_norm_theta_pred.csv' % output_dir, index=False)
 
            
 if __name__ == "__main__":

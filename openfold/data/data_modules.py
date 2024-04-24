@@ -25,6 +25,9 @@ from openfold.utils.tensor_utils import (
     tensor_tree_map,
 )
 
+sys.path.insert(0, '../../')
+from pdb_utils.pdb_utils import get_residues_ignore_idx_between_af_conformations
+
 
 class OpenFoldSingleDataset(torch.utils.data.Dataset):
     def __init__(self,
@@ -46,6 +49,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                  _output_raw: bool = False,
                  _structure_index: Optional[Any] = None,
                  custom_template_pdb_id: str = None,
+                 initial_pred_path: str = None,
                  ):
         """
             Args:
@@ -105,6 +109,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
         self._output_raw = _output_raw
         self._structure_index = _structure_index
         self.custom_template_pdb_id = custom_template_pdb_id 
+        self.initial_pred_path = initial_pred_path
 
         self.supported_exts = [".cif", ".core", ".pdb"]
 
@@ -229,6 +234,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                 chain_id = None
 
             path = os.path.join(self.data_dir, file_id)
+
             if self._structure_index is not None:
                 structure_index_entry = self._structure_index[name]
                 assert (len(structure_index_entry["files"]) == 1)
@@ -245,13 +251,15 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                     raise ValueError("Invalid file type")
 
             if self.mode == 'custom_train':
+                residues_ignore_idx = get_residues_ignore_idx_between_af_conformations(self.initial_pred_path, path, self.initial_pred_path) 
                 features_output_path = os.path.join(alignment_dir, 'features.pkl')
                 if os.path.isfile(features_output_path):
                     feature_dict = np.load(features_output_path, allow_pickle=True)                  
                 else:
                     feature_dict = None 
             else:
-                feature_dict = None  
+                feature_dict = None 
+                residues_ignore_idx = None  
 
             path += ext
             if ext == ".cif":
@@ -278,6 +286,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                     seqemb_mode=self.config.seqemb_mode.enabled,
                     feature_dict=feature_dict,
                     custom_template_pdb_id=self.custom_template_pdb_id,
+                    residues_ignore_idx=residues_ignore_idx,
                 )
             else:
                 raise ValueError("Extension branch missing")
@@ -935,6 +944,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
                  alignment_index_path: Optional[str] = None,
                  distillation_alignment_index_path: Optional[str] = None,
                  custom_template_pdb_id: Optional[str] = None, 
+                 initial_pred_path: Optional[str] = None,
                  **kwargs
                  ):
         super(OpenFoldDataModule, self).__init__()
@@ -946,6 +956,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
         self.train_data_dir = train_data_dir
         self.train_alignment_dir = train_alignment_dir
         self.train_chain_data_cache_path = train_chain_data_cache_path
+        self.initial_pred_path = initial_pred_path
         self.distillation_data_dir = distillation_data_dir
         self.distillation_alignment_dir = distillation_alignment_dir
         self.distillation_chain_data_cache_path = (

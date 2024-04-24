@@ -13,7 +13,8 @@ from openfold.np import residue_constants, protein
 from openfold.np.relax import relax
 from openfold.utils.import_weights import (
     import_jax_weights_,
-    import_openfold_weights_
+    import_openfold_weights_,
+    import_openfold_weights_merged_architecture_
 )
 
 from pytorch_lightning.utilities.deepspeed import (
@@ -180,7 +181,7 @@ def load_model_w_intrinsic_param(config, module_config_data, model_device, openf
         import_openfold_weights_(model=af_model, state_dict=d)
         logger.info(
             f"Loaded OpenFold parameters at {ckpt_path}..."
-        )
+        )   
     elif jax_param_path:
         ckpt_path = jax_param_path
         checkpoint_basename = get_model_basename(ckpt_path)
@@ -197,6 +198,40 @@ def load_model_w_intrinsic_param(config, module_config_data, model_device, openf
     af_model_w_intrinsic_param = af_model_w_intrinsic_param.to(model_device)
 
     return af_model_w_intrinsic_param
+
+def load_model_w_cvf_and_intrinsic_param(config, module_config_data, model_device, openfold_checkpoint_path, conformation_vectorfield_param_path, intrinsic_parameter, enable_dropout=False):
+ 
+    intrinsic_parameter = torch.tensor(intrinsic_parameter).to(model_device)
+    if enable_dropout:
+        logger.info('Loading model with dropout enabled in evoformer module')
+        config.model.structure_module.dropout_rate=0.0
+        af_model = AlphaFold(config)
+        af_model = af_model.eval()
+        for m in af_model.modules():
+            if isinstance(m,torch.nn.Dropout):
+                m.train()
+    else:
+        af_model = AlphaFold(config)
+        af_model = af_model.eval()
+   
+    openfold_state_dict = torch.load(openfold_checkpoint_path)
+    if "ema" in openfold_state_dict:
+        # The public weights have had this done to them already
+        openfold_state_dict = openfold_state_dict["ema"]["params"]
+
+    conformation_vectorfield_state_dict = torch.load(conformation_vectorfield_param_path)
+
+    import_openfold_weights_merged_architecture_(model=af_model, state_dict_original_components=openfold_state_dict, state_dict_new_components=conformation_vectorfield_state_dict)
+    logger.info(
+        f"Loaded OpenFold parameters at {openfold_checkpoint_path}... and ConformationVectorField parameters at {conformation_vectorfield_param_path}"
+    )   
+
+    af_model_w_intrinsic_param = modify_with_intrinsic_model(af_model, module_config_data, config.globals.is_multimer)
+    af_model_w_intrinsic_param.intrinsic_parameter = nn.Parameter(intrinsic_parameter)
+    af_model_w_intrinsic_param = af_model_w_intrinsic_param.to(model_device)
+
+    return af_model_w_intrinsic_param
+
 
 def load_conformationfold(config, model_device, conformationfold_checkpoint_path):
  

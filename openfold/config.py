@@ -63,17 +63,21 @@ def model_config(
     train=False, 
     low_prec=False, 
     long_sequence_inference=False,
+    use_conformation_vectorfield_module=False,
     save_structure_module_intermediates=False
 ):
     c = copy.deepcopy(config)
     c.model.use_chainmask = False
-    c.model.use_conformation_module = False 
+    c.model.use_conformation_vectorfield_module = use_conformation_vectorfield_module 
     c.model.structure_module.save_intermediates = save_structure_module_intermediates
 
     # TRAINING PRESETS
     if name == "initial_training":
         # AF2 Suppl. Table 4, "initial training" setting
         pass
+    elif name == 'conformation_vectorfield':
+        c.data.data_module.data_loaders.num_workers = 1
+        c.data.data_module.data_loaders.batch_size = 64
     elif "custom_finetuning" in name and "multimer" not in name:
         c.data.custom_train.max_extra_msa = 5120 
         c.data.common.reduce_max_clusters_by_max_templates = True
@@ -83,13 +87,12 @@ def model_config(
         c.model.heads.tm.enabled = True
         c.data.data_module.data_loaders.num_workers = 1
 
-        if len(name.split('-')) != 3:
-            raise ValueError("3 components required in config_preset when finetuning")
+        if len(name.split('-')) != 2:
+            raise ValueError("2 components required in config_preset when finetuning")
 
-        _, ft_method, loss_type = name.split('-')
+        _, ft_method = name.split('-')
 
         c.custom_fine_tuning = mlc.ConfigDict()
-        c.custom_fine_tuning.loss_type = loss_type
         c.custom_fine_tuning.ft_method = ft_method
 
         c.loss.fape.backbone.weight = 1.
@@ -97,14 +100,14 @@ def model_config(
         c.loss.supervised_chi.weight = 0.0
         c.loss.plddt_loss.weight = 0.0
 
-        if 'conformation_module' in ft_method:
-            c.data.data_module.data_loaders.num_workers = 1 
-            c.data.data_module.data_loaders.batch_size = 64
-            c.model.use_conformation_module = True
-            c.data.common.max_recycling_iters = 0 
-            c.loss.distogram.weight = 0.0
-            c.loss.masked_msa.weight = 0.0
-            c.loss.violation.weight = .1 
+        #if 'conformation_module' in ft_method:
+        #    c.data.data_module.data_loaders.num_workers = 1 
+        #    c.data.data_module.data_loaders.batch_size = 64
+        #    c.model.use_conformation_module = True
+        #    c.data.common.max_recycling_iters = 0 
+        #    c.loss.distogram.weight = 0.0
+        #    c.loss.masked_msa.weight = 0.0
+        #    c.loss.violation.weight = .1 
 
     elif name == "finetuning":
         # AF2 Suppl. Table 4, "finetuning" setting

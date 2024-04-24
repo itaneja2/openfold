@@ -130,10 +130,10 @@ def phi_theta_loss(
     )
 
     # [*, N, 2]
-    phi_theta = torch.acos(torch.clamp(normalized_phi_theta[..., 0], min=-1,max=1)) #convert x-y on unit circle to radians 
-    sin_phi_prod = torch.sin(phi_theta[..., 0])*torch.sin(raw_phi_theta_gt[..., 0])
-    cos_theta_diff = torch.cos(phi_theta[..., 1]-raw_phi_theta_gt[..., 1])
-    cos_phi_prod = torch.cos(phi_theta[..., 0])*torch.cos(raw_phi_theta_gt[..., 0])
+    raw_phi_theta = torch.atan2(torch.clamp(normalized_phi_theta[..., 1], min=-1,max=1),torch.clamp(normalized_phi_theta[..., 0], min=-1,max=1)) #convert x-y on unit circle to radians 
+    sin_phi_prod = torch.sin(raw_phi_theta[..., 0])*torch.sin(raw_phi_theta_gt[..., 0])
+    cos_theta_diff = torch.cos(raw_phi_theta[..., 1]-raw_phi_theta_gt[..., 1])
+    cos_phi_prod = torch.cos(raw_phi_theta[..., 0])*torch.cos(raw_phi_theta_gt[..., 0])
     # [*, N]
     vector_angle = torch.acos(torch.clamp(sin_phi_prod*cos_theta_diff + cos_phi_prod, min=-1,max=1))
     print('vector angle loss:')
