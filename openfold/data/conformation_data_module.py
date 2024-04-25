@@ -128,7 +128,7 @@ class ConformationVectorFieldSingleDataset(torch.utils.data.Dataset):
                 n -= 1
             return nth_occurrence
 
-        children_dirs = glob.glob('%s/*/' % alignment_dir) #UNIPROT_ID
+        '''children_dirs = glob.glob('%s/*/' % alignment_dir) #UNIPROT_ID
         children_dirs = [f[0:-1] for f in children_dirs] #remove trailing forward slash
         unique_uniprot_ids = [f[f.rindex('/')+1:] for f in children_dirs] #extract UNIPROT_ID 
         rw_conformations = [] #path to rw_conformations across all uniprot_ids 
@@ -140,16 +140,21 @@ class ConformationVectorFieldSingleDataset(torch.utils.data.Dataset):
                 rw_conformations.extend(rw_conformations_curr_uniprot_id)
                 uniprot_ids.extend([uniprot_id]*len(rw_conformations_curr_uniprot_id))
         self._rw_conformations = rw_conformations
-        self._uniprot_ids = uniprot_ids 
+        self._uniprot_ids = uniprot_ids'''
 
         print('reading vectorfield_dict')
         conformation_vectorfield_path = os.path.join(self.ground_truth_data_dir, 'conformation_vectorfield_dict.pkl')
         residues_mask_path = os.path.join(self.ground_truth_data_dir, 'residues_mask_dict.pkl')
-        
+        uniprot_id_dict_path = os.path.join(self.ground_truth_data_dir, 'uniprot_id_dict.pkl')
+               
         with open(conformation_vectorfield_path, 'rb') as f:
             self._conformation_vectorfield_dict = pickle.load(f) 
         with open(residues_mask_path, 'rb') as f:
             self._residues_mask_dict = pickle.load(f) 
+        with open(uniprot_id_dict_path, 'rb') as f:
+            self._uniprot_id_dict = pickle.load(f) 
+
+        self._rw_conformations = list(self._uniprot_id_dict.keys())
 
         # If it's running template search for a monomer, then use hhsearch
         # as demonstrated in AlphaFold's run_alphafold.py code
@@ -174,7 +179,7 @@ class ConformationVectorFieldSingleDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
 
         rw_conformation_path = os.path.abspath(self._rw_conformations[idx])
-        uniprot_id = self._uniprot_ids[idx]
+        uniprot_id = self._uniprot_id_dict[rw_conformation_path]
         match = re.search(r'template=(\w+)', rw_conformation_path)
         template_pdb_id = match.group(1) #this is used as the template and the MSA is derived from this PDB_ID
         alignment_dir = '%s/%s/%s' % (self.alignment_dir, uniprot_id, template_pdb_id)
@@ -511,7 +516,7 @@ class ConformationFoldSingleDataset(torch.utils.data.Dataset):
                 n -= 1
             return nth_occurrence
 
-        children_dirs = glob.glob('%s/*/' % alignment_dir) #UNIPROT_ID
+        '''children_dirs = glob.glob('%s/*/' % alignment_dir) #UNIPROT_ID
         children_dirs = [f[0:-1] for f in children_dirs] #remove trailing forward slash
         unique_uniprot_ids = [f[f.rindex('/')+1:] for f in children_dirs] #extract UNIPROT_ID 
         rw_conformations = [] #path to rw_conformations across all uniprot_ids 
@@ -523,16 +528,22 @@ class ConformationFoldSingleDataset(torch.utils.data.Dataset):
                 rw_conformations.extend(rw_conformations_curr_uniprot_id)
                 uniprot_ids.extend([uniprot_id]*len(rw_conformations_curr_uniprot_id))
         self._rw_conformations = rw_conformations
-        self._uniprot_ids = uniprot_ids 
+        self._uniprot_ids = uniprot_ids''' 
 
         residues_ignore_idx_path = os.path.join(self.ground_truth_data_dir, 'metadata', 'residues_ignore_idx_dict.pkl')
         rmsd_dict_path = os.path.join(self.ground_truth_data_dir, 'metadata', 'rmsd_dict.pkl')
+        uniprot_id_dict_path = os.path.join(self.ground_truth_data_dir, 'metadata', 'uniprot_id_dict.pkl')
         
         with open(residues_ignore_idx_path, 'rb') as f:
             self._residues_ignore_idx_dict = pickle.load(f)
 
         with open(rmsd_dict_path, 'rb') as f:
             self._rmsd_dict = pickle.load(f) 
+
+        with open(uniprot_id_dict_path, 'rb') as f:
+            self._uniprot_id_dict = pickle.load(f) 
+
+        self._rw_conformations = list(self._uniprot_id_dict.keys())
  
         # If it's running template search for a monomer, then use hhsearch
         # as demonstrated in AlphaFold's run_alphafold.py code
@@ -581,7 +592,7 @@ class ConformationFoldSingleDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
 
         rw_conformation_path = os.path.abspath(self._rw_conformations[idx])
-        uniprot_id = self._uniprot_ids[idx]
+        uniprot_id = self._uniprot_id_dict[rw_conformation_path]
         match = re.search(r'template=(\w+)', rw_conformation_path)
         template_pdb_id = match.group(1) #this is used as the template and the MSA is derived from this PDB_ID
         alignment_dir = '%s/%s/%s' % (self.alignment_dir, uniprot_id, template_pdb_id)

@@ -939,8 +939,9 @@ def import_openfold_weights_merged_architecture_(model, state_dict_original_comp
     """
     """
     state_dict_original_components = convert_deprecated_v1_keys(state_dict_original_components)
+    print('new component keys:')
+    print(state_dict_new_components.keys())
     merged_state_dict = {**state_dict_original_components, **state_dict_new_components} 
-    print(merged_state_dict)
     model.load_state_dict(merged_state_dict)
 
 

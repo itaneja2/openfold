@@ -250,6 +250,8 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                 if ext is None:
                     raise ValueError("Invalid file type")
 
+            path += ext
+
             if self.mode == 'custom_train':
                 residues_ignore_idx = get_residues_ignore_idx_between_af_conformations(self.initial_pred_path, path, self.initial_pred_path) 
                 features_output_path = os.path.join(alignment_dir, 'features.pkl')
@@ -261,7 +263,9 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                 feature_dict = None 
                 residues_ignore_idx = None  
 
-            path += ext
+            print('residues ignore idx:')
+            print(residues_ignore_idx)
+
             if ext == ".cif":
                 data = self._parse_mmcif(
                     path, file_id, chain_id, alignment_dir, alignment_index, feature_dict, self.custom_template_pdb_id,
@@ -1043,6 +1047,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
                 treat_pdb_as_distillation=False,
                 mode=training_mode_type,
                 alignment_index=self.alignment_index,
+                initial_pred_path=self.initial_pred_path,
             )
 
             distillation_dataset = None

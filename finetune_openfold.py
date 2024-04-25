@@ -61,6 +61,7 @@ from collections import defaultdict
 
 from pdb_utils.pdb_utils import convert_pdb_to_mmcif, align_and_get_rmsd, get_residues_ignore_idx_between_af_conformations
 
+
 class OpenFoldWrapper(pl.LightningModule):
     def __init__(self, config, module_config_data, hp_config_data, target_structure_path, train_alignment_dir_w_file_id, save_structure_ouptut):
         super(OpenFoldWrapper, self).__init__()
@@ -193,8 +194,9 @@ class OpenFoldWrapper(pl.LightningModule):
                 for param_name, param_weight in self.model.state_dict().items()
                 if 'intrinsic' in param_name
             }
+            #saving intrinsic parameter values from GD trajectory 
             model_fname = '%s/step_%d.pt' % (self.config.fine_tuning_save_dir, self.global_step)
-            torch.save(trainable_states, model_fname)
+            torch.save(trainable_states, model_fname) 
 
 
         ground_truth = batch.pop('gt_features', None)
@@ -510,7 +512,6 @@ def main(args):
     if(args.script_modules):
         script_preset_(model_module)
 
-
     if config.globals.is_multimer:
         print("Loading Multimer Data")
         data_module = OpenFoldMultimerDataModule(
@@ -804,7 +805,7 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument(
-        "--initial_pred_path", action="store_true", default=False,
+        "--initial_pred_path", type=str, default=None,
     )
     parser.add_argument(
         "--save_structure_output", action="store_true", default=False,

@@ -609,7 +609,7 @@ class AlphaFold(nn.Module):
 
         if self.config.use_conformation_vectorfield_module:
             outputs["conformation_vectorfield"] = self.conformation_vectorfield_module(
-                feats,
+                outputs["sm"],
                 inplace_safe=not(self.training or torch.is_grad_enabled()),
             )
 

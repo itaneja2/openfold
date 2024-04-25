@@ -40,7 +40,7 @@ def make_template_features(
     custom_template_pdb_id: str = None
 ) -> FeatureDict:
 
-    if custom_template_pdb_id:
+    if custom_template_pdb_id is not None:
         pdb_id, chain_id = custom_template_pdb_id.split('_')
         mmcif_path = os.path.join(getattr(template_featurizer,'_mmcif_dir'), '%s.cif' % pdb_id)
         if not(os.path.exists(mmcif_path)):

@@ -216,10 +216,11 @@ def load_model_w_cvf_and_intrinsic_param(config, module_config_data, model_devic
    
     openfold_state_dict = torch.load(openfold_checkpoint_path)
     if "ema" in openfold_state_dict:
-        # The public weights have had this done to them already
         openfold_state_dict = openfold_state_dict["ema"]["params"]
 
     conformation_vectorfield_state_dict = torch.load(conformation_vectorfield_param_path)
+    conformation_vectorfield_state_dict = conformation_vectorfield_state_dict["state_dict"]
+    conformation_vectorfield_state_dict = {k.replace('model.',''):v for k,v in conformation_vectorfield_state_dict.items()}
 
     import_openfold_weights_merged_architecture_(model=af_model, state_dict_original_components=openfold_state_dict, state_dict_new_components=conformation_vectorfield_state_dict)
     logger.info(

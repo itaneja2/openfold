@@ -10,8 +10,7 @@ from pathlib import Path
 import shutil 
 import sys
 
-from Bio.PDB import PDBList
-from Bio.PDB import PDBParser, MMCIFParser, MMCIF2Dict
+from Bio.PDB import PDBList, PDBParser, MMCIFParser, MMCIF2Dict, Structure
 from Bio.PDB.PDBIO import PDBIO
 from Bio.PDB.mmcifio import MMCIFIO
 from Bio.SeqUtils import seq1
@@ -45,6 +44,8 @@ import requests
 import urllib.request
 
 from pymol import cmd
+
+from prody import * 
 
 logger = logging.getLogger(__file__)
 logger.setLevel(level=logging.INFO)
@@ -828,6 +829,26 @@ def get_pdb_disordered_domains(af_seq: str, pdb_seq: str, af_disordered_domains_
     return pdb_disordered_domains_idx, pdb_disordered_domains_seq 
    
 
+def get_ca_coords_matrix(pdb_path):
+
+    parser = PDBParser()
+    structure = parser.get_structure('protein', pdb_path)
+    model = structure[0]
+    chain = model['A']
+    
+    residue_idx_ca_coords_matrix = [] 
+
+    for residue in chain:
+        if 'CA' in residue:
+            ca_atom = residue['CA']
+            ca_coords = ca_atom.get_coord()
+            residue_name = residue.get_resname()
+            residue_idx = residue.get_id()[1]-1
+            residue_idx_ca_coords_matrix.append([ca_coords[0], ca_coords[1], ca_coords[2]])
+
+    return np.array(residue_idx_ca_coords_matrix)
+
+
 def get_ca_coords_dict(pdb_path):
 
     parser = PDBParser()
@@ -848,6 +869,14 @@ def get_ca_coords_dict(pdb_path):
     return residue_idx_ca_coords_dict
 
 
+def save_ca_coords(pdb_input_path, ca_coords, pdb_output_path):
+
+    ca_atoms = parsePDB(pdb_input_path, subset='ca')
+    ca_atoms.setCoords(ca_coords)
+    print('saving %s' % pdb_output_path)
+    writePDB(pdb_output_path, ca_atoms)
+   
+ 
 def get_residue_idx_below_rmsf_threshold(pdb1_seq, pdb2_seq, pdb1_path, pdb2_path, pdb1_include_idx, pdb2_include_idx, pdb1_exclude_idx, pdb2_exclude_idx, rmsf_threshold = 2.0):
 
     pdb1_seq_aligned, pdb2_seq_aligned, pdb1_seq_aligned_to_original_idx_mapping, pdb2_seq_aligned_to_original_idx_mapping = align_seqs(pdb1_seq, pdb2_seq)
@@ -959,11 +988,46 @@ def get_residues_ignore_idx_between_pdb_conformations(state1_pdb_path, state2_pd
     state1_pdb_residues_ignore_idx = state1_pdb_disordered_domains_idx+state1_pdb_common_residues_idx_complement+state1_pdb_rmsf_below_threshold_idx
     state2_pdb_residues_ignore_idx = state2_pdb_disordered_domains_idx+state2_pdb_common_residues_idx_complement+state2_pdb_rmsf_below_threshold_idx
 
-    state1_pdb_residues_ignore_idx = list(set(state1_pdb_residues_ignore_idx))
-    state2_pdb_residues_ignore_idx = list(set(state2_pdb_residues_ignore_idx))
+    state1_pdb_residues_ignore_idx = tuple(sorted(set(state1_pdb_residues_ignore_idx)))
+    state2_pdb_residues_ignore_idx = tuple(sorted(set(state2_pdb_residues_ignore_idx)))
 
 
     return state1_pdb_residues_ignore_idx, state2_pdb_residues_ignore_idx
+
+
+def get_residues_ignore_idx_between_af_conformations(state1_af_path, state2_af_path, af_initial_pred_path, rmsf_threshold=1.0):
+
+    """Ignore residues based on:
+        1. disorder
+        2. rmsf threshold
+        
+        Assumption: same sequence for all structures
+        we use stricted rmsf threshold here 
+
+    """  
+
+    try: 
+        af_disordered_domains_idx, _ = get_af_disordered_domains(af_initial_pred_path)      
+    except ValueError as e:
+        print('TROUBLE PARSING AF PREDICTION') 
+        print(e)
+        af_disordered_domains_idx = [] 
+
+    state1_af_ca_pos = get_ca_coords_matrix(state1_af_path)
+    state2_af_ca_pos = get_ca_coords_matrix(state2_af_path)
+
+    ca_rmsf = np.linalg.norm(state2_af_ca_pos-state1_af_ca_pos, axis=1)
+    af_rmsf_below_threshold_idx = list(np.where(ca_rmsf < rmsf_threshold)[0])
+    
+    af_residues_ignore_idx = af_disordered_domains_idx+af_rmsf_below_threshold_idx
+    af_residues_ignore_idx = tuple(sorted(set(af_residues_ignore_idx)))
+
+    print(af_disordered_domains_idx)
+    print(af_rmsf_below_threshold_idx)
+
+
+    return af_residues_ignore_idx
+
  
 
 def cartesian_to_spherical(ca_pos_diff):

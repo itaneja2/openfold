@@ -10,6 +10,9 @@ import glob
 import sys  
 import json 
 import numpy as np
+import re 
+from typing import Any, List, Sequence, Optional, Tuple
+
 
 sys.path.insert(0, '../')
 from pdb_utils.pdb_utils import (
@@ -37,6 +40,54 @@ def get_pdb_pred_path(pdb_pred_dir):
         print('reading %s' % pdb_pred_path)
     
     return pdb_pred_path 
+
+def get_bootstrap_candidate_conformations(
+    conformation_info: List[Tuple[Any,...]],
+    training_conformations_percentage=.20
+):
+    """Generates a set of candidate conformations to use for the gradient descent phase
+       of the pipeline. 
+       
+       The candidate conformations are derived from the bootstrap phase. More specifically,
+       the candidate conformations correspond to those that were outputted one step prior 
+       to a rejected conformation.   
+    """ 
+   
+    bootstrap_conformations = {}
+    iter_num_list = [] 
+    for i in range(0,len(conformation_info)):
+        f = conformation_info[i][0]
+        rmsd = conformation_info[i][1]
+        match = re.search(r'_iter(\d+)', f)
+        iter_num = int(match.group(1)) #this corresponds to a given iteration (i.e a sequence of conformations that terminates in a rejection
+        match = re.search(r'step-iter(\d+)', f) 
+        step_num = int(match.group(1)) #this corresponds to the step_num for a given iteration 
+        if iter_num not in bootstrap_conformations:
+            bootstrap_conformations[iter_num] = [(step_num,rmsd,f)]
+        else:
+            bootstrap_conformations[iter_num].append((step_num,rmsd,f)) 
+        iter_num_list.append(iter_num)
+
+    del bootstrap_conformations[max(iter_num_list)] #delete key corresponding to max(iter_num_list) because this iteration did not yield a rejected conformation (i.e it did not 'finish') 
+
+    for key in bootstrap_conformations:
+        bootstrap_conformations[key] = sorted(bootstrap_conformations[key], key=lambda x:x[0], reverse=True) #sort by step_num in reverse order 
+
+    bootstrap_candidate_conformations = []
+    for key in bootstrap_conformations:
+        bootstrap_candidate_conformations.append(bootstrap_conformations[key][0]) #get last conformation in each iteration (i.e last conformation prior to rejection)
+        
+    bootstrap_candidate_conformations = sorted(bootstrap_candidate_conformations, key=lambda x:x[1], reverse=True) #sort by rmsd in reverse order 
+    num_training_conformations = int(training_conformations_percentage * len(bootstrap_candidate_conformations))
+
+    print('num training conformations: %d' % num_training_conformations)
+
+    if len(bootstrap_candidate_conformations) >= num_training_conformations:
+        bootstrap_candidate_conformations = bootstrap_candidate_conformations[0:num_training_conformations]   
+ 
+    return bootstrap_candidate_conformations
+
+
 
 def save_ground_truth_conformation(pdb_model_name, uniprot_id):
 
@@ -103,7 +154,7 @@ residues_mask_dict = {}
 residues_ignore_idx_dict = {} 
 rmsd_dict = {} 
 conformation_vectorfield_dict = {} 
-
+uniprot_id_dict = {}
 
 for index,row in conformational_states_df.iterrows():
 
@@ -134,18 +185,35 @@ for index,row in conformational_states_df.iterrows():
 
     pdb_ref_ignore_residues_idx, pdb_state_i_ignore_residues_idx = get_residues_ignore_idx_between_pdb_conformations(pdb_ref_path, pdb_state_i_path, pdb_ref_pred_path, pdb_state_i_pred_path)
     
-    residues_ignore_idx_dict[pdb_model_name_ref] = tuple(pdb_ref_ignore_residues_idx)
-    residues_ignore_idx_dict[pdb_model_name_state_i] = tuple(pdb_state_i_ignore_residues_idx)
+    residues_ignore_idx_dict[pdb_model_name_ref] = pdb_ref_ignore_residues_idx
+    residues_ignore_idx_dict[pdb_model_name_state_i] = pdb_state_i_ignore_residues_idx
 
-    rw_conformations = sorted(glob.glob('%s/*/*/*/*/bootstrap/ACCEPTED/*.pdb' % rw_dir))
+    #rw_conformations = sorted(glob.glob('%s/*/*/*/*/bootstrap/ACCEPTED/*.pdb' % rw_dir))
+    
+    rw_conformation_info = sorted(glob.glob('%s/*/*/*/*/bootstrap/conformation_info.pkl' % rw_dir))
 
-    for conformation_num,rw_conformation_path in enumerate(rw_conformations):
+    boostrap_candidate_conformations_all = [] 
+    for i in range(0,len(rw_conformation_info)):
+        with open(rw_conformation_info[i], 'rb') as f:
+            conformation_info = pickle.load(f)
+        boostrap_candidate_conformations = get_bootstrap_candidate_conformations(conformation_info)
+        boostrap_candidate_conformations_all.extend(boostrap_candidate_conformations)
 
-        print("ON CONFORMATION %d/%d" % (conformation_num,len(rw_conformations)))
+    print(len(boostrap_candidate_conformations_all))
+
+    for conformation_num in range(0,len(boostrap_candidate_conformations_all)):
+
+        rw_conformation_path = boostrap_candidate_conformations_all[conformation_num][-1]
+
+        uniprot_id_dict[rw_conformation_path] = uniprot_id
+
+        print("ON CONFORMATION %d/%d" % (conformation_num,len(boostrap_candidate_conformations_all)))
 
         rw_conformation_path = os.path.abspath(rw_conformation_path) 
         #rw_conformation_path = '/gpfs/home/itaneja/openfold/conformational_states_training_data/rw_predictions/P69441/template=6s36_A/rw/module_config_0/rw-hp_config_0/bootstrap/ACCEPTED/module_config_0_rw-hp_config_0_iter10_step-iter0_step-agg26-A_unrelaxed.pdb'
+        #rw_conformation_path = '/gpfs/home/itaneja/openfold/conformational_states_training_data/rw_predictions/P69441/template=6s36_A/rw/module_config_0/rw-hp_config_0/bootstrap/ACCEPTED/module_config_0_rw-hp_config_0_iter4_step-iter1_step-agg11-A_unrelaxed.pdb'
         print(rw_conformation_path)
+        print(boostrap_candidate_conformations_all[conformation_num])
         rw_conformation_fname = rw_conformation_path.split('/')[-1].split('.')[0]
         rw_conformation_dir = rw_conformation_path[0:rw_conformation_path.rindex('/')]
 
@@ -179,11 +247,11 @@ for index,row in conformational_states_df.iterrows():
             pdb_residues_ignore_idx = pdb_state_i_ignore_residues_idx 
 
         conformation_vectorfield_spherical_coords, rw_residues_mask, rw_conformation_ca_pos, aligned_gtc_ca_pos = get_conformation_vectorfield_spherical_coordinates(rw_conformation_path, nearest_aligned_gtc_pdb_path, pdb_residues_ignore_idx) 
-        conformation_vectorfield_dict[rw_conformation_path] = (conformation_vectorfield_spherical_coords, nearest_aligned_gtc_pdb_path)
+        conformation_vectorfield_dict[rw_conformation_path] = (conformation_vectorfield_spherical_coords, nearest_aligned_gtc_pdb_path, nearest_pdb_model_name)
 
         #mask needs to be tied to rw_conformation, not pdb
         residues_mask_dict[rw_conformation_path] = rw_residues_mask
-
+    
         phi = conformation_vectorfield_spherical_coords[1]
         theta = conformation_vectorfield_spherical_coords[2]
         r = conformation_vectorfield_spherical_coords[3]
@@ -191,15 +259,22 @@ for index,row in conformational_states_df.iterrows():
         y = r * np.sin(theta) * np.sin(phi)
         z = r * np.cos(phi)
         conformation_vectorfield_cartesian = np.transpose(np.array([x,y,z]))
-        print(conformation_vectorfield_cartesian.shape)
-        print(conformation_vectorfield_cartesian + rw_conformation_ca_pos)
-
+        #print('conformation_vectorfield_cartesian + rw_conformation_ca_pos')
+        #print(conformation_vectorfield_cartesian + rw_conformation_ca_pos)
+        #print('aligned_gtc_ca_pos')
+        #print(aligned_gtc_ca_pos)
+        #print('diff')
+        #print(aligned_gtc_ca_pos - (conformation_vectorfield_cartesian + rw_conformation_ca_pos))
+        #sdf
 
 print('saving rmsd_dict')   
 save_gtc_metadata(rmsd_dict, 'rmsd_dict')
 
 print('saving residues_ignore_idx_dict')
 save_gtc_metadata(residues_ignore_idx_dict, 'residues_ignore_idx_dict')
+
+print('saving uniprot_id_dict')
+save_conformation_vectorfield_training_data(uniprot_id_dict, 'uniprot_id_dict')
 
 print('saving residues_mask_dict')
 save_conformation_vectorfield_training_data(residues_mask_dict, 'residues_mask_dict')

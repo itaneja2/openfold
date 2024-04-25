@@ -144,8 +144,9 @@ def from_pdb_string(pdb_str: str, chain_id: Optional[str] = None, residues_ignor
                 res_b_factors[
                     residue_constants.atom_order[atom.name]
                 ] = atom.bfactor
-            if np.sum(mask) < 0.5:
+            if np.sum(mask) < 0.5 and residues_ignore_idx is None:
                 # If no known atom positions are reported for the residue then skip it.
+                # This can only occur if no atoms in residue. 
                 continue
 
             aatype.append(restype_idx)

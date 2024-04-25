@@ -75,9 +75,9 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 
-class OpenFoldWrapper(pl.LightningModule):
+class ConformationVectorFieldWrapper(pl.LightningModule):
     def __init__(self, config):
-        super(OpenFoldWrapper, self).__init__()
+        super(ConformationVectorFieldWrapper, self).__init__()
         self.model = ConformationVectorField(config)
         self.is_multimer = config.globals.is_multimer
         self.loss = ConformationVectorFieldLoss(config.loss)
@@ -178,7 +178,7 @@ def main(args):
         low_prec=(str(args.precision) == "16"),
     ) 
 
-    model_module = OpenFoldWrapper(config)
+    model_module = ConformationVectorFieldWrapper(config)
 
     #######
 
@@ -190,6 +190,8 @@ def main(args):
         logger.info("Successfully loaded last lr step...")
     elif args.conformation_vectorfield_checkpoint_path and args.resume_model_weights_only:
         sd = torch.load(args.conformation_vectorfield_checkpoint_path)
+        sd = sd["state_dict"]
+        sd = {k.replace('model.',''):v for k,v in sd.items()}
         import_openfold_weights_(model=model_module.model, state_dict=sd)
         logger.info("Successfully loaded ConformationModule weights...")
     
@@ -284,8 +286,8 @@ def main(args):
 
     trainer = pl.Trainer.from_argparse_args(
         args,
-        max_epochs = 200,
-        log_every_n_steps = 1,
+        max_epochs = 500,
+        log_every_n_steps = 10,
         default_root_dir='./',
         strategy=strategy,
         callbacks=callbacks,

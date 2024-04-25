@@ -564,6 +564,7 @@ class ConformationVectorFieldModule(nn.Module):
         Returns:
             A dictionary of outputs
         """
+        print(evoformer_output_dict.keys())
         s = evoformer_output_dict["single"]
         mask = s.new_ones(s.shape[:-1])
         z = None

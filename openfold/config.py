@@ -77,7 +77,7 @@ def model_config(
         pass
     elif name == 'conformation_vectorfield':
         c.data.data_module.data_loaders.num_workers = 1
-        c.data.data_module.data_loaders.batch_size = 64
+        c.data.data_module.data_loaders.batch_size = 128
     elif "custom_finetuning" in name and "multimer" not in name:
         c.data.custom_train.max_extra_msa = 5120 
         c.data.common.reduce_max_clusters_by_max_templates = True
@@ -99,6 +99,7 @@ def model_config(
         c.loss.fape.sidechain.weight = 0.0
         c.loss.supervised_chi.weight = 0.0
         c.loss.plddt_loss.weight = 0.0
+        c.loss.masked_msa.weight = 0.0
 
         #if 'conformation_module' in ft_method:
         #    c.data.data_module.data_loaders.num_workers = 1 
@@ -258,6 +259,7 @@ def model_config(
             c.loss.tm.weight = 0.0
             c.loss.chain_center_of_mass.weight = 0.0
             c.loss.plddt_loss.weight = 0.0
+            c.loss.masked_msa.weight = 0.0
         # TODO: Change max_msa_clusters and max_extra_msa to multimer feats within model
         if re.fullmatch("^model_[1-5]_multimer(_v2)?$", name):
             #c.model.input_embedder.num_msa = 252

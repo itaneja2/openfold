@@ -246,7 +246,7 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
             pickle.dump(out_tensor["sm"], fp, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info(f"Structure module intermediates written to {sm_output_dict_path}...")
 
-    if args.use_conformation_vectorfield_module:
+    if args.use_conformation_vectorfield_module and phase in ['bootstrap', 'rw']:
         save_cvf_output(unrelaxed_output_path, out, model_output_dir)
 
 
@@ -812,6 +812,9 @@ def run_rw_pipeline(args):
             raise ValueError(
                 "Tracing requires that fixed_size mode be enabled in the config"
             )
+
+    if args.use_conformation_vectorfield_module and not(args.conformation_vectorfield_checkpoint_path):
+        raise ValueError("If using conformation_vectorfield_module, then conformation_vectorfield_checkpoint_path must be set")
  
     if args.bootstrap_phase_only:
         output_dir = '%s/%s/%s/rw-%s' % (args.output_dir_base, 'rw', args.module_config, args.rw_hp_config)
@@ -1054,17 +1057,20 @@ def run_rw_pipeline(args):
             arg10 = '--config_preset=custom_finetuning-SAID'
             arg11 = '--module_config=%s' % args.module_config
             arg12 = '--hp_config=%s' % args.train_hp_config
-            arg13 = '--custom_template_pdb_id=%s' % args.custom_template_pdb_id
-            arg14 = '--initial_pred_path=%s' % initial_pred_path
+            arg13 = '--initial_pred_path=%s' % initial_pred_path
+            arg14 = '--custom_template_pdb_id=%s' % args.custom_template_pdb_id
             arg15 = '--save_structure_output'
 
-            script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13,arg14]
+            script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13]
+        
+            if args.custom_template_pdb_id:
+                script_arguments.append(arg14)
             if args.save_training_conformations:      
                 script_arguments.append(arg15) 
 
             cmd_to_run = ["python", finetune_openfold_path] + script_arguments
             cmd_to_run_str = s = ' '.join(cmd_to_run)
-            logger.info("RUNNING GRADIENT DESCENT WRT TO: %s" % curr_pdb_fname)
+            logger.info("RUNNING GRADIENT DESCENT WRT TO: %s" % dst_fname)
             logger.info(asterisk_line)
             logger.info("RUNNING THE FOLLOWING COMMAND:")
             logger.info(cmd_to_run_str)
