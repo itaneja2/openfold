@@ -187,7 +187,8 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
             fp.write(protein.to_pdb(unrelaxed_protein))
 
     disordered_percentage = rw_helper_functions.calc_disordered_percentage(unrelaxed_output_path)
-    accept_conformation = rw_helper_functions.accept_criteria(mean_plddt, disordered_percentage, args.mean_plddt_threshold, args.disordered_percentage_threshold)
+    accept_conformation = rw_helper_functions.accept_criteria(mean_plddt, disordered_percentage, 
+                                                              args.mean_plddt_threshold, args.disordered_percentage_threshold)
     shutil.rmtree(model_output_dir_temp)
 
     if phase == 'initial': #i.e the initial AF prediction from the original MSA
@@ -221,8 +222,9 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
     if not args.skip_relaxation:
         # Relax the prediction.
         logger.info(f"Running relaxation on {unrelaxed_output_path}...")
-        relax_protein(config, args.model_device, unrelaxed_protein, model_output_dir, output_name,
-                      args.cif_output)
+        relax_protein(config, args.model_device, 
+                      unrelaxed_protein, model_output_dir, 
+                      output_name, args.cif_output)
 
     if args.save_outputs and accept_conformation:
         embeddings_output_dir = '%s/embeddings' % model_output_dir
@@ -251,6 +253,59 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
 
 
     return mean_plddt, disordered_percentage, inference_time, accept_conformation, unrelaxed_output_path 
+
+def finetune_wrapper(
+    conformation_num: int,
+    conformation_info_i: Tuple[Any,...],
+    bootstrap_training_conformations_dir: str,
+    initial_pred_path: str,
+    file_id_wo_chain: str,
+    args: argparse.Namespace,
+):
+
+    logger.info('ON CONFORMATION %d/%d:' % (conformation_num+1,args.num_training_conformations))
+    logger.info(conformation_info_i)
+    bootstrap_training_conformations_dir_conformation_i = '%s/conformation%d' % (bootstrap_training_conformations_dir,conformation_num)
+    os.makedirs(bootstrap_training_conformations_dir_conformation_i, exist_ok=True)
+    rw_helper_functions.remove_files_in_dir(bootstrap_training_conformations_dir_conformation_i) #this directory should contain a single conformation so we can run train_openfold on it 
+    curr_pdb_path = conformation_info_i[2]
+    dst_fname = '%s.pdb' % file_id_wo_chain #during training, expected filename is without chain_id (i.e 1xyz)
+    dst_path = '%s/%s' % (bootstrap_training_conformations_dir_conformation_i,dst_fname)
+    shutil.copy(curr_pdb_path,dst_path)
+
+    target_str = 'target=conformation%d' % conformation_num
+    fine_tuning_save_dir = '%s/training/%s' % (l2_output_dir, target_str)
+
+    arg1 = '--train_data_dir=%s' % bootstrap_training_conformations_dir_conformation_i
+    arg2 = '--train_alignment_dir=%s' % args.alignment_dir
+    arg3 = '--fine_tuning_save_dir=%s' % fine_tuning_save_dir
+    arg4 = '--template_mmcif_dir=%s' % args.template_mmcif_dir
+    arg5 = '--max_template_date=%s' % date.today().strftime("%Y-%m-%d")
+    arg6 = '--precision=bf16'
+    arg7 = '--gpus=1'
+    arg8 = '--openfold_checkpoint_path=%s' % args.openfold_checkpoint_path 
+    arg9 = '--resume_model_weights_only=True'
+    arg10 = '--config_preset=custom_finetuning-SAID'
+    arg11 = '--module_config=%s' % args.module_config
+    arg12 = '--hp_config=%s' % args.train_hp_config
+    arg13 = '--initial_pred_path=%s' % initial_pred_path
+    arg14 = '--custom_template_pdb_id=%s' % args.custom_template_pdb_id
+    arg15 = '--save_structure_output'
+
+    script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13]
+
+    if args.custom_template_pdb_id:
+        script_arguments.append(arg14)
+    if args.save_training_conformations:      
+        script_arguments.append(arg15) 
+
+    cmd_to_run = ["python", finetune_openfold_path] + script_arguments
+    cmd_to_run_str = s = ' '.join(cmd_to_run)
+    logger.info("RUNNING GRADIENT DESCENT WRT TO: %s" % dst_fname)
+    logger.info(asterisk_line)
+    logger.info("RUNNING THE FOLLOWING COMMAND:")
+    logger.info(cmd_to_run_str)
+    subprocess.run(cmd_to_run)
 
     
 def propose_new_intrinsic_param_vanila_rw(
@@ -405,11 +460,16 @@ def run_rw_monomer(
     while (num_rejected_steps+num_accepted_steps) < num_total_steps:
 
         if rw_type == 'vanila':
-            intrinsic_param_proposed = propose_new_intrinsic_param_vanila_rw(intrinsic_param_prev, intrinsic_dim, rw_hp_dict['epsilon_scaling_factor'], cov_type, L)
+            intrinsic_param_proposed = propose_new_intrinsic_param_vanila_rw(intrinsic_param_prev, intrinsic_dim, 
+                                                                             rw_hp_dict['epsilon_scaling_factor'], cov_type, L)
         elif rw_type == 'discrete_ou':
-            intrinsic_param_proposed = propose_new_intrinsic_param_discrete_ou(intrinsic_param_prev, intrinsic_dim, rw_hp_dict['epsilon_scaling_factor'], rw_hp_dict['alpha'], cov_type, L)
+            intrinsic_param_proposed = propose_new_intrinsic_param_discrete_ou(intrinsic_param_prev, intrinsic_dim, 
+                                                                               rw_hp_dict['epsilon_scaling_factor'], rw_hp_dict['alpha'], 
+                                                                               cov_type, L)
         elif rw_type == 'rw_w_momentum':
-            intrinsic_param_proposed = propose_new_intrinsic_param_rw_w_momentum(intrinsic_param_prev, velocity_param_prev, intrinsic_dim, rw_hp_dict['epsilon_scaling_factor'], rw_hp_dict['gamma'], cov_type, L)
+            intrinsic_param_proposed = propose_new_intrinsic_param_rw_w_momentum(intrinsic_param_prev, velocity_param_prev, 
+                                                                                 intrinsic_dim, rw_hp_dict['epsilon_scaling_factor'], 
+                                                                                 rw_hp_dict['gamma'], cov_type, L)
 
         curr_tag = '%s_iter%d_step-iter%d_step-agg%d' % (base_tag, iter_n, curr_step_iter_n, curr_step_aggregate) 
         mean_plddt, disordered_percentage, inference_time, accept_conformation, pdb_path_rw = eval_model(model, config, intrinsic_param_proposed, feature_processor, feature_dict, processed_feature_dict, curr_tag, output_dir, phase, args)    
@@ -482,7 +542,8 @@ def get_scaling_factor_bootstrap(
         state_history = []  
         for i in range(0,args.num_bootstrap_hp_tuning_steps): 
             warmup_output_dir = '%s/warmup/scaling_factor=%s' % (output_dir, rw_helper_functions.remove_trailing_zeros(scaling_factor_candidate))
-            intrinsic_param_proposed = propose_new_intrinsic_param_vanila_rw(intrinsic_param_zero, intrinsic_dim, scaling_factor_candidate, 'spherical')
+            intrinsic_param_proposed = propose_new_intrinsic_param_vanila_rw(intrinsic_param_zero, intrinsic_dim, 
+                                                                             scaling_factor_candidate, 'spherical')
             curr_tag = '%s_step%d' % (base_tag,i)         
             mean_plddt, disordered_percentage, _, accept_conformation, _ = eval_model(model, config, intrinsic_param_proposed, feature_processor, feature_dict, processed_feature_dict, curr_tag, warmup_output_dir, 'bootstrap_warmup', args)    
             state_history.append(accept_conformation)
@@ -535,7 +596,7 @@ def get_bootstrap_candidate_conformations(
         f = conformation_info[i][0]
         rmsd = conformation_info[i][1]
         match = re.search(r'_iter(\d+)', f)
-        iter_num = int(match.group(1)) #this corresponds to a given iteration (i.e a sequence of conformations that terminates in a rejection
+        iter_num = int(match.group(1)) #this corresponds to a given iteration (i.e a sequence of conformations that terminates in a rejection)
         match = re.search(r'step-iter(\d+)', f) 
         step_num = int(match.group(1)) #this corresponds to the step_num for a given iteration 
         if iter_num not in bootstrap_conformations:
@@ -656,10 +717,8 @@ def run_grid_search_monomer(
     target_str: str, 
     initial_pred_path: str, 
     intrinsic_dim: int, 
-    rw_type: str, 
     num_total_steps: int, 
     L: np.ndarray, 
-    cov_type: str, 
     model: nn.Module, 
     config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
@@ -675,6 +734,9 @@ def run_grid_search_monomer(
        We employ a simple heuristic to terminate the search process early if certain
        criteria or conditions are satisfied. 
     """
+
+    rw_type = rw_hp_config_data['rw_type']
+    cov_type = rw_hp_config_data['cov_type'] 
 
     upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
     lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
@@ -701,7 +763,7 @@ def run_grid_search_monomer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -711,7 +773,8 @@ def run_grid_search_monomer(
             acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
+                                                                                             items, num_total_steps)
                     return state_history_dict
 
     else:
@@ -742,7 +805,7 @@ def run_grid_search_monomer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -752,12 +815,15 @@ def run_grid_search_monomer(
             acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
+                                                                                             items, num_total_steps)
                     return state_history_dict
                 
             if i == 0: #min_combination
                 if acceptance_rate < lower_bound_acceptance_threshold:
-                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1 
+                    #extrapolate all combinations with -1 
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
+                                                                                             None, num_total_steps) 
                     return state_history_dict
                 elif acceptance_rate >= lower_bound_acceptance_threshold and acceptance_rate <= upper_bound_acceptance_threshold:
                     min_combo_outside_acceptance_range = False
@@ -772,21 +838,23 @@ def run_grid_search_monomer(
                     #is also outside the acceptance range before terminating
                     #the search early  
                     if min_combo_outside_acceptance_range: 
-                        state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1
+                        #extrapolate all combinations with -1 
+                        state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
+                                                                                                 None, num_total_steps) 
                         return state_history_dict
                 
     return state_history_dict
 
 
 def summarize_rw(
-    iter_num: int, 
+    conformation_num: int, 
     conformation_info: List[Tuple[Any,...]]
 ):
     """Prints out summary statistics of random walk. 
     """
 
     logger.info(asterisk_line)
-    logger.info('RESULTS FOR CONFORMATION: %s' % iter_num)
+    logger.info('RESULTS FOR CONFORMATION: %s' % conformation_num)
     logger.debug(conformation_info)
     rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
     max_rmsd = np.max(rmsd_all)
@@ -1001,10 +1069,8 @@ def run_rw_pipeline(args):
         bootstrap_acceptance_rate = sum(state_history)/len(state_history)
         logger.info('BOOTSTRAP ACCEPTANCE RATE: %.3f' % bootstrap_acceptance_rate)
 
-        conformation_info_fname = '%s/conformation_info.pkl' % bootstrap_output_dir
         conformation_info = sorted(conformation_info, key=lambda x: x[0], reverse=True)
-        with open(conformation_info_fname, 'wb') as f:
-            pickle.dump(conformation_info, f)
+        rw_helper_functions.dump_pkl(conformation_info, 'conformation_info', bootstrap_output_dir)
 
         run_time = time.perf_counter() - t0
         timing_dict = {'bootstrap': run_time} 
@@ -1030,51 +1096,10 @@ def run_rw_pipeline(args):
         logger.info('BEGINNING GD PHASE:') 
         t0 = time.perf_counter()
 
-        for iter_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
-
-            logger.info('ON CONFORMATION %d/%d:' % (iter_num+1,args.num_training_conformations))
-            logger.info(conformation_info_i)
-            bootstrap_training_conformations_dir_conformation_i = '%s/conformation%d' % (bootstrap_training_conformations_dir,iter_num)
-            os.makedirs(bootstrap_training_conformations_dir_conformation_i, exist_ok=True)
-            rw_helper_functions.remove_files_in_dir(bootstrap_training_conformations_dir_conformation_i) #this directory should contain a single conformation so we can run train_openfold on it 
-            curr_pdb_path = conformation_info_i[2]
-            dst_fname = '%s.pdb' % file_id_wo_chain #during training, expected filename is without chain_id (i.e 1xyz)
-            dst_path = '%s/%s' % (bootstrap_training_conformations_dir_conformation_i,dst_fname)
-            shutil.copy(curr_pdb_path,dst_path)
-
-            target_str = 'target=conformation%d' % iter_num
-            fine_tuning_save_dir = '%s/training/%s' % (l2_output_dir, target_str)
-
-            arg1 = '--train_data_dir=%s' % bootstrap_training_conformations_dir_conformation_i
-            arg2 = '--train_alignment_dir=%s' % args.alignment_dir
-            arg3 = '--fine_tuning_save_dir=%s' % fine_tuning_save_dir
-            arg4 = '--template_mmcif_dir=%s' % args.template_mmcif_dir
-            arg5 = '--max_template_date=%s' % date.today().strftime("%Y-%m-%d")
-            arg6 = '--precision=bf16'
-            arg7 = '--gpus=1'
-            arg8 = '--openfold_checkpoint_path=%s' % args.openfold_checkpoint_path 
-            arg9 = '--resume_model_weights_only=True'
-            arg10 = '--config_preset=custom_finetuning-SAID'
-            arg11 = '--module_config=%s' % args.module_config
-            arg12 = '--hp_config=%s' % args.train_hp_config
-            arg13 = '--initial_pred_path=%s' % initial_pred_path
-            arg14 = '--custom_template_pdb_id=%s' % args.custom_template_pdb_id
-            arg15 = '--save_structure_output'
-
-            script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12,arg13]
-        
-            if args.custom_template_pdb_id:
-                script_arguments.append(arg14)
-            if args.save_training_conformations:      
-                script_arguments.append(arg15) 
-
-            cmd_to_run = ["python", finetune_openfold_path] + script_arguments
-            cmd_to_run_str = s = ' '.join(cmd_to_run)
-            logger.info("RUNNING GRADIENT DESCENT WRT TO: %s" % dst_fname)
-            logger.info(asterisk_line)
-            logger.info("RUNNING THE FOLLOWING COMMAND:")
-            logger.info(cmd_to_run_str)
-            subprocess.run(cmd_to_run)
+        for conformation_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
+            finetune_wrapper(conformation_num, conformation_info_i,
+                             bootstrap_training_conformations_dir, initial_pred_path,
+                             file_id_wo_chain, args)
 
         run_time = time.perf_counter() - t0
         timing_dict = {'gradient_descent': run_time} 
@@ -1128,31 +1153,20 @@ def run_rw_pipeline(args):
 
             state_history_dict = {} 
 
-            for iter_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
+            for conformation_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
 
-                logger.info('ON CONFORMATION %d/%d:' % (iter_num+1,args.num_training_conformations))
-                bootstrap_training_conformations_dir_conformation_i = '%s/conformation%d' % (bootstrap_training_conformations_dir,iter_num)
+                logger.info('ON CONFORMATION %d/%d:' % (conformation_num+1,args.num_training_conformations))
 
-                pdb_files = glob.glob('%s/*.pdb' % bootstrap_training_conformations_dir_conformation_i)
-                if len(pdb_files) == 0: #if files do not exist in this directory, gradient descent was not run with respect to this target structure
-                    continue 
-
-                target_str = 'target=conformation%d' % iter_num
+                target_str = 'target=conformation%d' % conformation_num
                 fine_tuning_save_dir = '%s/training/%s' % (l2_output_dir, target_str)
                 latest_version_num = rw_helper_functions.get_latest_version_num(fine_tuning_save_dir)
 
                 model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
                 sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
- 
-                if rw_hp_config_data['cov_type'] == 'full':
-                    random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
-                    logger.info('calculating cholesky')
-                    L = np.linalg.cholesky(random_cov)
-                else:
-                    L = None 
+                L = rw_helper_functions.get_cholesky(rw_hp_config_data['cov_type'], sigma, random_corr)
 
-                state_history_dict = run_grid_search_monomer(grid_search_combinations, state_history_dict, None, target_str, initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, args)
-                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, iter_num, args)
+                state_history_dict = run_grid_search_monomer(grid_search_combinations, state_history_dict, None, target_str, initial_pred_path, intrinsic_dim, args.num_rw_hp_tuning_steps_per_round, L, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, args)
+                hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, conformation_num, args)
                 
                 if exit_status == 1:
                     break
@@ -1164,9 +1178,7 @@ def run_rw_pipeline(args):
                 logger.info('HYPERPARAMETER TUNING WITH NEW SCALING FACTOR CANDIDATES')
                 logger.info(scaling_factor_candidates)
             else:
-                hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
-                with open(hp_acceptance_rate_fname, 'wb') as f:
-                    pickle.dump(hp_acceptance_rate_dict, f)
+                rw_helper_functions.dump_pkl(hp_acceptance_rate_dict, 'hp_acceptance_rate_info', rw_hp_parent_dir)            
                 logger.info(hp_acceptance_rate_dict)
 
         run_time = time.perf_counter() - t0
@@ -1182,47 +1194,27 @@ def run_rw_pipeline(args):
     logger.info('HYPERPARAMETERS BEING USED:')
     logger.info(rw_hp_dict)
 
-    for iter_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
+    for conformation_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
 
         t0 = time.perf_counter()
 
         conformation_info_dict = {} #maps bootstrap_key to (pdb_path,plddt,disordered_percentage,rmsd)
 
-        logger.info('ON CONFORMATION %d/%d:' % (iter_num+1,args.num_training_conformations))
+        logger.info('ON CONFORMATION %d/%d:' % (conformation_num+1,args.num_training_conformations))
         logger.info(conformation_info_i)
-        bootstrap_training_conformations_dir_conformation_i = '%s/conformation%d' % (bootstrap_training_conformations_dir,iter_num)
 
-        pdb_files = glob.glob('%s/*.pdb' % bootstrap_training_conformations_dir_conformation_i)
-        if len(pdb_files) == 0: #if files do not exist in this directory, gradient descent was not run with respect to this target structure
-            continue 
-
-        target_str = 'target=conformation%d' % iter_num
+        target_str = 'target=conformation%d' % conformation_num
         fine_tuning_save_dir = '%s/training/%s' % (l2_output_dir, target_str)
         latest_version_num = rw_helper_functions.get_latest_version_num(fine_tuning_save_dir)
 
         model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
         sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
-
-        if rw_hp_config_data['cov_type'] == 'full':
-            random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
-            logger.info('calculating cholesky')
-            L = np.linalg.cholesky(random_cov)
-        else:
-            L = None 
+        L = rw_helper_functions.get_cholesky(rw_hp_config_data['cov_type'], sigma, random_corr)
  
         rw_output_dir = '%s/rw/%s' % (output_dir,target_str)
 
-        pdb_files = glob.glob('%s/**/*.pdb' % rw_output_dir)
-        if len(pdb_files) >= args.num_rw_steps:
-            if args.overwrite_pred:
-                logger.info('removing pdb files in %s' % rw_output_dir)
-                rw_helper_functions.remove_files(pdb_files)
-            else:
-                logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))
-                continue 
-        elif len(pdb_files) > 0: #incomplete job
-            logger.info('removing pdb files in %s' % rw_output_dir)
-            rw_helper_functions.remove_files(pdb_files)
+        #removes pdb files if iteration should be overwritten or restarted
+        rw_helper_functions.overwrite_or_restart_incomplete_iterations(rw_output_dir, args)
 
         logger.info('BEGINNING RW FOR: %s' % rw_output_dir)
 
@@ -1231,19 +1223,15 @@ def run_rw_pipeline(args):
                 state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
         else:
             state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
-        conformation_info_dict[iter_num] = conformation_info
+        conformation_info_dict[conformation_num] = conformation_info
 
         acceptance_rate = sum(state_history)/len(state_history)
         logger.info('ACCEPTANCE RATE: %.3f' % acceptance_rate)
 
-        conformation_info_output_dir = rw_output_dir
-        conformation_info_fname = '%s/conformation_info.pkl' % conformation_info_output_dir
-        with open(conformation_info_fname, 'wb') as f:
-            pickle.dump(conformation_info_dict, f)
+        rw_helper_functions.dump_pkl(conformation_info_dict, 'conformation_info', rw_output_dir)
+        summarize_rw(conformation_num, conformation_info)
 
-        summarize_rw(iter_num, conformation_info)
-
-        inference_key = 'inference_%d' % iter_num
+        inference_key = 'inference_%d' % conformation_num
         run_time = time.perf_counter() - t0
         timing_dict = {inference_key: run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, inference_key)

@@ -286,6 +286,52 @@ def get_aligned_models_info(
     return aligned_models_info
 
 
+def finetune_wrapper(
+    aligned_models_info: Tuple[Any,...],
+    l2_output_dir: str,
+    jax_param_path_dict: Mapping[str, str],
+    args: argparse.Namespace,
+)
+
+    model_name_source = aligned_models_info[0] #this is model being used for training 
+    model_name_target = aligned_models_info[1] 
+    source_pdb_path = aligned_models_info[2]
+    target_pdb_path = aligned_models_info[3] 
+    
+    logger.info('ON MODEL: %s' % model_name_source)
+    logger.info(aligned_models_info)
+    source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
+    target_str = 'target=%s' % model_name_target
+    fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
+
+    arg1 = '--train_data_dir=%s' % target_pdb_path[0:target_pdb_path.rindex('/')]
+    arg2 = '--train_alignment_dir=%s' % args.alignment_dir
+    arg3 = '--fine_tuning_save_dir=%s' % fine_tuning_save_dir
+    arg4 = '--template_mmcif_dir=%s' % args.template_mmcif_dir
+    arg5 = '--max_template_date=%s' % date.today().strftime("%Y-%m-%d")
+    arg6 = '--precision=bf16'
+    arg7 = '--gpus=1'
+    arg8 = '--resume_from_jax_params=%s' % jax_param_path_dict[model_name_source] 
+    arg9 = '--resume_model_weights_only=True'
+    arg10 = '--config_preset=multimer-custom_finetuning-SAID-all-%s' % model_name_source #fine tune w.r.t vanila model (i.e no chainmask) 
+    arg11 = '--module_config=%s' % args.module_config
+    arg12 = '--hp_config=%s' % args.train_hp_config
+    arg13 = '--save_structure_output'
+
+    script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12] 
+    if args.save_training_conformations:       
+        script_arguments.append(arg13)
+
+    cmd_to_run = ["python", finetune_openfold_path] + script_arguments
+    cmd_to_run_str = s = ' '.join(cmd_to_run)
+    logger.info("RUNNING GRADIENT DESCENT WITH SOURCE %s AND TARGET %s" % (initial_pred_path_dict[model_name_source],initial_pred_path_dict[model_name_target]))
+    logger.info(asterisk_line)
+    logger.info("RUNNING THE FOLLOWING COMMAND:")
+    logger.info(cmd_to_run_str)
+    subprocess.run(cmd_to_run)
+
+
+
 def propose_new_epsilon_vanila_rw(
     intrinsic_dim: int, 
     cov_type: str, 
@@ -537,10 +583,8 @@ def run_grid_search_multimer(
     target_str: str, 
     initial_pred_path: str, 
     intrinsic_dim: int, 
-    rw_type: str, 
     num_total_steps: int, 
     L: np.ndarray, 
-    cov_type: str, 
     model: nn.Module, 
     config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
@@ -556,6 +600,9 @@ def run_grid_search_multimer(
        We employ a simple heuristic to terminate the search process early if certain
        criteria or conditions are satisfied. 
     """
+
+    rw_type = rw_hp_config_data['rw_type']
+    cov_type = rw_hp_config_data['cov_type'] 
 
     upper_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']+rw_hp_config_data['rw_tuning_acceptance_threshold_ub_tolerance'],2)
     lower_bound_acceptance_threshold = round(rw_hp_config_data['rw_tuning_acceptance_threshold']-rw_hp_config_data['rw_tuning_acceptance_threshold_lb_tolerance'],2)
@@ -582,7 +629,7 @@ def run_grid_search_multimer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -623,7 +670,7 @@ def run_grid_search_multimer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, 'full', model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -909,13 +956,8 @@ def run_rw_pipeline(args):
         timing_dict = {'initial_pred': run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, 'inital_pred')
 
-        initial_pred_info_fname = '%s/initial_pred_info.pkl' % initial_pred_dir
-        with open(initial_pred_info_fname, 'wb') as f:
-            pickle.dump(initial_pred_path_dict, f)
-
-        conformation_info_fname = '%s/conformation_info.pkl' % initial_pred_dir
-        with open(conformation_info_fname, 'wb') as f:
-            pickle.dump(conformation_info_dict, f)
+        rw_helper_functions.dump_pkl(initial_pred_path_dict, 'initial_pred_info', initial_pred_dir)
+        rw_helper_functions.dump_pkl(conformation_info_dict, 'conformation_info', initial_pred_dir)
 
         seed_fname = '%s/seed.txt' % initial_pred_dir
         np.savetxt(seed_fname, [random_seed], fmt='%d')
@@ -938,44 +980,9 @@ def run_rw_pipeline(args):
         t0 = time.perf_counter()
       
         for i in range(0,len(aligned_models_info)): 
+            finetune_wrapper(aligned_models_info[i], l2_output_dir, 
+                             jax_param_path_dict, args)
            
-            model_name_source = aligned_models_info[i][0] #this is model being used for training 
-            model_name_target = aligned_models_info[i][1] 
-            source_pdb_path = aligned_models_info[i][2]
-            target_pdb_path = aligned_models_info[i][3] 
-            
-            logger.info('ON MODEL')
-            logger.info(aligned_models_info[i])
-            source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
-            target_str = 'target=%s' % model_name_target
-            fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
- 
-            arg1 = '--train_data_dir=%s' % target_pdb_path[0:target_pdb_path.rindex('/')]
-            arg2 = '--train_alignment_dir=%s' % args.alignment_dir
-            arg3 = '--fine_tuning_save_dir=%s' % fine_tuning_save_dir
-            arg4 = '--template_mmcif_dir=%s' % args.template_mmcif_dir
-            arg5 = '--max_template_date=%s' % date.today().strftime("%Y-%m-%d")
-            arg6 = '--precision=bf16'
-            arg7 = '--gpus=1'
-            arg8 = '--resume_from_jax_params=%s' % jax_param_path_dict[model_name_source] 
-            arg9 = '--resume_model_weights_only=True'
-            arg10 = '--config_preset=multimer-custom_finetuning-SAID-all-%s' % model_name_source #fine tune w.r.t vanila model (i.e no chainmask) 
-            arg11 = '--module_config=%s' % args.module_config
-            arg12 = '--hp_config=%s' % args.train_hp_config
-            arg13 = '--save_structure_output'
-    
-            script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12] 
-            if args.save_training_conformations:       
-                script_arguments.append(arg13)
-     
-            cmd_to_run = ["python", finetune_openfold_path] + script_arguments
-            cmd_to_run_str = s = ' '.join(cmd_to_run)
-            logger.info("RUNNING GRADIENT DESCENT WITH SOURCE %s AND TARGET %s" % (initial_pred_path_dict[model_name_source],initial_pred_path_dict[model_name_target]))
-            logger.info(asterisk_line)
-            logger.info("RUNNING THE FOLLOWING COMMAND:")
-            logger.info(cmd_to_run_str)
-            subprocess.run(cmd_to_run)
-
         run_time = time.perf_counter() - t0
         timing_dict = {'gradient_descent': run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, 'gradient_descent')
@@ -1032,7 +1039,7 @@ def run_rw_pipeline(args):
                 model_name_target = aligned_models_info[i][1] 
                 source_pdb_path = aligned_models_info[i][2]
 
-                logger.info('ON MODEL')
+                logger.info('ON MODEL: %s' % model_name_source)
                 logger.info(aligned_models_info[i])
                 source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
                 target_str = 'target=%s' % model_name_target
@@ -1040,16 +1047,10 @@ def run_rw_pipeline(args):
                 latest_version_num = rw_helper_functions.get_latest_version_num(fine_tuning_save_dir)
 
                 model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
-                sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
-        
-                if rw_hp_config_data['cov_type'] == 'full':
-                    random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
-                    logger.info('calculating cholesky')
-                    L = np.linalg.cholesky(random_cov)
-                else:
-                    L = None 
+                sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir) 
+                L = rw_helper_functions.get_cholesky(rw_hp_config_data['cov_type'], sigma, random_corr)
 
-                state_history_dict = run_grid_search_multimer(grid_search_combinations, state_history_dict, source_str, target_str, source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], args.num_rw_hp_tuning_steps_per_round, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, args)
+                state_history_dict = run_grid_search_multimer(grid_search_combinations, state_history_dict, source_str, target_str, source_pdb_path, intrinsic_dim, args.num_rw_hp_tuning_steps_per_round, L, model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, args)
                 hp_acceptance_rate_dict, grid_search_combinations, exit_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, i, args)
 
                 if exit_status == 1:
@@ -1062,9 +1063,7 @@ def run_rw_pipeline(args):
                 logger.info('HYPERPARAMETER TUNING WITH NEW SCALING FACTOR CANDIDATES')
                 logger.info(scaling_factor_candidates)
             else:
-                hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
-                with open(hp_acceptance_rate_fname, 'wb') as f:
-                    pickle.dump(hp_acceptance_rate_dict, f)
+                rw_helper_functions.dump_pkl(hp_acceptance_rate_dict, 'hp_acceptance_rate_info', rw_hp_parent_dir)            
                 logger.info(hp_acceptance_rate_dict)
 
         run_time = time.perf_counter() - t0
@@ -1096,27 +1095,12 @@ def run_rw_pipeline(args):
 
         model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
         sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
-
-        if rw_hp_config_data['cov_type'] == 'full':
-            random_cov = rw_helper_functions.get_random_cov(sigma, random_corr)
-            logger.info('calculating cholesky')
-            L = np.linalg.cholesky(random_cov)
-        else:
-            L = None 
+        L = rw_helper_functions.get_cholesky(rw_hp_config_data['cov_type'], sigma, random_corr)
  
         rw_output_dir = '%s/rw/%s/%s' % (output_dir,source_str,target_str)
 
-        pdb_files = glob.glob('%s/**/*.pdb' % rw_output_dir)
-        if len(pdb_files) >= args.num_rw_steps:
-            if args.overwrite_pred:
-                logger.info('removing pdb files in %s' % rw_output_dir)
-                rw_helper_functions.remove_files(pdb_files)
-            else:
-                logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))
-                continue 
-        elif len(pdb_files) > 0: #incomplete job
-            logger.info('removing pdb files in %s' % rw_output_dir)
-            rw_helper_functions.remove_files(pdb_files)
+        #removes pdb files if iteration should be overwritten or restarted
+        rw_helper_functions.overwrite_or_restart_incomplete_iterations(rw_output_dir, args)
 
         logger.info('RW OUTPUT DIR: %s' % rw_output_dir)
 
@@ -1132,11 +1116,7 @@ def run_rw_pipeline(args):
         acceptance_rate = sum(state_history)/len(state_history)
         logger.info('ACCEPTANCE RATE: %.3f' % acceptance_rate)
 
-        conformation_info_output_dir = rw_output_dir 
-        conformation_info_fname = '%s/conformation_info.pkl' % conformation_info_output_dir
-        with open(conformation_info_fname, 'wb') as f:
-            pickle.dump(conformation_info_dict, f)
-
+        rw_helper_functions.dump_pkl(conformation_info_dict, 'conformation_info', rw_output_dir)
         summarize_rw(model_name_source, conformation_info)
 
         inference_key = 'inference_%d' % i

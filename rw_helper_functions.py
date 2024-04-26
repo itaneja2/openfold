@@ -49,6 +49,11 @@ def write_timings(timing_dict, output_dir_base, timing_fname):
         json.dump(timing_dict, f)
 
 
+def dump_pkl(data, fname, output_dir):
+    output_path = '%s/%s.pkl' % (output_dir, fname)
+    with open(output_path, 'wb') as f:
+        pickle.dump(data, f)
+
 def remove_files_in_dir(path):
     file_list = glob.glob('%s/*' % path)
     for f in file_list:
@@ -169,6 +174,16 @@ def get_random_cov(sigma, random_corr):
     random_cov = (sigma[:, np.newaxis]*random_corr)*sigma
     return random_cov
 
+def get_cholesky(cov_type, sigma, random_corr):
+    if cov_type == 'full':
+        random_cov = get_random_cov(sigma, random_corr)
+        logger.info('calculating cholesky')
+        L = np.linalg.cholesky(random_cov)
+    else:
+        L = None 
+    return L 
+
+
 def autopopulate_state_history_dict(state_history_dict, grid_search_combinations, optimal_combination, num_total_steps):
     #this is called to make early termination work 
     for i,items in enumerate(grid_search_combinations):
@@ -283,4 +298,17 @@ def get_rw_hp_tuning_info(
 
     return hp_acceptance_rate_dict, grid_search_combinations, exit_status
 
+
+def overwrite_or_restart_incomplete_iterations(rw_output_dir, args):
+    pdb_files = glob.glob('%s/**/*.pdb' % rw_output_dir)
+    if len(pdb_files) >= args.num_rw_steps:
+        if args.overwrite_pred:
+            logger.info('removing pdb files in %s' % rw_output_dir)
+            remove_files(pdb_files)
+        else:
+            logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))
+            continue 
+    elif len(pdb_files) > 0: #incomplete job
+        logger.info('removing pdb files in %s' % rw_output_dir)
+        remove_files(pdb_files)
 
