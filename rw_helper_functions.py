@@ -280,23 +280,23 @@ def get_rw_hp_tuning_info(
     logger.info('CURRENT GRID SEARCH PARAMETERS:')
     logger.info(grid_search_combinations)
 
-    exit_status = 0 
+    completion_status = 0 
 
     if len(grid_search_combinations) == 0:
         logger.info('ALL CURRENT HYPERPARAMETER COMBINATIONS HAVE BEEN ELIMINATED')
-        exit_status = 1
+        completion_status = 1
     elif len(grid_search_combinations) == 1:
         logger.info('ONLY SINGLE HYPERPARAMETER COMBINATION  EXISTS:')
-        exit_status = 1
+        completion_status = 1
     elif len(grid_search_combinations) > 1:
         completed = False
         if (round_num+1) >= args.num_rw_hp_tuning_rounds_total:
             completed = True
         if completed:
             logger.info('ALL HYPERPARAMETER COMBINATIONS HAVE BEEN RUN THE SPECIFIED NUMBER OF ROUNDS (%d)' % args.num_rw_hp_tuning_rounds_total)
-            exit_status = 1 
+            completion_status = 1 
 
-    return hp_acceptance_rate_dict, grid_search_combinations, exit_status
+    return hp_acceptance_rate_dict, grid_search_combinations, completion_status
 
 
 def overwrite_or_restart_incomplete_iterations(rw_output_dir, args):

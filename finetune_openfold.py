@@ -59,7 +59,9 @@ import re
 from intrinsic_ft import modify_with_intrinsic_model
 from collections import defaultdict
 
-from pdb_utils.pdb_utils import convert_pdb_to_mmcif, align_and_get_rmsd, get_residues_ignore_idx_between_af_conformations
+from custom_openfold_utils.pdb_utils import convert_pdb_to_mmcif, align_and_get_rmsd
+from custom_openfold_utils.conformation_utils import get_residues_ignore_idx_between_af_conformations
+
 
 
 class OpenFoldWrapper(pl.LightningModule):

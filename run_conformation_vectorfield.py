@@ -50,7 +50,7 @@ from scripts.utils import add_data_args
 import pandas as pd 
 pd.set_option('display.max_rows', 500)
 
-from pdb_utils.pdb_utils import get_ca_coords_matrix, save_ca_coords
+from custom_openfold_utils.pdb_utils import get_ca_coords_matrix, save_ca_coords
 from rw_helper_functions import write_timings, remove_files, calc_disordered_percentage
 
 logger = logging.getLogger(__name__)
@@ -96,7 +96,6 @@ def eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_confo
     raw_phi_pred = np.arctan2(np.clip(norm_phi_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_phi_pred[..., 0], a_min=-1,a_max=1))
     raw_theta_pred = np.arctan2(np.clip(norm_theta_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_theta_pred[..., 0], a_min=-1,a_max=1))
 
-
     norm_phi_gt = np.squeeze(vectorfield_gt_feats["normalized_phi_theta_gt"][..., 0, :], axis=-1)
     norm_theta_gt = np.squeeze(vectorfield_gt_feats["normalized_phi_theta_gt"][..., 1, :], axis=-1)
     r_gt = vectorfield_gt_feats["r_gt"]
@@ -104,15 +103,24 @@ def eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_confo
     raw_phi_gt = vectorfield_gt_feats["raw_phi_theta_gt"][..., 0, :]
     raw_theta_gt = vectorfield_gt_feats["raw_phi_theta_gt"][..., 1, :]
 
-    delta_x_pred = np.cos(raw_theta_pred)*np.sin(raw_phi_pred)
-    delta_y_pred = np.sin(raw_theta_pred)*np.sin(raw_phi_pred)
-    delta_z_pred = np.cos(raw_phi_pred)
+    #angle between two vectors in spherical coordinates where
+    #phi is inclination angle (from positive z-axis)
+    #and theta is azimuthal angle from x-axis in xy plane:
+    ##sin(phi_1)*sin(phi_2)*cos(theta_1-theta_2) + cos(phi_1)*cos(phi_2)
+    sin_phi_prod = np.sin(raw_phi_pred)*np.sin(raw_phi_gt)
+    cos_theta_diff = np.cos(raw_theta_pred-raw_theta_gt)
+    cos_phi_prod = np.cos(raw_phi_pred)*np.cos(raw_phi_gt)
+    vector_angle = np.arccos(np.clip(sin_phi_prod*cos_theta_diff + cos_phi_prod, a_min=-1, a_max=1))
+
+    delta_x_pred = 1.0*np.cos(raw_theta_pred)*np.sin(raw_phi_pred)
+    delta_y_pred = 1.0*np.sin(raw_theta_pred)*np.sin(raw_phi_pred)
+    delta_z_pred = 1.0*np.cos(raw_phi_pred)
 
     delta_x_gt = r_gt*np.cos(raw_theta_gt)*np.sin(raw_phi_gt)
     delta_y_gt = r_gt*np.sin(raw_theta_gt)*np.sin(raw_phi_gt)
     delta_z_gt = r_gt*np.cos(raw_phi_gt)
 
-    delta_xyz_pred = np.transpose(np.array([delta_x_pred,delta_y_pred,delta_z_pred]))*2.0
+    delta_xyz_pred = np.transpose(np.array([delta_x_pred,delta_y_pred,delta_z_pred]))
     delta_xyz_gt = np.transpose(np.array([delta_x_gt,delta_y_gt,delta_z_gt]))
 
     ca_coords_pred = rw_conformation_ca_coords + delta_xyz_pred
@@ -125,12 +133,12 @@ def eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_confo
     save_ca_coords(rw_conformation_path, ca_coords_pred, pdb_output_path)
 
     residues_mask = np.squeeze(vectorfield_gt_feats["residues_mask"], axis=-1)
-    print(residues_mask)
 
     out_df = pd.DataFrame({'norm_phi_pred_x': norm_phi_pred[:,0], 'norm_phi_pred_y': norm_phi_pred[:,1], 
                            'norm_phi_gt_x': norm_phi_gt[:,0], 'norm_phi_gt_y': norm_phi_gt[:,1],
                            'norm_theta_pred_x': norm_theta_pred[:,0], 'norm_theta_pred_y': norm_theta_pred[:,1],
-                           'norm_theta_gt_x': norm_theta_gt[:,0], 'norm_theta_gt_y': norm_theta_gt[:,1], 
+                           'norm_theta_gt_x': norm_theta_gt[:,0], 'norm_theta_gt_y': norm_theta_gt[:,1],
+                           'vector_angle': vector_angle, 
                            'residues_mask': residues_mask, 'rw_conformation_path': rw_conformation_path, 
                            'nearest_aligned_gtc_path': nearest_aligned_gtc_path})  
     out_df_subset = out_df[out_df['residues_mask'] == 1]

@@ -13,15 +13,9 @@ import numpy as np
 import re 
 from typing import Any, List, Sequence, Optional, Tuple
 
-
-sys.path.insert(0, '../')
-from pdb_utils.pdb_utils import (
-    get_pdb_path_seq, 
-    align_and_get_rmsd,
-    fetch_mmcif,
-    get_residues_ignore_idx_between_pdb_conformations,
-    get_conformation_vectorfield_spherical_coordinates
-)
+from custom_openfold_utils.pdb_utils import get_pdb_path_seq, align_and_get_rmsd
+from custom_openfold_utils.fetch_utils import fetch_mmcif
+from custom_openfold_utils.conformation_utils import get_residues_ignore_idx_between_pdb_conformations, get_conformation_vectorfield_spherical_coordinates
 
 asterisk_line = '*********************************'
 

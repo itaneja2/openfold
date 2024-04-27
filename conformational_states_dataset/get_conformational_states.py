@@ -17,9 +17,6 @@ from pymol import cmd
 import json 
 from joblib import Parallel, delayed
 
-sys.path.insert(0, '../')
-
-from pdb_utils.pdb_utils import save_pdb_chain, get_model_name, get_pymol_cmd_superimpose, get_pymol_cmd_save, clean_pdb
 
 def get_all_pdb_openprotein():
     s3 = boto3.client('s3')
@@ -128,19 +125,5 @@ def gen_conformation_states_dict():
     print(results)
     print(len(results))
 
-#gen_conformation_states_dict()
+gen_conformation_states_dict()
 
-
-'''
-def get_rmsd_dict_parallel():
-
-    print('reading conformation_states_dict.pkl')
-    with open("./data/conformation_states_dict.pkl", "rb") as f:
-        conformation_states_dict = pickle.load(f)
-
-    #use loky, because this causes conflicts in pymol if we use threads
-    rmsd_dict = Parallel(n_jobs=-1,backend='loky')(delayed(get_rmsd_info)(conformation_states_dict, i) for i in range(0,len(conformation_states_dict)))
-
-    with open("./data/rmsd_dict.pkl", "wb") as f:
-        pickle.dump(rmsd_dict, f)
-''' 

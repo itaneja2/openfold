@@ -20,7 +20,7 @@ import functools
 
 from DockQ.DockQ import calc_DockQ
 
-from pdb_utils.pdb_utils import superimpose_wrapper_monomer, superimpose_wrapper_multimer, renumber_chain_wrt_reference
+from custom_openfold_utils.pdb_utils import superimpose_wrapper_monomer, superimpose_wrapper_multimer, renumber_chain_wrt_reference
 
 asterisk_line = '******************************************************************************'
 

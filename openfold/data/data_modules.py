@@ -25,8 +25,7 @@ from openfold.utils.tensor_utils import (
     tensor_tree_map,
 )
 
-sys.path.insert(0, '../../')
-from pdb_utils.pdb_utils import get_residues_ignore_idx_between_af_conformations
+from custom_openfold_utils.conformation_utils import get_residues_ignore_idx_between_af_conformations
 
 
 class OpenFoldSingleDataset(torch.utils.data.Dataset):

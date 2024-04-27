@@ -59,7 +59,7 @@ import re
 from intrinsic_ft import modify_with_intrinsic_model
 from collections import defaultdict
 
-from pdb_utils.pdb_utils import align_and_get_rmsd
+from custom_openfold_utils.pdb_utils import align_and_get_rmsd
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  

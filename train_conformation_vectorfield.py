@@ -59,7 +59,7 @@ import re
 from intrinsic_ft import modify_with_intrinsic_model
 from collections import defaultdict
 
-from pdb_utils.pdb_utils import align_and_get_rmsd
+from custom_openfold_utils.pdb_utils import align_and_get_rmsd
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  
@@ -115,11 +115,6 @@ class ConformationVectorFieldWrapper(pl.LightningModule):
         # Remove the recycling dimension
         batch = tensor_tree_map(lambda t: t[..., -1], batch)
 
-        if self.is_multimer:
-            batch = multi_chain_permutation_align(out=outputs,
-                                                  features=batch,
-                                                  ground_truth=ground_truth)
-
         # Compute loss
         loss, loss_breakdown = self.loss(
             outputs, batch, _return_breakdown=True
@@ -154,13 +149,6 @@ class ConformationVectorFieldWrapper(pl.LightningModule):
         }
 
     
-    '''def get_module_params(self):
-        n = [name for name, param in self.model.named_parameters() if 'conformation_module' in name and 'angle_resnet' not in name]
-        p = [param for name, param in self.model.named_parameters() if 'conformation_module' in name and 'angle_resnet' not in name]
-        logger.info('PARAMETERS TO TUNE:')
-        logger.info(n)
-        return p''' 
-
     def resume_last_lr_step(self, lr_step):
         self.last_lr_step = lr_step
 

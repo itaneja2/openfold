@@ -31,8 +31,7 @@ from openfold.utils.script_utils import parse_fasta
 
 from openfold.data.data_modules import OpenFoldDataLoader, OpenFoldBatchCollator 
 
-sys.path.insert(0, '../../')
-from pdb_utils.pdb_utils import get_rmsd
+from custom_openfold_utils.pdb_utils import get_rmsd
 
 
 
@@ -128,21 +127,6 @@ class ConformationVectorFieldSingleDataset(torch.utils.data.Dataset):
                 n -= 1
             return nth_occurrence
 
-        '''children_dirs = glob.glob('%s/*/' % alignment_dir) #UNIPROT_ID
-        children_dirs = [f[0:-1] for f in children_dirs] #remove trailing forward slash
-        unique_uniprot_ids = [f[f.rindex('/')+1:] for f in children_dirs] #extract UNIPROT_ID 
-        rw_conformations = [] #path to rw_conformations across all uniprot_ids 
-        uniprot_ids = [] #corresponding uniprot_id for each rw_conformation
-        for uniprot_id in unique_uniprot_ids:
-            rw_data_dir_curr_uniprot_id = os.path.join(self.rw_data_dir, uniprot_id)
-            if os.path.exists(rw_data_dir_curr_uniprot_id):
-                rw_conformations_curr_uniprot_id = glob.glob('%s/*/*/*/*/bootstrap/ACCEPTED/*.pdb' % rw_data_dir_curr_uniprot_id)
-                rw_conformations.extend(rw_conformations_curr_uniprot_id)
-                uniprot_ids.extend([uniprot_id]*len(rw_conformations_curr_uniprot_id))
-        self._rw_conformations = rw_conformations
-        self._uniprot_ids = uniprot_ids'''
-
-        print('reading vectorfield_dict')
         conformation_vectorfield_path = os.path.join(self.ground_truth_data_dir, 'conformation_vectorfield_dict.pkl')
         residues_mask_path = os.path.join(self.ground_truth_data_dir, 'residues_mask_dict.pkl')
         uniprot_id_dict_path = os.path.join(self.ground_truth_data_dir, 'uniprot_id_dict.pkl')

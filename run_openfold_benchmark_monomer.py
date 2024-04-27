@@ -52,7 +52,7 @@ from openfold.utils.trace_utils import (
 from scripts.utils import add_data_args
 import pandas as pd 
 
-from pdb_utils.pdb_utils import align_and_get_rmsd
+from custom_openfold_utils.pdb_utils import align_and_get_rmsd
 from rw_helper_functions import write_timings, remove_files, calc_disordered_percentage
 
 logger = logging.getLogger(__name__)

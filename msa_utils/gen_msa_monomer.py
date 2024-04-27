@@ -26,7 +26,7 @@ from openfold.data import (
 from openfold.data.tools import hhsearch, hmmsearch
 from scripts.utils import add_data_args
 
-from pdb_utils.pdb_utils import num_to_chain, get_pdb_id_seq, get_uniprot_seq, get_uniprot_id 
+from custom_openfold_utils.pdb_utils import num_to_chain, get_pdb_id_seq, get_uniprot_seq, get_uniprot_id
 
 bucket_name = 'openfold'
 s3 = boto3.resource(

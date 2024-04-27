@@ -18,9 +18,14 @@ import json
 from joblib import Parallel, delayed
 import numpy as np
 
-sys.path.insert(0, '../')
-
-from pdb_utils.pdb_utils import save_pdb_chain, get_model_name, get_pymol_cmd_superimpose, get_pymol_cmd_save, clean_pdb, align_and_get_rmsd
+from custom_openfold_utils.pdb_utils import (
+    save_pdb_chain, 
+    get_model_name, 
+    get_pymol_cmd_superimpose, 
+    get_pymol_cmd_save, 
+    clean_pdb, 
+    align_and_get_rmsd
+)
 
 
 ############################

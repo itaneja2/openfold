@@ -136,8 +136,8 @@ def phi_theta_loss(
     cos_phi_prod = torch.cos(raw_phi_theta[..., 0])*torch.cos(raw_phi_theta_gt[..., 0])
     # [*, N]
     vector_angle = torch.acos(torch.clamp(sin_phi_prod*cos_theta_diff + cos_phi_prod, min=-1,max=1))
-    print('vector angle loss:')
     l_vector_angle = torch.sum(vector_angle*residues_mask, dim=-1) / (eps + torch.sum(residues_mask, dim=-1))
+    print('vector angle loss:')
     print(l_vector_angle)
 
 

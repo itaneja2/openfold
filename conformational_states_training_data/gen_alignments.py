@@ -10,13 +10,23 @@ import itertools
 import subprocess 
 import pickle
 
-sys.path.insert(0, '../')
-from openfold.utils.script_utils import parse_fasta
-from pdb_utils.pdb_utils import get_uniprot_id
+from custom_openfold_utils.pdb_utils import get_uniprot_id
 
 gen_msa_monomer_path = '../msa_utils/gen_msa_monomer.py' 
 
 asterisk_line = '******************************************************************************'
+
+def parse_fasta(data):
+    data = re.sub('>$', '', data, flags=re.M)
+    lines = [
+        l.replace('\n', '')
+        for prot in data.split('>') for l in prot.strip().split('\n', 1)
+    ][1:]
+    tags, seqs = lines[::2], lines[1::2]
+
+    tags = [re.split('\W| \|', t)[0] for t in tags]
+
+    return tags, seqs
 
 
 conformational_states_df = pd.read_csv('../conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')

@@ -2,8 +2,8 @@ import sys
 import pandas as pd 
 from pathlib import Path
 
-sys.path.insert(0, '../')
-from pdb_utils.pdb_utils import fetch_pdb, fetch_pdb_metadata_df, get_uniprot_seq
+from custom_openfold_utils.pdb_utils import get_uniprot_seq     
+from custom_openfold_utils.fetch_utils import fetch_pdb, fetch_pdb_metadata_df 
 
 def list_of_strings(arg):
     return arg.split(',')
