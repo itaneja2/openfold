@@ -58,13 +58,13 @@ from random_corr_sap import gen_randcorr_sap
 from pdb_utils.pdb_utils import align_and_get_rmsd
 import rw_helper_functions
 
-from run_openfold_rw_monomer import (
+from gen_cvf_training_conformations import (
     run_rw_pipeline 
 )
 
 FeatureDict = MutableMapping[str, np.ndarray]
 
-logger = logging.getLogger('run_openfold_rw_monomer_batch')
+logger = logging.getLogger('gen_cvf_training_conformations_batch')
 logger.setLevel(logging.INFO)  
 logger.propagate = False
 formatter = logging.Formatter('%(asctime)s - %(filename)s - %(levelname)s : %(message)s')
@@ -72,7 +72,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO) 
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
-file_handler = logging.FileHandler('./rw_monomer_batch.log', mode='w') 
+file_handler = logging.FileHandler('./cvf_training_conformations_batch.log', mode='w') 
 file_handler.setLevel(logging.INFO) 
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
@@ -268,7 +268,7 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
     args.model_device = 'cuda:0'
     args.bootstrap_phase_only = True
     args.data_random_seed = seed 
-    args.num_bootstrap_steps = 500 
+    args.num_bootstrap_steps = 200 
         
     if(args.jax_param_path is None and args.openfold_checkpoint_path is None):
         args.jax_param_path = os.path.join(
@@ -293,7 +293,6 @@ def run_rw_all_custom_template():
 
     conformational_states_df = conformational_states_df[conformational_states_df['uniprot_id'] == 'P69441'].reset_index(drop=True)
 
-
     for index,row in conformational_states_df.iterrows():
 
         logger.info('On row %d of %d' % (index, len(conformational_states_df)))   
@@ -307,16 +306,17 @@ def run_rw_all_custom_template():
         for j,template_pdb_id in enumerate([pdb_id_ref, pdb_id_state_i]):
 
             alignment_dir = './conformational_states_training_data/alignment_data/%s/%s' % (uniprot_id,template_pdb_id)
-
-            seed = (index*2)+j
+            #seed = (index*2)+j
+            seed = index #keep seed constant between conformations 
             print(asterisk_line)
             print('SEED = %d' % seed) 
             print(asterisk_line)
             template_str = 'template=%s' % template_pdb_id
             output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
             args = gen_args(template_pdb_id, alignment_dir, output_dir_base, seed)
-            output_dir = '%s/%s/%s/rw-%s' % (output_dir_base, 'rw', args.module_config, args.rw_hp_config)
-            l1_output_dir = '%s/%s/%s' % (output_dir_base, 'rw', args.module_config)
+            output_dir = '%s/%s/%s/rw-%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
+            l0_output_dir = '%s/%s' % (output_dir_base, 'alternative_conformations-verbose')
+            l1_output_dir = '%s/%s/%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config)
             initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir
             bootstrap_output_dir = '%s/bootstrap' % output_dir
 
@@ -328,8 +328,14 @@ def run_rw_all_custom_template():
                 continue 
             else:
                 logger.info("RUNNING %s" % output_dir)'''
-            
-            run_rw_pipeline(args)
+
+            if j == 0:
+                scaling_factor_bootstrap, bootstrap_candidate_conformations = run_rw_pipeline(args)
+            else:
+                bootstrap_candidate_conformations = bootstrap_candidate_conformations[0:40]
+                run_rw_pipeline(args, scaling_factor_bootstrap, bootstrap_candidate_conformations)
+                scaling_factor_bootstrap = None
+                bootstrap_candidate_conformations = None 
 
 
 

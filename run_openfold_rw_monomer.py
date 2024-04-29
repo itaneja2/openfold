@@ -75,8 +75,6 @@ if __name__ == "__main__":
     file_handler.setLevel(logging.INFO) 
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
-else:
-    logger = logging.getLogger("run_openfold_rw_monomer_batch.run_openfold_rw_monomer")
 
 
 finetune_openfold_path = './finetune_openfold.py'
@@ -515,7 +513,8 @@ def get_scaling_factor_bootstrap(
     feature_dict: FeatureDict, 
     processed_feature_dict: FeatureDict, 
     output_dir: str, 
-    args: argparse.Namespace
+    args: argparse.Namespace, 
+    scaling_factor_candidate: int = 10.,
 ):
     """Generates a scaling factor for the random walk process used to generate the 
        bootstrap conformations. 
@@ -525,7 +524,6 @@ def get_scaling_factor_bootstrap(
     logger.info('BOOTSTRAP TUNING PHASE:')
     
     intrinsic_param_zero = np.zeros(intrinsic_dim)
-    scaling_factor_candidate = 10.  
     all_scaling_factor_candidates = [scaling_factor_candidate] #keeps track of scaling_factor_candidates used 
     scaling_factor_bootstrap = None       
 
@@ -631,7 +629,7 @@ def get_bootstrap_candidate_conformations(
 
 
 def get_new_scaling_factor_candidates(
-    hp_acceptance_rate_dict: Mapping[Tuple[float, ...], float],
+    rw_hp_acceptance_rate_dict: Mapping[Tuple[float, ...], float],
     rw_hp_config_data: Mapping[str, Any]
 ):
     """Based on the acceptance rate of other scaling factor combinations, 
@@ -652,26 +650,26 @@ def get_new_scaling_factor_candidates(
     """
 
     logger.info('GETTING NEW SCALING FACTOR CANDIDATES GIVEN CURRENT:')
-    logger.info(hp_acceptance_rate_dict)
+    logger.info(rw_hp_acceptance_rate_dict)
 
     upper_bound_scaling_factor = None
     lower_bound_scaling_factor = None 
 
     #find largest epsilon scaling factor greater than target threshold 
-    for key in sorted(hp_acceptance_rate_dict, key=lambda x: x[0], reverse=True): #sort by eps scaling factor (eps scaling factor is always first element in zipped list) 
-        acceptance_rate = hp_acceptance_rate_dict[key]
+    for key in sorted(rw_hp_acceptance_rate_dict, key=lambda x: x[0], reverse=True): #sort by eps scaling factor (eps scaling factor is always first element in zipped list) 
+        acceptance_rate = rw_hp_acceptance_rate_dict[key]
         if acceptance_rate > rw_hp_config_data['rw_tuning_acceptance_threshold']:
             lower_bound_scaling_factor = key[0]
             break
 
     #find smallest epsilon scaling factor less than target threshold 
-    for key in sorted(hp_acceptance_rate_dict, key=lambda x: x[0]): #sort by eps scaling factor in reverse order (eps scaling factor is always first element in zipped list) 
-        acceptance_rate = hp_acceptance_rate_dict[key]
+    for key in sorted(rw_hp_acceptance_rate_dict, key=lambda x: x[0]): #sort by eps scaling factor in reverse order (eps scaling factor is always first element in zipped list) 
+        acceptance_rate = rw_hp_acceptance_rate_dict[key]
         if acceptance_rate < rw_hp_config_data['rw_tuning_acceptance_threshold']:
             upper_bound_scaling_factor = key[0]
             break
 
-    curr_scaling_factor_candidates = [key[0] for key in hp_acceptance_rate_dict.keys()] #extract eps scaling factor from hp_acceptance_rate_dict
+    curr_scaling_factor_candidates = [key[0] for key in rw_hp_acceptance_rate_dict.keys()] #extract eps scaling factor from rw_hp_acceptance_rate_dict
 
     if lower_bound_scaling_factor is None:
         lower_bound_scaling_factor = min(curr_scaling_factor_candidates)/2    
@@ -891,17 +889,19 @@ def run_rw_pipeline(args):
  
     if args.bootstrap_phase_only:
         output_dir = '%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
+        l0_output_dir = '%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose')
         l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config)
-        l2_output_dir = None
-        output_dir = os.path.abspath(output_dir)
-        l1_output_dir = os.path.abspath(l1_output_dir)
+        l2_output_dir = ''
     else: 
-        output_dir = '%s/%s/%s/train-%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config, args.train_hp_config, args.rw_hp_config)
+        output_dir = '%s/%s/%s/rw-%s/train-%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config, args.train_hp_config)
+        l0_output_dir = '%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose')
         l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config)
-        l2_output_dir = '%s/%s/%s/train-%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config, args.train_hp_config) 
-        output_dir = os.path.abspath(output_dir)
-        l1_output_dir = os.path.abspath(l1_output_dir)
-        l2_output_dir = os.path.abspath(l2_output_dir) 
+        l2_output_dir = '%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config) 
+
+    output_dir = os.path.abspath(output_dir)
+    l0_output_dir = os.path.abspath(l0_output_dir)
+    l1_output_dir = os.path.abspath(l1_output_dir)
+    l2_output_dir = os.path.abspath(l2_output_dir) 
 
     logger.info("OUTPUT DIRECTORY: %s" % output_dir)
 
@@ -1012,10 +1012,10 @@ def run_rw_pipeline(args):
     #####################################################
     logger.info(asterisk_line)
 
-    initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir 
+    initial_pred_output_dir = '%s/initial_pred' %  l0_output_dir 
     if not(args.bootstrap_phase_only):
-        bootstrap_output_dir = '%s/bootstrap' % l1_output_dir
-        bootstrap_training_conformations_dir = '%s/bootstrap_training_conformations' % l2_output_dir
+        bootstrap_output_dir = '%s/bootstrap' % l2_output_dir
+        bootstrap_training_conformations_dir = '%s/bootstrap_training_conformations' % output_dir
     else:
         bootstrap_output_dir = '%s/bootstrap' % output_dir #note we are saving boostrap_conformations in output_dir as opposed to l1_output_dir  
 
@@ -1113,17 +1113,17 @@ def run_rw_pipeline(args):
             random_corr = gen_randcorr_sap.randcorr(intrinsic_dim) 
     
     rw_hp_dict = {}
-    rw_hp_parent_dir = '%s/hp_tuning' % output_dir
-    hp_acceptance_rate_dict = {}  
-    hp_acceptance_rate_fname = '%s/hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
+    rw_hp_parent_dir = '%s/rw_hp_tuning' % output_dir
+    rw_hp_acceptance_rate_dict = {}  
+    rw_hp_acceptance_rate_fname = '%s/rw_hp_acceptance_rate_info.pkl' % rw_hp_parent_dir
 
     skip_auto_calc = False
-    if os.path.exists(hp_acceptance_rate_fname):
-        logger.info('LOADING %s' % hp_acceptance_rate_fname)
-        with open(hp_acceptance_rate_fname, 'rb') as f:
-            hp_acceptance_rate_dict = pickle.load(f)
-        logger.info(hp_acceptance_rate_dict)
-        rw_hp_dict = rw_helper_functions.get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False)
+    if os.path.exists(rw_hp_acceptance_rate_fname):
+        logger.info('LOADING %s' % rw_hp_acceptance_rate_fname)
+        with open(rw_hp_acceptance_rate_fname, 'rb') as f:
+            rw_hp_acceptance_rate_dict = pickle.load(f)
+        logger.info(rw_hp_acceptance_rate_dict)
+        rw_hp_dict = rw_helper_functions.get_optimal_hp(rw_hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False)
         if rw_hp_dict != {}:
             skip_auto_calc = True
 
@@ -1149,25 +1149,25 @@ def run_rw_pipeline(args):
             for conformation_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
                 logger.info('ON CONFORMATION %d/%d:' % (conformation_num+1,args.num_training_conformations))
                 target_str = 'target=conformation%d' % conformation_num
-                fine_tuning_save_dir = '%s/training/%s' % (l2_output_dir, target_str)
+                fine_tuning_save_dir = '%s/training/%s' % (output_dir, target_str)
                 latest_version_num = rw_helper_functions.get_latest_version_num(fine_tuning_save_dir)
                 model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
                 sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
                 L = rw_helper_functions.get_cholesky(rw_hp_config_data['cov_type'], sigma, random_corr)
                 state_history_dict = run_grid_search_monomer(grid_search_combinations, state_history_dict, None, target_str, initial_pred_path, intrinsic_dim, args.num_rw_hp_tuning_steps_per_round, L, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, args)
-                hp_acceptance_rate_dict, grid_search_combinations, completion_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, conformation_num, args)
+                rw_hp_acceptance_rate_dict, grid_search_combinations, completion_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, rw_hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, conformation_num, args)
                 if completion_status == 1:
                     break
       
-            rw_hp_dict = rw_helper_functions.get_optimal_hp(hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False)
+            rw_hp_dict = rw_helper_functions.get_optimal_hp(rw_hp_acceptance_rate_dict, rw_hp_config_data, is_multimer=False)
             if rw_hp_dict == {}:
                 logger.info('NO SCALING FACTOR CANDIDATES FOUND THAT MATCHED ACCEPTANCE CRITERIA')
-                scaling_factor_candidates = get_new_scaling_factor_candidates(hp_acceptance_rate_dict, rw_hp_config_data)
+                scaling_factor_candidates = get_new_scaling_factor_candidates(rw_hp_acceptance_rate_dict, rw_hp_config_data)
                 logger.info('HYPERPARAMETER TUNING WITH NEW SCALING FACTOR CANDIDATES')
                 logger.info(scaling_factor_candidates)
             else:
-                rw_helper_functions.dump_pkl(hp_acceptance_rate_dict, 'hp_acceptance_rate_info', rw_hp_parent_dir)            
-                logger.info(hp_acceptance_rate_dict)
+                rw_helper_functions.dump_pkl(rw_hp_acceptance_rate_dict, 'rw_hp_acceptance_rate_info', rw_hp_parent_dir)            
+                logger.info(rw_hp_acceptance_rate_dict)
 
         run_time = time.perf_counter() - t0
         timing_dict = {'hp_tuning': run_time} 
@@ -1187,14 +1187,14 @@ def run_rw_pipeline(args):
 
         conformation_info_dict = {} #maps bootstrap_key to (pdb_path,plddt,disordered_percentage,rmsd)
         target_str = 'target=conformation%d' % conformation_num
-        fine_tuning_save_dir = '%s/training/%s' % (l2_output_dir, target_str)
+        fine_tuning_save_dir = '%s/training/%s' % (output_dir, target_str)
         latest_version_num = rw_helper_functions.get_latest_version_num(fine_tuning_save_dir)
 
         model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
         sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
         L = rw_helper_functions.get_cholesky(rw_hp_config_data['cov_type'], sigma, random_corr)
  
-        rw_output_dir = '%s/output/%s' % (output_dir,target_str)
+        rw_output_dir = '%s/rw_output/%s' % (output_dir, target_str)
         #removes pdb files if iteration should be overwritten or restarted
         rw_helper_functions.overwrite_or_restart_incomplete_iterations(rw_output_dir, args)
 
