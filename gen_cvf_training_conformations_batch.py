@@ -55,7 +55,7 @@ from openfold.utils.trace_utils import (
 from scripts.utils import add_data_args
 
 from random_corr_sap import gen_randcorr_sap
-from pdb_utils.pdb_utils import align_and_get_rmsd
+from custom_openfold_utils.pdb_utils import align_and_get_rmsd
 import rw_helper_functions
 
 from gen_cvf_training_conformations import (
@@ -129,10 +129,10 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
              checkpoint directory or a .pt file"""
     )
     parser.add_argument(
-        "--num_bootstrap_steps", type=int, default=50
+        "--num_steps", type=int, default=50
     )
     parser.add_argument(
-        "--num_bootstrap_hp_tuning_steps", type=int, default=10
+        "--num_hp_tuning_steps", type=int, default=10
     )
 
     parser.add_argument(
@@ -231,15 +231,6 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
             )
     )
     parser.add_argument(
-        "--bootstrap_phase_only", action="store_true", default=False
-    )
-    parser.add_argument(
-        "--skip_bootstrap_phase", action="store_true", default=False
-    )
-    parser.add_argument(
-        "--skip_gd_phase", action="store_true", default=False
-    )
-    parser.add_argument(
         "--overwrite_pred", action="store_true", default=False
     )
     parser.add_argument(
@@ -266,9 +257,10 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
     args.rw_hp_config = 'hp_config_0'
     args.skip_relaxation = True
     args.model_device = 'cuda:0'
-    args.bootstrap_phase_only = True
     args.data_random_seed = seed 
-    args.num_bootstrap_steps = 200 
+    args.use_local_context_manager = True 
+    args.num_rw_hp_tuning_steps = 5
+    args.num_rw_steps = 100 
         
     if(args.jax_param_path is None and args.openfold_checkpoint_path is None):
         args.jax_param_path = os.path.join(
@@ -286,31 +278,45 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
 
 
 
-def run_rw_all_custom_template():
+def restart_incomplete_iterations(rw_output_dir, args):
+    should_run_rw = True 
+    pdb_files = glob.glob('%s/*/*/*.pdb' % rw_output_dir)
+    if len(pdb_files) >= args.num_rw_steps:
+        logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))       
+        should_run_rw = False 
+    elif len(pdb_files) > 0: #incomplete job
+        logger.info('removing pdb files in %s' % rw_output_dir)
+        remove_files(pdb_files)
+
+    return should_run_rw 
+
+
+def run_rw_all_custom_template(num_top_rmsd: int = 40):
  
     conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
     conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
 
-    conformational_states_df = conformational_states_df[conformational_states_df['uniprot_id'] == 'P69441'].reset_index(drop=True)
+    #conformational_states_df = conformational_states_df[conformational_states_df['uniprot_id'] == 'P69441'].reset_index(drop=True)
 
     for index,row in conformational_states_df.iterrows():
 
-        logger.info('On row %d of %d' % (index, len(conformational_states_df)))   
-        print(row)
-     
+        logger.info('On row %d of %d' % (index, len(conformational_states_df)))  
+        logger.info(asterisk_line)
+        logger.info(row)
+ 
         uniprot_id = str(row['uniprot_id'])
         pdb_id_ref = str(row['pdb_id_ref'])
         pdb_id_state_i = str(row['pdb_id_state_i'])
         seg_len = int(row['seg_len'])
 
         for j,template_pdb_id in enumerate([pdb_id_ref, pdb_id_state_i]):
-
+            
             alignment_dir = './conformational_states_training_data/alignment_data/%s/%s' % (uniprot_id,template_pdb_id)
-            #seed = (index*2)+j
             seed = index #keep seed constant between conformations 
-            print(asterisk_line)
-            print('SEED = %d' % seed) 
-            print(asterisk_line)
+            logger.info(asterisk_line)
+            logger.info('j = %d' % j)
+            logger.info('SEED = %d' % seed) 
+            logger.info(asterisk_line)
             template_str = 'template=%s' % template_pdb_id
             output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
             args = gen_args(template_pdb_id, alignment_dir, output_dir_base, seed)
@@ -318,24 +324,28 @@ def run_rw_all_custom_template():
             l0_output_dir = '%s/%s' % (output_dir_base, 'alternative_conformations-verbose')
             l1_output_dir = '%s/%s/%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config)
             initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir
-            bootstrap_output_dir = '%s/bootstrap' % output_dir
 
-            conformation_info_fname = '%s/conformation_info.pkl' % bootstrap_output_dir
-            pdb_path_initial = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir  
-
-            '''if os.path.exists(conformation_info_fname) and os.path.exists(pdb_path_initial):
-                logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir)
-                continue 
-            else:
-                logger.info("RUNNING %s" % output_dir)'''
+            conformation_info_fname = '%s/conformation_info.pkl' % output_dir
+            pdb_path_initial = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir 
 
             if j == 0:
-                scaling_factor_bootstrap, bootstrap_candidate_conformations = run_rw_pipeline(args)
+                should_run_rw = restart_incomplete_iterations(output_dir, args)
+                if should_run_rw:
+                    logger.info("RUNNING %s" % output_dir)
+                    scaling_factor, conformation_info, candidate_conformations = run_rw_pipeline(args)
+                else:
+                    logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
             else:
-                bootstrap_candidate_conformations = bootstrap_candidate_conformations[0:40]
-                run_rw_pipeline(args, scaling_factor_bootstrap, bootstrap_candidate_conformations)
-                scaling_factor_bootstrap = None
-                bootstrap_candidate_conformations = None 
+                if should_run_rw:
+                    logger.info("RUNNING %s" % output_dir)
+                    #use results from same sequence with different template
+                    #to save computational time 
+                    run_rw_pipeline(args, scaling_factor, conformation_info, candidate_conformations, num_top_rmsd)
+                else:
+                    logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir)
+                scaling_factor = None
+                conformation_info = None 
+                candidate_conformations = None 
 
 
 

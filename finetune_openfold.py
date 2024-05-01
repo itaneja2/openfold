@@ -416,7 +416,8 @@ def main(args):
         with open('./rw_monomer_config.json') as f:
             rw_config_data = json.load(f)
 
-    module_config_data = rw_config_data[config.custom_fine_tuning.ft_method][args.module_config]
+    module_config_key = 'finetuning-method_%s' % config.custom_fine_tuning.ft_method
+    module_config_data = rw_config_data[module_config_key][args.module_config]
     module_config_data['num_chains'] = num_chains
 
     hp_config_data = rw_config_data['hyperparameter']['train'][args.hp_config]

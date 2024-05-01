@@ -57,7 +57,7 @@ from openfold.utils.trace_utils import (
 from scripts.utils import add_data_args
 
 from random_corr_sap import gen_randcorr_sap
-from pdb_utils.pdb_utils import align_and_get_rmsd, get_ca_coords_matrix, save_ca_coords
+from custom_openfold_utils.pdb_utils import align_and_get_rmsd, get_ca_coords_matrix, save_ca_coords
 import rw_helper_functions
 
 FeatureDict = MutableMapping[str, np.ndarray]
@@ -75,6 +75,8 @@ if __name__ == "__main__":
     file_handler.setLevel(logging.INFO) 
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
+else:
+    logger = logging.getLogger("gen_cvf_training_conformations_batch")
 
 
 finetune_openfold_path = './finetune_openfold.py'
@@ -248,9 +250,10 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
             pickle.dump(out_tensor["sm"], fp, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info(f"Structure module intermediates written to {sm_output_dict_path}...")
 
-    if args.use_conformation_vectorfield_module and phase in ['bootstrap', 'rw']:
-        os.makedirs(cvf_output_dir, exist_ok=True) 
-        save_cvf_output(unrelaxed_output_path, out, cvf_output_dir)
+    if hasattr(args, 'use_conformation_vectorfield_module'):
+        if args.use_conformation_vectorfield_module and phase in ['bootstrap', 'rw']:
+            os.makedirs(cvf_output_dir, exist_ok=True) 
+            save_cvf_output(unrelaxed_output_path, out, cvf_output_dir)
 
 
     return mean_plddt, disordered_percentage, inference_time, accept_conformation, unrelaxed_output_path 
@@ -261,6 +264,7 @@ def finetune_wrapper(
     bootstrap_training_conformations_dir: str,
     initial_pred_path: str,
     file_id_wo_chain: str,
+    output_dir: str,
     args: argparse.Namespace,
 ):
 
@@ -275,7 +279,7 @@ def finetune_wrapper(
     shutil.copy(curr_pdb_path,dst_path)
 
     target_str = 'target=conformation%d' % conformation_num
-    fine_tuning_save_dir = '%s/training/%s' % (l2_output_dir, target_str)
+    fine_tuning_save_dir = '%s/training/%s' % (output_dir, target_str)
 
     arg1 = '--train_data_dir=%s' % bootstrap_training_conformations_dir_conformation_i
     arg2 = '--train_alignment_dir=%s' % args.alignment_dir
@@ -506,7 +510,8 @@ def run_rw_monomer(
 
 def get_scaling_factor_bootstrap(
     intrinsic_dim: int,
-    rw_hp_config_data: Mapping[str, Any], 
+    rw_hp_config_data: Mapping[str, Any],
+    num_total_steps: int, 
     model: nn.Module, 
     config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
@@ -530,10 +535,7 @@ def get_scaling_factor_bootstrap(
     upper_bound_acceptance_threshold = round(rw_hp_config_data['bootstrap_tuning_acceptance_threshold']+rw_hp_config_data['bootstrap_tuning_threshold_ub_tolerance'],2)
     lower_bound_acceptance_threshold = round(rw_hp_config_data['bootstrap_tuning_acceptance_threshold']-rw_hp_config_data['bootstrap_tuning_threshold_lb_tolerance'],2)
 
-    if args.bootstrap_phase_only:
-        base_tag = '%s_rw-%s' % (args.module_config, args.rw_hp_config)
-    else:
-        base_tag = '%s_train-%s_rw-%s' % (args.module_config, args.train_hp_config, args.rw_hp_config)
+    base_tag = '%s_rw-%s' % (args.module_config, args.rw_hp_config)
     base_tag = base_tag.replace('=','-')
 
     #run a pseudo-binary search to determine scaling_factor_bootstrap
@@ -541,7 +543,7 @@ def get_scaling_factor_bootstrap(
         logger.info(asterisk_line) 
         logger.info('TESTING SCALING FACTOR: %.3f' % scaling_factor_candidate)
         state_history = []  
-        for i in range(0,args.num_bootstrap_hp_tuning_steps): 
+        for i in range(0,num_total_steps): 
             warmup_output_dir = '%s/warmup/scaling_factor=%s' % (output_dir, rw_helper_functions.remove_trailing_zeros(scaling_factor_candidate))
             intrinsic_param_proposed = propose_new_intrinsic_param_vanila_rw(intrinsic_param_zero, intrinsic_dim, 
                                                                              scaling_factor_candidate, 'spherical')
@@ -765,7 +767,7 @@ def run_grid_search_monomer(
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
             state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
-            os.rmdir(rw_hp_output_dir)
+            shutil.rmtree(rw_hp_output_dir, ignore_errors=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -808,7 +810,8 @@ def run_grid_search_monomer(
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
             state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
-            os.rmdir(rw_hp_output_dir)
+            shutil.rmtree(rw_hp_output_dir, ignore_errors=True)
+
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -876,7 +879,10 @@ def run_rw_pipeline(args):
     os.makedirs(args.output_dir_base, exist_ok=True)
     output_dir_name = args.output_dir_base.split('/')[-1]
 
-    config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference, use_conformation_vectorfield_module=args.use_conformation_vectorfield_module, save_structure_module_intermediates=args.save_structure_module_intermediates)
+    config = model_config(args.config_preset, 
+                          long_sequence_inference=args.long_sequence_inference, 
+                          use_conformation_vectorfield_module=args.use_conformation_vectorfield_module, 
+                          save_structure_module_intermediates=args.save_structure_module_intermediates)
 
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
@@ -947,7 +953,7 @@ def run_rw_pipeline(args):
     with open('./rw_monomer_config.json') as f:
         rw_config_data = json.load(f)
 
-    module_config_data = rw_config_data['SAID'][args.module_config]
+    module_config_data = rw_config_data['finetuning-method_SAID'][args.module_config]
     rw_hp_config_data = rw_config_data['hyperparameter']['rw'][args.rw_hp_config]
     train_hp_config_data = rw_config_data['hyperparameter']['train'][args.train_hp_config]
     intrinsic_dim = module_config_data['intrinsic_dim']
@@ -1004,9 +1010,19 @@ def run_rw_pipeline(args):
     intrinsic_param_zero = np.zeros(intrinsic_dim)
     
     if not(args.use_conformation_vectorfield_module):
-        model = load_model_w_intrinsic_param(config, module_config_data, args.model_device, args.openfold_checkpoint_path, args.jax_param_path, intrinsic_param_zero)
+        model = load_model_w_intrinsic_param(config, 
+                                             module_config_data, 
+                                             args.model_device, 
+                                             args.openfold_checkpoint_path, 
+                                             args.jax_param_path, 
+                                             intrinsic_param_zero)
     else:
-        model = load_model_w_cvf_and_intrinsic_param(config, module_config_data, args.model_device, args.openfold_checkpoint_path, args.conformation_vectorfield_checkpoint_path, intrinsic_param_zero)
+        model = load_model_w_cvf_and_intrinsic_param(config, 
+                                                     module_config_data, 
+                                                     args.model_device, 
+                                                     args.openfold_checkpoint_path, 
+                                                     args.conformation_vectorfield_checkpoint_path, 
+                                                     intrinsic_param_zero)
   
 
     #####################################################
@@ -1051,7 +1067,8 @@ def run_rw_pipeline(args):
         mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
         logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
 
-        scaling_factor_bootstrap = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
+        scaling_factor_bootstrap = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, args.num_bootstrap_hp_tuning_steps, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
+        logger.info(asterisk_line)
         logger.info('SCALING FACTOR TO BE USED FOR BOOTSTRAPPING: %s' % rw_helper_functions.remove_trailing_zeros(scaling_factor_bootstrap))
         logger.info('RUNNING RW TO GENERATE CONFORMATIONS FOR BOOTSTRAP PHASE') 
         rw_hp_dict = {}
@@ -1095,7 +1112,7 @@ def run_rw_pipeline(args):
         for conformation_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
             finetune_wrapper(conformation_num, conformation_info_i,
                              bootstrap_training_conformations_dir, initial_pred_path,
-                             file_id_wo_chain, args)
+                             file_id_wo_chain, output_dir, args)
         run_time = time.perf_counter() - t0
         timing_dict = {'gradient_descent': run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, 'gradient_descent')
@@ -1196,7 +1213,9 @@ def run_rw_pipeline(args):
  
         rw_output_dir = '%s/rw_output/%s' % (output_dir, target_str)
         #removes pdb files if iteration should be overwritten or restarted
-        rw_helper_functions.overwrite_or_restart_incomplete_iterations(rw_output_dir, args)
+        should_run_rw = rw_helper_functions.overwrite_or_restart_incomplete_iterations(rw_output_dir, args)
+        if not(should_run_rw):
+            continue 
 
         logger.info('BEGINNING RW FOR: %s' % rw_output_dir)
         if args.use_local_context_manager:
@@ -1219,7 +1238,7 @@ def run_rw_pipeline(args):
 
         summary_output_dir = '%s/%s' % (args.output_dir_base, 'alternative_conformations-summary')
         os.makedirs(summary_output_dir, exist_ok=True)
-        shutil.copytree(rw_output_dir, summary_output_dir)
+        shutil.copytree(rw_output_dir, summary_output_dir, dirs_exist_ok=True)
         
 
 

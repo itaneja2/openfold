@@ -54,7 +54,7 @@ from openfold.utils.trace_utils import (
 from scripts.utils import add_data_args
 
 from random_corr_sap import gen_randcorr_sap
-from pdb_utils.pdb_utils import align_and_get_rmsd
+from custom_openfold_utils.pdb_utils import align_and_get_rmsd
 import rw_helper_functions
 
 FeatureDict = MutableMapping[str, np.ndarray]
@@ -287,8 +287,8 @@ def get_aligned_models_info(
 
 def finetune_wrapper(
     aligned_models_info: Tuple[Any,...],
-    l2_output_dir: str,
     jax_param_path_dict: Mapping[str, str],
+    output_dir: str,
     args: argparse.Namespace,
 )
 
@@ -301,7 +301,7 @@ def finetune_wrapper(
     logger.info(aligned_models_info)
     source_str = 'source=%s' % model_name_source #corresponds to model_x_multimer_v3 
     target_str = 'target=%s' % model_name_target
-    fine_tuning_save_dir = '%s/training/%s/%s' % (l2_output_dir, source_str, target_str)
+    fine_tuning_save_dir = '%s/training/%s/%s' % (output_dir, source_str, target_str)
 
     arg1 = '--train_data_dir=%s' % target_pdb_path[0:target_pdb_path.rindex('/')]
     arg2 = '--train_alignment_dir=%s' % args.alignment_dir
@@ -629,7 +629,7 @@ def run_grid_search_multimer(
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
             state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
-            os.rmdir(rw_hp_output_dir)
+            shutil.rmtree(rw_hp_output_dir, ignore_errors=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -671,7 +671,7 @@ def run_grid_search_multimer(
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
             state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
-            os.rmdir(rw_hp_output_dir)
+            shutil.rmtree(rw_hp_output_dir, ignore_errors=True)
 
             if items not in state_history_dict:
                 state_history_dict[items] = state_history
@@ -801,7 +801,7 @@ def run_rw_pipeline(args):
     with open('./rw_multimer_config.json') as f:
         rw_config_data = json.load(f)
 
-    module_config_data = rw_config_data['SAID'][args.module_config]
+    module_config_data = rw_config_data['finetuning-method_SAID'][args.module_config]
     rw_hp_config_data = rw_config_data['hyperparameter']['rw'][args.rw_hp_config]
     train_hp_config_data = rw_config_data['hyperparameter']['train'][args.train_hp_config]
     intrinsic_dim = module_config_data['intrinsic_dim']
@@ -928,7 +928,13 @@ def run_rw_pipeline(args):
             config_name = 'multimer-%s' % m #model without chainmask 
             config = model_config(config_name, long_sequence_inference=args.long_sequence_inference)
             config = update_config(config, seqs, num_chains, args) 
-            model = load_model_w_intrinsic_param(config, module_config_data, args.model_device, None, jax_param_path_dict[m], intrinsic_param_zero, enable_dropout=True)
+            model = load_model_w_intrinsic_param(config, 
+                                                 module_config_data, 
+                                                 args.model_device, 
+                                                 None, 
+                                                 jax_param_path_dict[m], 
+                                                 intrinsic_param_zero, 
+                                                 enable_dropout=True)
             if m not in model_dict:
                 model_dict[m] = model
 
@@ -971,7 +977,13 @@ def run_rw_pipeline(args):
     #this uses an inference configuration with or without the chainmask (as specified by user) and without dropout (unless specified otherwise by user) 
     model_dict = {} 
     for m in models_to_run: 
-        model = load_model_w_intrinsic_param(config_dict[m], module_config_data, args.model_device, None, jax_param_path_dict[m], intrinsic_param_zero, enable_dropout=args.enable_dropout)
+        model = load_model_w_intrinsic_param(config_dict[m], 
+                                             module_config_data, 
+                                             args.model_device, 
+                                             None, 
+                                             jax_param_path_dict[m], 
+                                             intrinsic_param_zero, 
+                                             enable_dropout=args.enable_dropout)
         if m not in model_dict:
             model_dict[m] = model
 
@@ -979,8 +991,8 @@ def run_rw_pipeline(args):
         logger.info('BEGINNING GD PHASE:') 
         t0 = time.perf_counter()
         for i in range(0,len(aligned_models_info)): 
-            finetune_wrapper(aligned_models_info[i], l2_output_dir, 
-                             jax_param_path_dict, args)
+            finetune_wrapper(aligned_models_info[i], jax_param_path_dict, 
+                             output_dir, args)
         run_time = time.perf_counter() - t0
         timing_dict = {'gradient_descent': run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, 'gradient_descent')
@@ -1088,7 +1100,9 @@ def run_rw_pipeline(args):
  
         rw_output_dir = '%s/rw_output/%s/%s' % (output_dir,source_str,target_str)
         #removes pdb files if iteration should be overwritten or restarted
-        rw_helper_functions.overwrite_or_restart_incomplete_iterations(rw_output_dir, args)
+        should_run_rw = rw_helper_functions.overwrite_or_restart_incomplete_iterations(rw_output_dir, args)
+        if not(should_run_rw):
+            continue 
 
         logger.info('BEGINNING RW FOR: %s' % rw_output_dir)
 
@@ -1114,7 +1128,7 @@ def run_rw_pipeline(args):
 
         summary_output_dir = '%s/%s' % (args.output_dir_base, 'alternative_conformations-summary')
         os.makedirs(summary_output_dir, exist_ok=True)
-        shutil.copytree(rw_output_dir, summary_output_dir)
+        shutil.copytree(rw_output_dir, summary_output_dir, dirs_exist_ok=True)
 
            
 if __name__ == "__main__":

@@ -300,15 +300,20 @@ def get_rw_hp_tuning_info(
 
 
 def overwrite_or_restart_incomplete_iterations(rw_output_dir, args):
+
+    should_run_rw = True 
+
     pdb_files = glob.glob('%s/**/*.pdb' % rw_output_dir)
     if len(pdb_files) >= args.num_rw_steps:
         if args.overwrite_pred:
             logger.info('removing pdb files in %s' % rw_output_dir)
             remove_files(pdb_files)
         else:
-            logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))
-            continue 
+            logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))       
+            should_run_rw = False 
     elif len(pdb_files) > 0: #incomplete job
         logger.info('removing pdb files in %s' % rw_output_dir)
         remove_files(pdb_files)
+
+    return should_run_rw 
 

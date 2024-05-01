@@ -57,7 +57,7 @@ from openfold.utils.trace_utils import (
 from scripts.utils import add_data_args
 
 from random_corr_sap import gen_randcorr_sap
-from pdb_utils.pdb_utils import align_and_get_rmsd, get_ca_coords_matrix, save_ca_coords
+from custom_openfold_utils.pdb_utils import align_and_get_rmsd, get_ca_coords_matrix, save_ca_coords
 import rw_helper_functions
 
 from run_openfold_rw_monomer import (
@@ -85,14 +85,13 @@ if __name__ == "__main__":
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 else:
-    logger = logging.getLogger("gen_cvf_training_conformations_batch.gen_cvf_training_conformations")
+    logger = logging.getLogger("gen_cvf_training_conformations_batch")
 
 
 finetune_openfold_path = './finetune_openfold.py'
 
 TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
-
 
 
 def run_rw_monomer(
@@ -110,7 +109,8 @@ def run_rw_monomer(
     processed_feature_dict: FeatureDict, 
     output_dir: str, 
     phase: str, 
-    relevant_bootstrap_idx: List[int], 
+    accepted_idx: List[int],
+    top_n_rmsd_accepted_idx: List[int], 
     args: argparse.Namespace,
     save_intrinsic_param: bool = False, 
     early_stop: bool = False,
@@ -124,10 +124,7 @@ def run_rw_monomer(
        been run.  
     """
 
-    if args.bootstrap_phase_only:
-        base_tag = '%s_rw-%s' % (args.module_config, args.rw_hp_config)
-    else:
-        base_tag = '%s_train-%s_rw-%s' % (args.module_config, args.train_hp_config, args.rw_hp_config)
+    base_tag = '%s_rw-%s' % (args.module_config, args.rw_hp_config)
     base_tag = base_tag.replace('=','-')
 
     intrinsic_param_prev = np.zeros(intrinsic_dim)
@@ -155,10 +152,26 @@ def run_rw_monomer(
                                                                                  intrinsic_dim, rw_hp_dict['epsilon_scaling_factor'], 
                                                                                  rw_hp_dict['gamma'], cov_type, L)
 
+
+        #in order to reduce computational cost, we are reproducing the intrinsic parameters generated 
+        #based on the accept/reject history of rw-predictions derived from the same sequence but other template
+        ###so, we need to know whether to simulate an accept or reject
+        ###we are reproducing the intrinsic parameter by using the same seed and local context manager  
+        if accepted_idx is not None and curr_step_aggregate in accepted_idx:
+            simulate_acceptance = True
+            simulate_rejection = False
+        else:
+            simulate_acceptance = False 
+            simulate_rejection = True 
+
+        #in order to reduce computational cost, we only want to evaluate the model for intrinsic parameters
+        #that led to significant perturbations for the same sequence but other template
+        ###top_n_rmsd_accepted_idx corresponds to the step numbers from the rw-predictions of 
+        ###the same sequence but other template that are among the top N RMSD (w.r.t initial)
         should_eval = True
-        if relevant_bootstrap_idx is not None and curr_step_aggregate not in relevant_bootstrap_idx:
+        if top_n_rmsd_accepted_idx is not None and curr_step_aggregate not in top_n_rmsd_accepted_idx:
             should_eval = False
-        
+ 
         if should_eval:
             curr_tag = '%s_iter%d_step-iter%d_step-agg%d' % (base_tag, iter_n, curr_step_iter_n, curr_step_aggregate) 
             mean_plddt, disordered_percentage, inference_time, accept_conformation, pdb_path_rw = eval_model(model, config, intrinsic_param_proposed, feature_processor, feature_dict, processed_feature_dict, curr_tag, output_dir, phase, args)    
@@ -187,10 +200,18 @@ def run_rw_monomer(
                     curr_step_iter_n = 0 
                     num_rejected_steps += 1
         else:
-            logger.info('STEP %d: SKIPPED BECAUSE NOT PRESENT IN relevant_bootstrap_idx' % curr_step_aggregate)
-            iter_n += 1
-            curr_step_iter_n = 0
-            num_rejected_steps += 1 
+            logger.info('STEP %d: SKIPPED (BUT SIMULATED) BECAUSE NOT PRESENT IN top_n_rmsd_accepted_idx' % curr_step_aggregate)
+            if simulate_acceptance:
+                intrinsic_param_prev = intrinsic_param_proposed
+                curr_step_iter_n += 1
+                num_accepted_steps += 1
+            elif simulate_rejection:
+                intrinsic_param_prev = np.zeros(intrinsic_dim)
+                if rw_type == 'rw_w_momentum':
+                    velocity_param_prev = np.zeros(intrinsic_dim)
+                iter_n += 1
+                curr_step_iter_n = 0 
+                num_rejected_steps += 1
 
         curr_step_aggregate += 1
 
@@ -198,55 +219,52 @@ def run_rw_monomer(
 
 
 
-def get_bootstrap_candidate_conformations(
+def get_candidate_conformations(
     conformation_info: List[Tuple[Any,...]],
-    args: argparse.Namespace
+    args: argparse.Namespace,
+    remove_last_iter_num: bool = True
 ):
-    """Generates a set of candidate conformations to use for the gradient descent phase
-       of the pipeline. 
-       
-       The candidate conformations are derived from the bootstrap phase. More specifically,
-       the candidate conformations correspond to those that were outputted one step prior 
-       to a rejected conformation.   
-    """ 
 
-    bootstrap_conformations = {}
+    conformations = {}
     iter_num_list = [] 
     for i in range(0,len(conformation_info)):
         f = conformation_info[i][0]
         rmsd = conformation_info[i][1]
+        aggregate_step = conformation_info[i][-1]
         match = re.search(r'_iter(\d+)', f)
         iter_num = int(match.group(1)) #this corresponds to a given iteration (i.e a sequence of conformations that terminates in a rejection)
         match = re.search(r'step-iter(\d+)', f) 
         step_num = int(match.group(1)) #this corresponds to the step_num for a given iteration 
-        if iter_num not in bootstrap_conformations:
-            bootstrap_conformations[iter_num] = [(step_num,rmsd,i,f)]
+        if iter_num not in conformations:
+            conformations[iter_num] = [(step_num,rmsd,aggregate_step,f)]
         else:
-            bootstrap_conformations[iter_num].append((step_num,rmsd,i,f)) 
+            conformations[iter_num].append((step_num,rmsd,aggregate_step,f)) 
         iter_num_list.append(iter_num)
 
-    del bootstrap_conformations[max(iter_num_list)] #delete key corresponding to max(iter_num_list) because this iteration did not yield a rejected conformation (i.e it did not 'finish') 
+    if remove_last_iter_num:
+        del conformations[max(iter_num_list)] #delete key corresponding to max(iter_num_list) because this iteration did not yield a rejected conformation (i.e it did not 'finish') 
 
-    for key in bootstrap_conformations:
-        bootstrap_conformations[key] = sorted(bootstrap_conformations[key], key=lambda x:x[0], reverse=True) #sort by step_num in reverse order 
+    for key in conformations:
+        conformations[key] = sorted(conformations[key], key=lambda x:x[0], reverse=True) #sort by step_num in reverse order 
 
-    bootstrap_candidate_conformations = []
-    for key in bootstrap_conformations:
-        bootstrap_candidate_conformations.append(bootstrap_conformations[key][0]) #get last conformation in each iteration (i.e last conformation prior to rejection)
+    candidate_conformations = []
+    for key in conformations:
+        candidate_conformations.append(conformations[key][0]) #get last conformation in each iteration (i.e last conformation prior to rejection)
         
-    bootstrap_candidate_conformations = sorted(bootstrap_candidate_conformations, key=lambda x:x[1], reverse=True) #sort by rmsd in reverse order 
+    candidate_conformations = sorted(candidate_conformations, key=lambda x:x[1], reverse=True) #sort by rmsd in reverse order 
     
-    logger.debug('BOOTSTRAP CONFORMATIONS ALL:')
-    logger.debug(bootstrap_conformations)    
+    logger.debug('CONFORMATIONS ALL:')
+    logger.debug(conformations)    
 
-    logger.info('BOOTSTRAP CANDIDATE CONFORMATIONS:')
-    logger.info(bootstrap_candidate_conformations)
+    logger.info('CANDIDATE CONFORMATIONS:')
+    num_candidate_conformations = len(candidate_conformations)
+    logger.info(candidate_conformations[0:min(10,num_candidate_conformations)])
 
-    return bootstrap_candidate_conformations
+    return candidate_conformations
 
 
 
-def run_rw_pipeline(args, scaling_factor_bootstrap=None, bootstrap_candidate_conformations=None):
+def run_rw_pipeline(args, scaling_factor=None, conformation_info=None, candidate_conformations=None, num_top_rmsd=None):
 
     if args.log_level.lower() == 'debug':
         logger.setLevel(level=logging.DEBUG)
@@ -257,16 +275,16 @@ def run_rw_pipeline(args, scaling_factor_bootstrap=None, bootstrap_candidate_con
     os.makedirs(args.output_dir_base, exist_ok=True)
     output_dir_name = args.output_dir_base.split('/')[-1]
 
-    config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference, use_conformation_vectorfield_module=args.use_conformation_vectorfield_module, save_structure_module_intermediates=args.save_structure_module_intermediates)
+    config = model_config(args.config_preset, 
+                          long_sequence_inference=args.long_sequence_inference, 
+                          use_conformation_vectorfield_module=False, 
+                          save_structure_module_intermediates=args.save_structure_module_intermediates)
 
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
             raise ValueError(
                 "Tracing requires that fixed_size mode be enabled in the config"
             )
-
-    if args.use_conformation_vectorfield_module and not(args.conformation_vectorfield_checkpoint_path):
-        raise ValueError("If using conformation_vectorfield_module, then conformation_vectorfield_checkpoint_path must be set")
  
     output_dir = '%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
     l0_output_dir = '%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose')
@@ -320,7 +338,7 @@ def run_rw_pipeline(args, scaling_factor_bootstrap=None, bootstrap_candidate_con
     with open('./rw_monomer_config.json') as f:
         rw_config_data = json.load(f)
 
-    module_config_data = rw_config_data['SAID'][args.module_config]
+    module_config_data = rw_config_data['finetuning-method_SAID'][args.module_config]
     rw_hp_config_data = rw_config_data['hyperparameter']['rw'][args.rw_hp_config]
     train_hp_config_data = rw_config_data['hyperparameter']['train'][args.train_hp_config]
     intrinsic_dim = module_config_data['intrinsic_dim']
@@ -376,17 +394,14 @@ def run_rw_pipeline(args, scaling_factor_bootstrap=None, bootstrap_candidate_con
     feature_processor = feature_pipeline.FeaturePipeline(config.data)
     intrinsic_param_zero = np.zeros(intrinsic_dim)
     
-    if not(args.use_conformation_vectorfield_module):
-        model = load_model_w_intrinsic_param(config, module_config_data, args.model_device, args.openfold_checkpoint_path, args.jax_param_path, intrinsic_param_zero)
-    else:
-        model = load_model_w_cvf_and_intrinsic_param(config, module_config_data, args.model_device, args.openfold_checkpoint_path, args.conformation_vectorfield_checkpoint_path, intrinsic_param_zero)
+    model = load_model_w_intrinsic_param(config, module_config_data, args.model_device, args.openfold_checkpoint_path, args.jax_param_path, intrinsic_param_zero)
   
 
     #####################################################
     logger.info(asterisk_line)
 
     initial_pred_output_dir = '%s/initial_pred' %  l0_output_dir 
-    bootstrap_output_dir = '%s/bootstrap' % output_dir  
+    output_dir = '%s/training_conformations' % output_dir  
 
     #process features after updating seed 
     processed_feature_dict = feature_processor.process_features(
@@ -398,55 +413,63 @@ def run_rw_pipeline(args, scaling_factor_bootstrap=None, bootstrap_candidate_con
     } 
 
 
-    if not(args.skip_bootstrap_phase):      
-        logger.info('BEGINNING BOOTSTRAP PHASE:') 
-        t0 = time.perf_counter()
+    logger.info('BEGINNING TRAINING CONFORMATION GENERATION:') 
+    t0 = time.perf_counter()
 
-        logger.info('PREDICTING INITIAL STRUCTURE FROM ORIGINAL MODEL') 
-        mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
-        logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
+    logger.info('PREDICTING INITIAL STRUCTURE FROM ORIGINAL MODEL') 
+    mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
+    logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
 
-        if scaling_factor_bootstrap is None:
-            scaling_factor_bootstrap = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
-        logger.info('SCALING FACTOR TO BE USED FOR BOOTSTRAPPING: %s' % rw_helper_functions.remove_trailing_zeros(scaling_factor_bootstrap))
-        logger.info('RUNNING RW TO GENERATE CONFORMATIONS FOR BOOTSTRAP PHASE') 
-        rw_hp_dict = {}
-        rw_hp_dict['epsilon_scaling_factor'] = scaling_factor_bootstrap 
+    if scaling_factor is None:
+        scaling_factor = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, args.num_rw_hp_tuning_steps, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
+    logger.info('SCALING FACTOR TO BE USED FOR GENERATING TRAINING CONFORMATIONS: %s' % rw_helper_functions.remove_trailing_zeros(scaling_factor))
+    logger.info('RUNNING RW TO GENERATE TRAINING CONFORMATIONS') 
+    rw_hp_dict = {}
+    rw_hp_dict['epsilon_scaling_factor'] = scaling_factor 
 
-        if bootstrap_candidate_conformations is not None:
-            #to avoid repeated conformations, we are only going to evaluate models for 
-            #random vectors where template_X was accepted and significantly perturbed (relatively speaking)
-            relevant_bootstrap_idx = boostrap_candidate_conformations_all[conformation_num][-2]
-        else:
-            relevant_bootstrap_idx = None 
+    if conformation_info is not None and candidate_conformations is not None:
+        #to avoid repeated conformations, we are only going to evaluate models for 
+        #random vectors where template_X was accepted and significantly perturbed (relatively speaking)
+        accepted_idx = sorted([conformation_info[i][-1] for i in range(0,len(conformation_info))])
+        top_n_rmsd_accepted_idx = sorted([candidate_conformations[i][-2] for i in range(0,min(len(candidate_conformations),num_top_rmsd))])
+        remove_last_iter_num = False
+    else:
+        accepted_idx = None 
+        top_n_rmsd_accepted_idx = None
+        remove_last_iter_num = True
 
-        if args.use_local_context_manager:
-            with local_np_seed(random_seed):
-                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', relevant_bootstrap_idx, args, save_intrinsic_param=False, early_stop=False)
-        else:
-                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', relevant_bootstrap_idx, args, save_intrinsic_param=False, early_stop=False)
+    logger.info('ACCEPTED IDX:')
+    logger.info(accepted_idx)
+    logger.info('TOP N RMSD ACCEPTED IDX:')
+    logger.info(top_n_rmsd_accepted_idx)
+
+    if args.use_local_context_manager:
+        with local_np_seed(random_seed):
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_rw_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, output_dir, 'training_conformations', accepted_idx, top_n_rmsd_accepted_idx, args, save_intrinsic_param=False, early_stop=False)
+    else:
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_rw_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, output_dir, 'training_conformations', accepted_idx, top_n_rmsd_accepted_idx, args, save_intrinsic_param=False, early_stop=False)
+
+    acceptance_rate = sum(state_history)/len(state_history)
+    logger.info('ACCEPTANCE RATE: %.3f' % acceptance_rate)
+
+    conformation_info = sorted(conformation_info, key=lambda x: x[0], reverse=True)
+    rw_helper_functions.dump_pkl(conformation_info, 'conformation_info', output_dir)
+
+    run_time = time.perf_counter() - t0
+    timing_dict = {'training_conformations': run_time} 
+    rw_helper_functions.write_timings(timing_dict, output_dir, 'training_conformations')
+
+    seed_fname = '%s/seed.txt' % output_dir
+    np.savetxt(seed_fname, [random_seed], fmt='%d')
+
+    rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
+    max_rmsd = np.max(rmsd_all)
+    logger.info('MAX RMSD: %.3f' % max_rmsd)
+
  
-        bootstrap_acceptance_rate = sum(state_history)/len(state_history)
-        logger.info('BOOTSTRAP ACCEPTANCE RATE: %.3f' % bootstrap_acceptance_rate)
-
-        conformation_info = sorted(conformation_info, key=lambda x: x[0], reverse=True)
-        rw_helper_functions.dump_pkl(conformation_info, 'conformation_info', bootstrap_output_dir)
-
-        run_time = time.perf_counter() - t0
-        timing_dict = {'bootstrap': run_time} 
-        rw_helper_functions.write_timings(timing_dict, output_dir, 'bootstrap')
-
-        seed_fname = '%s/seed.txt' % bootstrap_output_dir
-        np.savetxt(seed_fname, [random_seed], fmt='%d')
-
-        rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
-        max_rmsd = np.max(rmsd_all)
-        logger.info('MAX RMSD: %.3f' % max_rmsd)
-
- 
-    bootstrap_candidate_conformations = get_bootstrap_candidate_conformations(conformation_info, args) 
+    candidate_conformations = get_candidate_conformations(conformation_info, args, remove_last_iter_num) 
     
-    return scaling_factor_bootstrap, bootstrap_candidate_conformations
+    return scaling_factor, conformation_info, candidate_conformations
 
 
 
@@ -498,35 +521,6 @@ if __name__ == "__main__":
              checkpoint directory or a .pt file"""
     )
     parser.add_argument(
-        "--conformation_vectorfield_checkpoint_path", type=str, default=None,
-        help="Path to a model checkpoint from which to restore training state"
-    )
-    parser.add_argument(
-        "--num_bootstrap_steps", type=int, default=50
-    )
-    parser.add_argument(
-        "--num_bootstrap_hp_tuning_steps", type=int, default=10
-    )
-
-    parser.add_argument(
-        "--num_rw_steps", type=int, default=100
-    )
-    parser.add_argument(
-        "--num_rw_hp_tuning_steps_per_round", type=int, default=10
-    )
-    parser.add_argument(
-        "--num_rw_hp_tuning_rounds_total", type=int, default=2
-    )
-    parser.add_argument(
-        "--early_stop_rw_hp_tuning", action="store_true", default=False,
-    )
-    parser.add_argument(
-        "--num_training_conformations", type=int, default=5
-    )
-    parser.add_argument(
-        "--save_training_conformations", action="store_true", default=False
-    )
-    parser.add_argument(
         "--save_outputs", action="store_true", default=False,
         help="Whether to save all model outputs, including embeddings, etc."
     )
@@ -576,6 +570,12 @@ if __name__ == "__main__":
         help="Output predicted models in ModelCIF format instead of PDB format (default)"
     )
     parser.add_argument(
+        "--num_rw_steps", type=int, default=50
+    )
+    parser.add_argument(
+        "--num_rw_hp_tuning_steps", type=int, default=10
+    )
+    parser.add_argument(
         "--module_config", type=str, default=None,
         help=(
             "module_config_x where x is a number"
@@ -588,20 +588,6 @@ if __name__ == "__main__":
         )
     )
     parser.add_argument(
-        "--train_hp_config", type=str, default=None,
-        help=(
-            "train_hp_config_x wheire x is a number"
-        )
-    )
-    parser.add_argument(
-        "--use_conformation_vectorfield_module", action="store_true", default=False,
-        help=(
-            """whether to run use_conformation_vectorfield_module after
-               generating structure prediction."""
-        )
-    )
-
-    parser.add_argument(
         "--use_local_context_manager", action="store_true", default=False,
         help=(
             """whether to use local context manager
@@ -610,15 +596,6 @@ if __name__ == "__main__":
              will be produced within that context
              block."""
             )
-    )
-    parser.add_argument(
-        "--bootstrap_phase_only", action="store_true", default=False
-    )
-    parser.add_argument(
-        "--skip_bootstrap_phase", action="store_true", default=False
-    )
-    parser.add_argument(
-        "--skip_gd_phase", action="store_true", default=False
     )
     parser.add_argument(
         "--overwrite_pred", action="store_true", default=False
