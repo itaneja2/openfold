@@ -225,6 +225,8 @@ def get_candidate_conformations(
     remove_last_iter_num: bool = True
 ):
 
+    #gets last conformation among each run 
+
     conformations = {}
     iter_num_list = [] 
     for i in range(0,len(conformation_info)):
@@ -452,23 +454,25 @@ def run_rw_pipeline(args, scaling_factor=None, conformation_info=None, candidate
     acceptance_rate = sum(state_history)/len(state_history)
     logger.info('ACCEPTANCE RATE: %.3f' % acceptance_rate)
 
-    conformation_info = sorted(conformation_info, key=lambda x: x[0], reverse=True)
-    rw_helper_functions.dump_pkl(conformation_info, 'conformation_info', output_dir)
+    if len(conformation_info) > 0:
+        conformation_info = sorted(conformation_info, key=lambda x: x[0], reverse=True)
+        rw_helper_functions.dump_pkl(conformation_info, 'conformation_info', output_dir)
 
-    run_time = time.perf_counter() - t0
-    timing_dict = {'training_conformations': run_time} 
-    rw_helper_functions.write_timings(timing_dict, output_dir, 'training_conformations')
+        run_time = time.perf_counter() - t0
+        timing_dict = {'training_conformations': run_time} 
+        rw_helper_functions.write_timings(timing_dict, output_dir, 'training_conformations')
 
-    seed_fname = '%s/seed.txt' % output_dir
-    np.savetxt(seed_fname, [random_seed], fmt='%d')
+        seed_fname = '%s/seed.txt' % output_dir
+        np.savetxt(seed_fname, [random_seed], fmt='%d')
 
-    rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
-    max_rmsd = np.max(rmsd_all)
-    logger.info('MAX RMSD: %.3f' % max_rmsd)
-
- 
-    candidate_conformations = get_candidate_conformations(conformation_info, args, remove_last_iter_num) 
-    
+        rmsd_all = np.array([conformation_info[i][1] for i in range(0,len(conformation_info))])
+        max_rmsd = np.max(rmsd_all)
+        logger.info('MAX RMSD: %.3f' % max_rmsd) 
+        candidate_conformations = get_candidate_conformations(conformation_info, args, remove_last_iter_num) 
+    else:
+        conformation_info = None
+        candidate_conformations = None 
+   
     return scaling_factor, conformation_info, candidate_conformations
 
 

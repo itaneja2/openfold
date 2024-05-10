@@ -278,15 +278,34 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
 
 
 
-def restart_incomplete_iterations(rw_output_dir, args):
+def restart_incomplete_iterations(uniprot_id, pdb_id_ref, pdb_id_state_i, args):
+
     should_run_rw = True 
-    pdb_files = glob.glob('%s/*/*/*.pdb' % rw_output_dir)
-    if len(pdb_files) >= args.num_rw_steps:
-        logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (rw_output_dir, len(pdb_files)))       
-        should_run_rw = False 
-    elif len(pdb_files) > 0: #incomplete job
-        logger.info('removing pdb files in %s' % rw_output_dir)
-        remove_files(pdb_files)
+
+    template_str = 'template=%s' % pdb_id_ref
+    output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
+    output_dir_ref = '%s/%s/%s/rw-%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
+    conformation_info_ref_fname = '%s/training_conformations/conformation_info.pkl' % output_dir_ref
+
+    template_str = 'template=%s' % pdb_id_state_i
+    output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
+    output_dir_state_i = '%s/%s/%s/rw-%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
+    conformation_info_ref_state_i_fname = '%s/training_conformations/conformation_info.pkl' % output_dir_state_i
+
+    pdb_files_ref = glob.glob('%s/*/*/*.pdb' % output_dir_ref)
+    pdb_files_state_i = glob.glob('%s/*/*/*.pdb' % output_dir_state_i)
+
+    #if either reference or state_i didn't finish we should restart 
+    if os.path.exists(conformation_info_ref_fname) and os.path.exists(conformation_info_ref_state_i_fname):
+        if len(pdb_files_ref) > 0 and len(pdb_files_state_i) > 0:
+            logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (output_dir_ref, len(pdb_files_ref)))      
+            logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (output_dir_state_i, len(pdb_files_state_i)))       
+            should_run_rw = False 
+    elif len(pdb_files_ref) > 0: #incomplete job
+        logger.info('removing %d pdb files in %s' % (len(pdb_files_ref),output_dir_ref))
+        logger.info('removing %d pdb files in %s' % (len(pdb_files_state_i),output_dir_state_i))
+        rw_helper_functions.remove_files(pdb_files_ref)
+        rw_helper_functions.remove_files(pdb_files_state_i)
 
     return should_run_rw 
 
@@ -321,15 +340,9 @@ def run_rw_all_custom_template(num_top_rmsd: int = 40):
             output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
             args = gen_args(template_pdb_id, alignment_dir, output_dir_base, seed)
             output_dir = '%s/%s/%s/rw-%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
-            l0_output_dir = '%s/%s' % (output_dir_base, 'alternative_conformations-verbose')
-            l1_output_dir = '%s/%s/%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config)
-            initial_pred_output_dir = '%s/initial_pred' %  l1_output_dir
-
-            conformation_info_fname = '%s/conformation_info.pkl' % output_dir
-            pdb_path_initial = '%s/initial_pred_unrelaxed.pdb' % initial_pred_output_dir 
 
             if j == 0:
-                should_run_rw = restart_incomplete_iterations(output_dir, args)
+                should_run_rw = restart_incomplete_iterations(uniprot_id, pdb_id_ref, pdb_id_state_i, args)
                 if should_run_rw:
                     logger.info("RUNNING %s" % output_dir)
                     scaling_factor, conformation_info, candidate_conformations = run_rw_pipeline(args)
@@ -340,7 +353,14 @@ def run_rw_all_custom_template(num_top_rmsd: int = 40):
                     logger.info("RUNNING %s" % output_dir)
                     #use results from same sequence with different template
                     #to save computational time 
-                    run_rw_pipeline(args, scaling_factor, conformation_info, candidate_conformations, num_top_rmsd)
+                    scaling_factor, conformation_info, candidate_conformations = run_rw_pipeline(args, scaling_factor, conformation_info, candidate_conformations, num_top_rmsd)
+                    if conformation_info is None: #no conformations were accepted
+                        logger.info('NO CONFORMATIONS WERE ACCEPTED, RETRYING FROM SCRATCH') 
+                        rejected_pdb_files = glob.glob('%s/*/*/*.pdb' % output_dir)
+                        logger.info('removing %d rejected pdb files in %s' % (len(rejected_pdb_files),output_dir))
+                        rw_helper_functions.remove_files(rejected_pdb_files)
+                        args.mean_plddt_threshold = args.mean_plddt_threshold-5  
+                        run_rw_pipeline(args)
                 else:
                     logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir)
                 scaling_factor = None

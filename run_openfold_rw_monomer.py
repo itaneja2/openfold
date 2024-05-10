@@ -577,7 +577,7 @@ def get_scaling_factor_bootstrap(
                     scaling_factor_bootstrap = scaling_factor_candidate #to ensure scaling_factor_bootstrap remains higher than lower_bound_acceptance_threshold 
                 elif acceptance_rate < lower_bound_acceptance_threshold:
                     scaling_factor_bootstrap = scaling_factor_candidate/2 #to ensure scaling_factor_bootstrap remains higher than lower_bound_acceptance_threshold
-
+  
     return scaling_factor_bootstrap
 
 
@@ -1067,6 +1067,10 @@ def run_rw_pipeline(args):
         mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
         logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
 
+        summary_output_dir = '%s/%s/initial_pred' % (args.output_dir_base, 'alternative_conformations-summary')
+        os.makedirs(summary_output_dir, exist_ok=True)
+        shutil.copytree(initial_pred_output_dir, summary_output_dir, dirs_exist_ok=True)
+
         scaling_factor_bootstrap = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, args.num_bootstrap_hp_tuning_steps, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
         logger.info(asterisk_line)
         logger.info('SCALING FACTOR TO BE USED FOR BOOTSTRAPPING: %s' % rw_helper_functions.remove_trailing_zeros(scaling_factor_bootstrap))
@@ -1236,9 +1240,10 @@ def run_rw_pipeline(args):
         timing_dict = {inference_key: run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, inference_key)
 
-        summary_output_dir = '%s/%s' % (args.output_dir_base, 'alternative_conformations-summary')
-        os.makedirs(summary_output_dir, exist_ok=True)
-        shutil.copytree(rw_output_dir, summary_output_dir, dirs_exist_ok=True)
+    rw_output_parent_dir = '%s/rw_output' % output_dir
+    summary_output_dir = '%s/%s/rw_output' % (args.output_dir_base, 'alternative_conformations-summary')
+    os.makedirs(summary_output_dir, exist_ok=True)
+    shutil.copytree(rw_output_parent_dir, summary_output_dir, dirs_exist_ok=True)
         
 
 

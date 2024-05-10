@@ -894,11 +894,11 @@ def run_rw_pipeline(args):
     #####################################################
     logger.info(asterisk_line)
 
-    initial_pred_dir = '%s/initial_pred' %  l0_output_dir
+    initial_pred_output_dir = '%s/initial_pred' %  l0_output_dir
 
     if args.skip_initial_pred_phase:
-        initial_pred_info_fname = '%s/initial_pred_info.pkl' % initial_pred_dir
-        seed_fname = '%s/seed.txt' % initial_pred_dir
+        initial_pred_info_fname = '%s/initial_pred_info.pkl' % initial_pred_output_dir
+        seed_fname = '%s/seed.txt' % initial_pred_output_dir
         if os.path.exists(initial_pred_info_fname) and os.path.exists(seed_fname):
             with open(initial_pred_info_fname, 'rb') as f:
                 initial_pred_path_dict = pickle.load(f)
@@ -951,22 +951,26 @@ def run_rw_pipeline(args):
         conformation_info_dict = {}
         for i in range(0,len(models_to_run)):
             model_name = models_to_run[i]
-            initial_pred_output_dir = '%s/%s' %  (initial_pred_dir, model_name)
+            curr_model_initial_pred_output_dir = '%s/%s' %  (initial_pred_output_dir, model_name)
             tag = 'initial_pred_model_%d' % (i+1)
             logger.info('RUNNING %s' % model_name)
-            mean_plddt_initial, weighted_ptm_score_initial,  disordered_percentage_initial, _, _, _, initial_pred_path = eval_model(model_dict[model_name], config, intrinsic_param_zero, intrinsic_param_zero, [0]*num_chains, feature_processor, feature_dict, processed_feature_dict, tag, initial_pred_output_dir, 'initial', args)   
+            mean_plddt_initial, weighted_ptm_score_initial,  disordered_percentage_initial, _, _, _, initial_pred_path = eval_model(model_dict[model_name], config, intrinsic_param_zero, intrinsic_param_zero, [0]*num_chains, feature_processor, feature_dict, processed_feature_dict, tag, curr_model_initial_pred_output_dir, 'initial', args)   
             logger.info('pLDDT: %.3f, IPTM_PTM SCORE: %.3f, disordered percentage: %.3f' % (mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial)) 
             conformation_info_dict[model_name] = (initial_pred_path, mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial) 
             initial_pred_path_dict[model_name] = initial_pred_path 
+
+        summary_output_dir = '%s/%s/initial_pred' % (args.output_dir_base, 'alternative_conformations-summary')
+        os.makedirs(summary_output_dir, exist_ok=True)
+        shutil.copytree(initial_pred_output_dir, summary_output_dir, dirs_exist_ok=True)
 
         run_time = time.perf_counter() - t0
         timing_dict = {'initial_pred': run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, 'inital_pred')
 
-        rw_helper_functions.dump_pkl(initial_pred_path_dict, 'initial_pred_info', initial_pred_dir)
-        rw_helper_functions.dump_pkl(conformation_info_dict, 'conformation_info', initial_pred_dir)
+        rw_helper_functions.dump_pkl(initial_pred_path_dict, 'initial_pred_info', initial_pred_output_dir)
+        rw_helper_functions.dump_pkl(conformation_info_dict, 'conformation_info', initial_pred_output_dir)
 
-        seed_fname = '%s/seed.txt' % initial_pred_dir
+        seed_fname = '%s/seed.txt' % initial_pred_output_dir
         np.savetxt(seed_fname, [random_seed], fmt='%d')
        
     aligned_models_info = get_aligned_models_info(models_to_run, initial_pred_path_dict, file_id, args)
@@ -1125,10 +1129,12 @@ def run_rw_pipeline(args):
         run_time = time.perf_counter() - t0
         timing_dict = {inference_key: run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, inference_key)
+ 
+    rw_output_parent_dir = '%s/rw_output' % output_dir
+    summary_output_dir = '%s/%s/rw_output' % (args.output_dir_base, 'alternative_conformations-summary')
+    os.makedirs(summary_output_dir, exist_ok=True)
+    shutil.copytree(rw_output_parent_dir, summary_output_dir, dirs_exist_ok=True)
 
-        summary_output_dir = '%s/%s' % (args.output_dir_base, 'alternative_conformations-summary')
-        os.makedirs(summary_output_dir, exist_ok=True)
-        shutil.copytree(rw_output_dir, summary_output_dir, dirs_exist_ok=True)
 
            
 if __name__ == "__main__":
