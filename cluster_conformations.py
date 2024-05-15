@@ -4,12 +4,18 @@ from Bio.PDB import PDBParser, PDBIO
 import glob
 import pandas as pd
 import os
-import sys 
 import pickle
 from pathlib import Path
 from sklearn.cluster import AgglomerativeClustering
 import collections
-import shutil
+import sys
+import shutil 
+from scipy.spatial.distance import pdist
+import ml_collections as mlc
+
+from custom_openfold_utils.pdb_utils import clean_pdb
+from openfold.utils.script_utils import relax_protein
+from openfold.np.protein import from_pdb_string 
 
 asterisk_line = '******************************************************************************'
 
@@ -19,8 +25,7 @@ def remove_files_in_dir(path):
         print('removing old file: %s' % f)
         os.remove(f)
 
-
-def get_structure_ca_coords(pdb_fname, md_conformation_str=None):  
+def get_ca_pairwise_dist(pdb_fname, md_conformation_str=None):  
     # Initialize a PDB parser
   
     if 'step-agg' in pdb_fname:
@@ -46,11 +51,25 @@ def get_structure_ca_coords(pdb_fname, md_conformation_str=None):
                 ca_atom = residue['CA']
                 ca_coordinates.append(list(ca_atom.get_coord()))
               
-    ca_coordinates = np.array(ca_coordinates)            
-    return ca_coordinates
+    ca_coordinates = np.array(ca_coordinates)           
+    ca_pairwise_dist = pdist(ca_coordinates, 'euclidean')
+ 
+    return ca_pairwise_dist
 
+def create_clustering_dist_matrix(ca_pdist_all):
 
+    #method derived from
+    #https://www.biorxiv.org/content/10.1101/2023.07.13.545008v2.supplementary-material
 
+    clustering_dist_matrix = np.zeros((ca_pdist_all.shape[0],ca_pdist_all.shape[0]))
+    for i in range(0,ca_pdist_all.shape[0]):
+        for j in range(i+1,ca_pdist_all.shape[0]):
+            pairwise_dist_diff = np.abs(ca_pdist_all[j,:] - ca_pdist_all[i,:])
+            pairwise_dist_diff[pairwise_dist_diff <= 1] = 0.
+            pairwise_dist_diff = np.sum(pairwise_dist_diff)
+            clustering_dist_matrix[i,j] = pairwise_dist_diff
+    
+    return clustering_dist_matrix
            
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -63,20 +82,26 @@ if __name__ == "__main__":
         help="",
     )
     parser.add_argument(
-        "--ptm_iptm_threshold", type=float, default=None,
-        help="only clusters conformations whose ptm_iptm score is greater than this threshold (which is a value between 0-1)",
+        "--plddt_threshold", type=float, default=None,
+        help="only clusters conformations whose plddt score is greater than this threshold (which is a value between 0-100)",
     )
-
-    '''parser.add_argument(
-        "--output_dir_base", type=str, default=os.getcwd(),
-        help="""Name of the directory in which to output the prediction""",
-    )''' 
+    parser.add_argument(
+        "--skip_relaxation", action="store_true", default=False
+    )
 
     args = parser.parse_args()
 
-    '''cluster_representative_conformation_info_fname = '%s/cluster_representative_conformation_info.pkl' % args.conformation_dir
-    with open(cluster_representative_conformation_info_fname, 'rb') as f:
-        s = pickle.load(f)''' 
+    config = mlc.ConfigDict(
+        {
+            "relax": {
+                "max_iterations": 0,  # no max
+                "tolerance": 2.39,
+                "stiffness": 10.0,
+                "max_outer_iterations": 20,
+                "exclude_residues": [],
+            }
+        }
+    )
 
     pattern = "%s/**/conformation_info.pkl" % args.conformation_dir
     files = glob.glob(pattern, recursive=True)
@@ -87,22 +112,6 @@ if __name__ == "__main__":
         print('conformation_info files')
         print(files)
 
-    '''for i in range(0,len(files)):
-        with open(files[i], 'rb') as f:
-            curr_conformation_info = pickle.load(f)
-        
-        for key in curr_conformation_info:
-            for j in range(0,len(curr_conformation_info[key])):
-                print(j)
-                curr_conformation_info[key][j] = list(curr_conformation_info[key][j])
-                pdb_path = curr_conformation_info[key][j][0]
-                pdb_path = pdb_path.replace('ACCEPTED', 'exploration/ACCEPTED')
-                curr_conformation_info[key][j][0] = pdb_path
-                curr_conformation_info[key][j] = tuple(curr_conformation_info[key][j])
-
-        with open(files[i], 'wb') as f:
-            pickle.dump(curr_conformation_info, f)'''
-
     #combine into single dictionary
     for i in range(0,len(files)):
         with open(files[i], 'rb') as f:
@@ -111,36 +120,30 @@ if __name__ == "__main__":
             conformation_info = curr_conformation_info.copy()
         else:
             conformation_info.update(curr_conformation_info)
- 
-    print(conformation_info.keys())
-    for key in conformation_info:
-        print(len(conformation_info[key]))
- 
+
     conformation_info_all = [] 
-    ca_coords_all = [] 
+    ca_pdist_all = [] 
     for key in conformation_info:
         print('KEY: %s' % key)
         for i,val in enumerate(conformation_info[key]):
-            print(i)
             pdb_path = val[0]
             rmsd = val[1]
             mean_plddt = val[2]
-            ptm_iptm = float(val[3])
 
-            if args.ptm_iptm_threshold is None:
-                conformation_info_all.append([pdb_path,rmsd,mean_plddt,ptm_iptm])
-                ca_coords = get_structure_ca_coords(pdb_path)
-                ca_coords_all.append(ca_coords)
+            if args.plddt_threshold is None:
+                conformation_info_all.append([pdb_path,rmsd,mean_plddt])
+                ca_pdist = get_ca_pairwise_dist(pdb_path)
+                ca_pdist_all.append(ca_pdist)
             else:
-                if ptm_iptm >= args.ptm_iptm_threshold:
-                    conformation_info_all.append([pdb_path,rmsd,mean_plddt,ptm_iptm])
-                    ca_coords = get_structure_ca_coords(pdb_path)
-                    ca_coords_all.append(ca_coords)
+                if mean_plddt >= args.plddt_threshold:
+                    conformation_info_all.append([pdb_path,rmsd,mean_plddt])
+                    ca_pdist = get_ca_pairwise_dist(pdb_path)
+                    ca_pdist_all.append(ca_pdist)
         
-    ca_coords_all = np.array(ca_coords_all)
-    ca_coords_all = np.reshape(ca_coords_all,(ca_coords_all.shape[0],ca_coords_all.shape[1]*ca_coords_all.shape[2])) 
-       
-    clustering = AgglomerativeClustering(n_clusters=args.num_clusters).fit(ca_coords_all)
+    ca_pdist_all = np.array(ca_pdist_all) 
+    clustering_dist_matrix = create_clustering_dist_matrix(ca_pdist_all)
+ 
+    clustering = AgglomerativeClustering(n_clusters=args.num_clusters, metric="precomputed", linkage="average").fit(clustering_dist_matrix)
 
     print(asterisk_line)
     print('CLUSTER FREQUENCIES:')
@@ -156,7 +159,7 @@ if __name__ == "__main__":
             clustering_info_dict[cluster_num] = [conformation_info_all[idx]] 
 
     for cluster_num in clustering_info_dict:
-        clustering_info_dict[cluster_num] = sorted(clustering_info_dict[cluster_num], key=lambda x: x[3], reverse=True) #sort by ptm_iptm
+        clustering_info_dict[cluster_num] = sorted(clustering_info_dict[cluster_num], key=lambda x: x[2], reverse=True) #sort by plddt 
 
     cluster_representative_conformation_info_dict = {} 
     for cluster_num,freq in counter.most_common():
@@ -166,27 +169,44 @@ if __name__ == "__main__":
 
     print(cluster_representative_conformation_info_dict)
 
-    if args.ptm_iptm_threshold is None:
-        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/ptm_iptm_threshold=None' % (args.conformation_dir, args.num_clusters)
+    if args.plddt_threshold is None:
+        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (args.conformation_dir, args.num_clusters)
     else:
-        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/ptm_iptm_threshold=%s' % (args.conformation_dir, args.num_clusters, str(round(args.ptm_iptm_threshold,2)*100))
+        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=%s' % (args.conformation_dir, args.num_clusters, str(args.plddt_threshold))
 
     os.makedirs(cluster_dir, exist_ok=True)
     remove_files_in_dir(cluster_dir)
 
     for cluster_num in cluster_representative_conformation_info_dict:
         pdb_source_path = cluster_representative_conformation_info_dict[cluster_num][0]
-        ptm_iptm = cluster_representative_conformation_info_dict[cluster_num][3]
-        pdb_target_path = '%s/cluster_%d_ptm_iptm_%s.pdb' % (cluster_dir, cluster_num, str(round(ptm_iptm)))
+        plddt = cluster_representative_conformation_info_dict[cluster_num][2]
+        output_fname = 'cluster_%d_plddt_%s' % (cluster_num, str(round(plddt)))
+        pdb_target_path = '%s/%s.pdb' % (cluster_dir, output_fname)
         shutil.copyfile(pdb_source_path, pdb_target_path)
-        #add this path to cluster_representative_conformation_info_dict[clsuter_num]
+        
+        if not(args.skip_relaxation):
+            with open(pdb_target_path, "r") as f:
+                pdb_str = f.read()
+            unrelaxed_protein = from_pdb_string(pdb_str)
+            print('RELAXING PROTEIN FROM CLUSTER %d' % cluster_num)
+            if torch.cuda.is_available():
+                relax_protein(config, 'cuda:0', 
+                              unrelaxed_protein, cluster_dir, 
+                              output_fname)
+            else:
+                relax_protein(config, 'cpu', 
+                              unrelaxed_protein, cluster_dir, 
+                              output_fname)
+
+
         cluster_representative_conformation_info_dict[cluster_num].append(pdb_target_path)
+
 
     cluster_representative_conformation_info_fname = '%s/cluster_representative_conformation_info.pkl' % cluster_dir
     with open(cluster_representative_conformation_info_fname, 'wb') as f:
         pickle.dump(cluster_representative_conformation_info_dict, f)
 
 
-    
-    
-    
+
+
+ 

@@ -164,7 +164,7 @@ def eval_model(model, config, intrinsic_parameter, epsilon, epsilon_scaling_fact
 
     logger.info(f"Output written to {unrelaxed_output_path}...")
 
-    if not args.skip_relaxation:
+    if not args.relax_conformation:
         # Relax the prediction.
         logger.info(f"Running relaxation on {unrelaxed_output_path}...")
         relax_protein(config, args.model_device, unrelaxed_protein, model_output_dir, output_name,
@@ -1209,7 +1209,7 @@ if __name__ == "__main__":
         "--data_random_seed", type=str, default=None
     )
     parser.add_argument(
-        "--skip_relaxation", action="store_true", default=False,
+        "--relax_conformation", action="store_true", default=False,
     )
     parser.add_argument(
         "--multimer_ri_gap", type=int, default=1,
