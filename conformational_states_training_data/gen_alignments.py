@@ -44,7 +44,9 @@ arg10 = '--hhblits_binary_path=/opt/applications/hhsuite/3.3.0/gnu/bin/hhblits'
 arg11 = '--hhsearch_binary_path=/opt/applications/hhsuite/3.3.0/gnu/bin/hhsearch'
 arg12 = '--kalign_binary_path=/opt/applications/kalign/2.04/gnu/bin/kalign' 
 
-
+print('getting all existing feature pkl paths')
+existing_features_pkl_paths = glob.glob('./alignment_data/**/**/features.pkl')
+print("%d feature.pkl already exist" % len(existing_features_pkl_paths))
 
 for index,row in conformational_states_df.iterrows():
 
@@ -55,11 +57,10 @@ for index,row in conformational_states_df.iterrows():
     pdb_id_ref = str(row['pdb_id_ref'])
     #pdb_id_state_i = str(row['pdb_id_state_i'])
     seg_len = int(row['seg_len'])
-    uniprot_id_from_sifts = get_uniprot_id(pdb_id_ref)
 
     features_path = './alignment_data/%s/%s/features.pkl' % (uniprot_id, pdb_id_ref)
     
-    if not(os.path.exists(features_path)):
+    if features_path not in existing_features_pkl_paths:
         arg1 = '--pdb_id=%s' % pdb_id_ref 
         script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12]
         cmd_to_run = ["python", gen_msa_monomer_path] + script_arguments
@@ -68,6 +69,8 @@ for index,row in conformational_states_df.iterrows():
         print("RUNNING THE FOLLOWING COMMAND:")
         print(cmd_to_run_str)
         subprocess.run(cmd_to_run)
+
+        uniprot_id_from_sifts = get_uniprot_id(pdb_id_state_i)
         
         if uniprot_id != uniprot_id_from_sifts:
             curr_folder_name =  './alignment_data/%s' % uniprot_id_from_sifts
@@ -83,6 +86,7 @@ for index,row in conformational_states_df.iterrows():
                 shutil.rmtree(curr_folder_name)
     else:
         print('%s already exists' % features_path)
+        continue 
 
     fasta_file = './alignment_data/%s/%s/%s.fasta' % (uniprot_id, pdb_id_ref, pdb_id_ref)
 
@@ -91,8 +95,7 @@ for index,row in conformational_states_df.iterrows():
     _, seq = parse_fasta(fasta_data)
     seq = seq[0]
     print(seq)
-    print('sequence length: %d, seg_len: %d' % (len(seq), seg_len))
-
+    print('sequence length: %d, seg_len: %d' % (len(seq), seg_len)) 
 
 
 for index,row in conformational_states_df.iterrows():
@@ -104,11 +107,10 @@ for index,row in conformational_states_df.iterrows():
     #pdb_id_ref = str(row['pdb_id_ref'])
     pdb_id_state_i = str(row['pdb_id_state_i'])
     seg_len = int(row['seg_len'])
-    uniprot_id_from_sifts = get_uniprot_id(pdb_id_state_i)
 
     features_path = './alignment_data/%s/%s/features.pkl' % (uniprot_id, pdb_id_state_i)
     
-    if not(os.path.exists(features_path)):
+    if features_path not in existing_features_pkl_paths:
         arg1 = '--pdb_id=%s' % pdb_id_state_i
         script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12]
         cmd_to_run = ["python", gen_msa_monomer_path] + script_arguments
@@ -117,6 +119,8 @@ for index,row in conformational_states_df.iterrows():
         print("RUNNING THE FOLLOWING COMMAND:")
         print(cmd_to_run_str)
         subprocess.run(cmd_to_run)
+
+        uniprot_id_from_sifts = get_uniprot_id(pdb_id_state_i)
        
         if uniprot_id != uniprot_id_from_sifts: 
             curr_folder_name =  './alignment_data/%s' % uniprot_id_from_sifts
@@ -132,6 +136,7 @@ for index,row in conformational_states_df.iterrows():
                 shutil.rmtree(curr_folder_name)
     else:
         print('%s already exists' % features_path)
+        continue 
 
     fasta_file = './alignment_data/%s/%s/%s.fasta' % (uniprot_id, pdb_id_state_i, pdb_id_state_i)
 
