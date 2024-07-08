@@ -64,12 +64,10 @@ def model_config(
     low_prec=False, 
     long_sequence_inference=False,
     use_conformation_vectorfield_module=False,
-    save_structure_module_intermediates=False
 ):
     c = copy.deepcopy(config)
     c.model.use_chainmask = False
     c.model.use_conformation_vectorfield_module = use_conformation_vectorfield_module 
-    c.model.structure_module.save_intermediates = save_structure_module_intermediates
 
     # TRAINING PRESETS
     if name == "initial_training":
@@ -77,9 +75,12 @@ def model_config(
         pass
     elif name == 'conformation_vectorfield':
         c.data.data_module.data_loaders.num_workers = 1
-        c.data.data_module.data_loaders.batch_size = 128
+        c.data.data_module.data_loaders.batch_size = 1
+        c.data.data_module.data_loaders.num_conformations_to_sample = 8
+        c.data.common.use_template_torsion_angles = False 
+        c.data.common.max_recycling_iters = 0 
     elif "custom_finetuning" in name and "multimer" not in name:
-        c.data.custom_train.max_extra_msa = 5120 
+        c.data.custom_finetuning_train.max_extra_msa = 5120 
         c.data.common.reduce_max_clusters_by_max_templates = True
         c.data.common.use_templates = True
         c.data.common.use_template_torsion_angles = True
@@ -100,15 +101,6 @@ def model_config(
         c.loss.supervised_chi.weight = 0.0
         c.loss.plddt_loss.weight = 0.0
         c.loss.masked_msa.weight = 0.0
-
-        #if 'conformation_module' in ft_method:
-        #    c.data.data_module.data_loaders.num_workers = 1 
-        #    c.data.data_module.data_loaders.batch_size = 64
-        #    c.model.use_conformation_module = True
-        #    c.data.common.max_recycling_iters = 0 
-        #    c.loss.distogram.weight = 0.0
-        #    c.loss.masked_msa.weight = 0.0
-        #    c.loss.violation.weight = .1 
 
     elif name == "finetuning":
         # AF2 Suppl. Table 4, "finetuning" setting
@@ -492,7 +484,7 @@ config = mlc.ConfigDict(
                 "supervised": True,
                 "uniform_recycling": False,
             },
-            "custom_train": { #same as predict except for supervised 
+            "custom_finetuning_train": { #same as predict except for supervised 
                 "fixed_size": True,
                 "subsample_templates": False,  # We want top templates.
                 "block_delete_msa": False,
@@ -528,6 +520,23 @@ config = mlc.ConfigDict(
                 "uniform_recycling": True,
                 "distillation_prob": 0.75,
             },
+            "cvf_train": { #same as predict except for supervised and masked_msa_replace_fraction and max_extra_msa
+                "fixed_size": True,
+                "subsample_templates": False,  # We want top templates.
+                "block_delete_msa": False,
+                "masked_msa_replace_fraction": 0.0,
+                "max_msa_clusters": 512,
+                "max_extra_msa": 0,
+                "max_template_hits": 1,
+                "max_templates": 1,
+                "crop": False,
+                "crop_size": None,
+                "spatial_crop_prob": None,
+                "interface_threshold": None,
+                "supervised": False,
+                "uniform_recycling": False,
+            },
+
             "data_module": {
                 "use_small_bfd": False,
                 "data_loaders": {
@@ -702,27 +711,30 @@ config = mlc.ConfigDict(
                 "trans_scale_factor": 10,
                 "epsilon": eps,  # 1e-12,
                 "inf": 1e5,
-                "save_intermediates": False,
             },
-            "conformation_vectorfield_module": {
+            "conformation_stack": {
                 "c_s": c_s,
                 "c_z": c_z,
-                "c_s_attn": 16,
-                "c_ipa": 16,
+                "c_hidden_s_att": 32,
+                "c_hidden_mul": 128,
+                "c_hidden_pair_att": 32,
+                "no_heads_s": 8,
+                "no_heads_pair": 4,
+                "no_blocks": 4,
+                "transition_n": 4,
+                "clear_cache_between_blocks": False,
+                "tune_chunk_size": tune_chunk_size,
+                "blocks_per_ckpt": 1,
+                "inf": 1e9,
+                "eps": eps,  # 1e-10,
+            },
+            "conformation_vectorfield_module": {
+                "c_esm": 1536,
+                "c_s": c_s,
                 "c_resnet": 128,
-                "no_heads_s_attn": 12,
-                "no_heads_ipa": 12,
-                "no_qk_points": 4,
-                "no_v_points": 8,
-                "dropout_rate": 0.1,
-                "no_blocks": 8,
-                "no_transition_layers": 1,
                 "no_resnet_blocks": 2,
-                "no_angles": 7,
-                "trans_scale_factor": 10,
                 "epsilon": eps,  # 1e-12,
                 "inf": 1e5,
-                "save_intermediates": False,
             },
 
             "heads": {
@@ -931,7 +943,7 @@ multimer_config_update = mlc.ConfigDict({
             "max_msa_clusters": 508,
             "max_extra_msa": 2048
         },
-        "custom_train": {
+        "custom_finetuning_train": {
             "max_msa_clusters": 508,
             "max_extra_msa": 2048
         },

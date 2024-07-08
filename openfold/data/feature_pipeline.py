@@ -82,6 +82,7 @@ def np_example_to_features(
     mode: str,
     is_multimer: bool = False
 ):
+
     np_example = dict(np_example)
 
     seq_length = np_example["seq_length"]

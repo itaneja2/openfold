@@ -256,7 +256,7 @@ class MSAAttention(nn.Module):
         if(use_flash):
             assert z is None
             biases = None
-        else:    
+        else:
             m, mask_bias, z = self._prep_inputs(
                 m, z, mask, inplace_safe=inplace_safe
             )

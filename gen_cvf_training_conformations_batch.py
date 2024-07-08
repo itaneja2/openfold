@@ -177,7 +177,7 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
         "--data_random_seed", type=str, default=None
     )
     parser.add_argument(
-        "--skip_relaxation", action="store_true", default=False,
+        "--relax_conformation", action="store_true", default=False,
     )
     parser.add_argument(
         "--multimer_ri_gap", type=int, default=1,
@@ -250,12 +250,11 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
     args.custom_template_pdb_id = template_pdb_id 
     args.alignment_dir = alignment_dir
     args.output_dir_base = output_dir_base 
-    args.save_structure_module_intermediates = True
+    args.save_structure_module_intermediates = False 
     args.config_preset = 'model_1_ptm'
     args.openfold_checkpoint_path = '/opt/databases/openfold/openfold_params/finetuning_ptm_2.pt'
     args.module_config = 'module_config_0'
     args.rw_hp_config = 'hp_config_0'
-    args.skip_relaxation = True
     args.model_device = 'cuda:0'
     args.data_random_seed = seed 
     args.use_local_context_manager = True 

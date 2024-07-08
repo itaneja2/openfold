@@ -112,7 +112,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
 
         self.supported_exts = [".cif", ".core", ".pdb"]
 
-        valid_modes = ["train", "eval", "predict", "custom_train"]
+        valid_modes = ["train", "eval", "predict", "custom_finetuning_train"]
         if mode not in valid_modes:
             raise ValueError(f'mode must be one of {valid_modes}')
 
@@ -224,7 +224,7 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
             alignment_dir = self.alignment_dir
             alignment_index = self.alignment_index[name]
 
-        if self.mode == 'custom_train' or self.mode == 'train' or self.mode == 'eval':
+        if self.mode == 'custom_finetuning_train' or self.mode == 'train' or self.mode == 'eval':
             spl = name.rsplit('_', 1)
             if len(spl) == 2:
                 file_id, chain_id = spl
@@ -251,19 +251,19 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
 
             path += ext
 
-            if self.mode == 'custom_train':
+            if self.mode == 'custom_finetuning_train':
                 residues_ignore_idx = get_residues_ignore_idx_between_af_conformations(self.initial_pred_path, path, self.initial_pred_path) 
                 features_output_path = os.path.join(alignment_dir, 'features.pkl')
                 if os.path.isfile(features_output_path):
                     feature_dict = np.load(features_output_path, allow_pickle=True)                  
                 else:
-                    feature_dict = None 
+                    feature_dict = None
+                print('In custom_finetuning_train mode, ignoring residues for target %s:' % path)
+                print(residues_ignore_idx)
             else:
                 feature_dict = None 
                 residues_ignore_idx = None  
 
-            print('residues ignore idx:')
-            print(residues_ignore_idx)
 
             if ext == ".cif":
                 data = self._parse_mmcif(
@@ -403,7 +403,7 @@ class OpenFoldSingleMultimerDataset(torch.utils.data.Dataset):
 
         self.supported_exts = [".cif", ".core", ".pdb"]
 
-        valid_modes = ["train", "eval", "predict", "custom_train"]
+        valid_modes = ["train", "eval", "predict", "custom_finetuning_train"]
         if mode not in valid_modes:
             raise ValueError(f'mode must be one of {valid_modes}')
 
@@ -483,7 +483,7 @@ class OpenFoldSingleMultimerDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         mmcif_id = self.idx_to_mmcif_id(idx)
-        if self.mode == 'custom_train':
+        if self.mode == 'custom_finetuning_train':
             alignment_dir = os.path.join(self.alignment_dir, mmcif_id)
         else:
             alignment_dir = self.alignment_dir
@@ -493,7 +493,7 @@ class OpenFoldSingleMultimerDataset(torch.utils.data.Dataset):
             alignment_index = {k: v for k, v in self.alignment_index.items()
                                if f'{mmcif_id}_' in k}
 
-        if self.mode == 'custom_train' or self.mode == 'train' or self.mode == 'eval':
+        if self.mode == 'custom_finetuning_train' or self.mode == 'train' or self.mode == 'eval':
             path = os.path.join(self.data_dir, f"{mmcif_id}")
             ext = None
             for e in self.supported_exts:
@@ -1032,7 +1032,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
 
         if self.training_mode:
             if 'custom_finetuning' in self.config_preset: 
-                training_mode_type = 'custom_train'
+                training_mode_type = 'custom_finetuning_train'
             else:
                 training_mode_type = 'train'
 
@@ -1089,7 +1089,7 @@ class OpenFoldDataModule(pl.LightningDataModule):
                     generator=generator,
                     _roll_at_init=False,
                 )
-            elif training_mode_type == 'custom_train':
+            elif training_mode_type == 'custom_finetuning_train':
                 self.train_dataset = OpenFoldDatasetCustom(
                     datasets=datasets
                 )
@@ -1195,7 +1195,7 @@ class OpenFoldMultimerDataModule(OpenFoldDataModule):
 
         if self.training_mode:
             if 'custom_finetuning' in self.config_preset: 
-                training_mode_type = 'custom_train'
+                training_mode_type = 'custom_finetuning_train'
             else:
                 training_mode_type = 'train'
 
@@ -1250,7 +1250,7 @@ class OpenFoldMultimerDataModule(OpenFoldDataModule):
                     generator=generator,
                     _roll_at_init=True,
                 )
-            elif training_mode_type == 'custom_train':
+            elif training_mode_type == 'custom_finetuning_train':
                 self.train_dataset = OpenFoldMultimerDatasetCustom(
                     datasets=datasets
                 )

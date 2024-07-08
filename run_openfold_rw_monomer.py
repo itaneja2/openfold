@@ -198,12 +198,10 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
         if accept_conformation:
             output_name = '%s-A' % tag  
             model_output_dir = '%s/ACCEPTED' % output_dir
-            cvf_output_dir = '%s/conformation_vectorfield/ACCEPTED' % output_dir
             os.makedirs(model_output_dir, exist_ok=True)
         else:
             output_name = '%s-R' % tag 
             model_output_dir = '%s/REJECTED' % output_dir 
-            cvf_output_dir = '%s/conformation_vectorfield/REJECTED' % output_dir
             os.makedirs(model_output_dir, exist_ok=True) 
 
     unrelaxed_file_suffix = "_unrelaxed.pdb"
@@ -239,7 +237,7 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
             pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info(f"Model embeddings written to {output_dict_path}...")
 
-    if args.save_structure_module_intermediates and accept_conformation and phase in ['initial', 'bootstrap']:
+    if args.save_structure_module_intermediates and accept_conformation:
         sm_intermediates_output_dir = '%s/structure_module_intermediates' % model_output_dir
         os.makedirs(sm_intermediates_output_dir, exist_ok=True)
 
@@ -881,8 +879,10 @@ def run_rw_pipeline(args):
 
     config = model_config(args.config_preset, 
                           long_sequence_inference=args.long_sequence_inference, 
-                          use_conformation_vectorfield_module=args.use_conformation_vectorfield_module, 
-                          save_structure_module_intermediates=args.save_structure_module_intermediates)
+                          use_conformation_vectorfield_module=args.use_conformation_vectorfield_module)
+
+    if not(args.use_templates):
+        config.model.template.enabled = False
 
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
@@ -1009,20 +1009,12 @@ def run_rw_pipeline(args):
     feature_processor = feature_pipeline.FeaturePipeline(config.data)
     intrinsic_param_zero = np.zeros(intrinsic_dim)
     
-    if not(args.use_conformation_vectorfield_module):
-        model = load_model_w_intrinsic_param(config, 
-                                             module_config_data, 
-                                             args.model_device, 
-                                             args.openfold_checkpoint_path, 
-                                             args.jax_param_path, 
-                                             intrinsic_param_zero)
-    else:
-        model = load_model_w_cvf_and_intrinsic_param(config, 
-                                                     module_config_data, 
-                                                     args.model_device, 
-                                                     args.openfold_checkpoint_path, 
-                                                     args.conformation_vectorfield_checkpoint_path, 
-                                                     intrinsic_param_zero)
+    model = load_model_w_intrinsic_param(config, 
+                                         module_config_data, 
+                                         args.model_device, 
+                                         args.openfold_checkpoint_path, 
+                                         args.jax_param_path, 
+                                         intrinsic_param_zero)
   
 
     #####################################################
@@ -1371,6 +1363,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--cif_output", action="store_true", default=False,
         help="Output predicted models in ModelCIF format instead of PDB format (default)"
+    )
+    parser.add_argument(
+        "--use_templates", type=bool
     )
     parser.add_argument(
         "--module_config", type=str, default=None,

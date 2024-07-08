@@ -24,9 +24,11 @@ from typing import Mapping, Optional, Sequence, Any, MutableMapping, Union, Tupl
 import numpy as np
 import torch
 from openfold.data import templates, parsers, mmcif_parsing, msa_identifiers, msa_pairing, feature_processing_multimer
-from openfold.data.templates import get_custom_template_features, empty_template_feats, fetch_mmcif
+from openfold.data.templates import get_custom_template_features, get_conformation_features, empty_template_feats, fetch_mmcif
 from openfold.data.tools import jackhmmer, hhblits, hhsearch, hmmsearch
 from openfold.np import residue_constants, protein
+from openfold.data import data_transforms
+
 
 FeatureDict = MutableMapping[str, np.ndarray]
 TemplateSearcher = Union[hhsearch.HHSearch, hmmsearch.Hmmsearch]
@@ -160,9 +162,10 @@ def make_mmcif_features(
         [mmcif_object.header["resolution"]], dtype=np.float32
     )
 
-    mmcif_feats["release_date"] = np.array(
-        [mmcif_object.header["release_date"].encode("utf-8")], dtype=object
-    )
+    if "release_date" in mmcif_object.header:
+        mmcif_feats["release_date"] = np.array(
+            [mmcif_object.header["release_date"].encode("utf-8")], dtype=object
+        )
 
     mmcif_feats["is_distillation"] = np.array(0., dtype=np.float32)
 
@@ -349,6 +352,7 @@ def make_sequence_features_with_custom_template(
     }
 
 
+
 class AlignmentRunner:
     """Runs alignment tools and saves the results"""
     def __init__(
@@ -520,19 +524,19 @@ class AlignmentRunner:
 
             if(self.template_searcher is not None):
                 print('computing templates')
-                if("sto" in jackhmmer_uniref90_result):
+                if(self.template_searcher.input_format == "sto"): #input_format is a3m by default 
                     pdb_templates_result = self.template_searcher.query(
                         template_msa,
                         output_dir=output_dir
                     )
-                elif("a3m" in jackhmmer_uniref90_result or self.template_searcher.input_format == "a3m"): #openprotein alignments are a3m
-                    if self.template_searcher.input_format == "a3m":
+                elif(self.template_searcher.input_format == "a3m"): 
+                    if "sto" in jackhmmer_uniref90_result:
                         uniref90_msa_as_a3m = parsers.convert_stockholm_to_a3m(
                             template_msa
                         )
-                    else:
+                    else:  #openprotein alignments are a3m so no need to convert
                         uniref90_msa_as_a3m = template_msa
-                    pdb_templates_result = self.template_searcher.query_a3m(
+                    pdb_templates_result = self.template_searcher.query(
                         uniref90_msa_as_a3m,
                         output_dir=output_dir
                     )
@@ -1227,6 +1231,60 @@ class DataPipeline:
             **msa_features,
             **template_features,
         }
+
+    def process_conformation(
+        self,
+        cif_string: str,
+        alignment_dir: str,
+        file_id: str,
+        tensor_feature_names: Sequence[str],
+    ) -> FeatureDict:
+        """
+            Assembles features for a specific conformation 
+
+        """
+
+        def make_pseudo_beta(protein, prefix=""):
+            """Create pseudo-beta (alpha for glycine) position and mask."""
+            a,b  = data_transforms.pseudo_beta_fn(
+                protein["template_aatype" if prefix else "aatype"],
+                protein[prefix + "all_atom_positions"],
+                protein["template_all_atom_mask" if prefix else "all_atom_mask"],
+            )
+            protein[prefix + "pseudo_beta"] = a
+            protein[prefix + "pseudo_beta_mask"] = b
+            
+            return protein
+
+
+
+        mmcif_object = mmcif_parsing.parse(
+            file_id=file_id, mmcif_string=cif_string
+        )
+        mmcif_object = mmcif_object.mmcif_object
+
+        conformation_features, conformation_sequence = get_conformation_features(
+            mmcif_object=mmcif_object,
+            pdb_id=file_id,
+            kalign_binary_path=getattr(self.template_featurizer,'_kalign_binary_path')
+        )
+
+        to_tensor = lambda t: torch.tensor(t) if type(t) != torch.Tensor else t.clone().detach()
+        conformation_features = {
+            k: to_tensor(v) for k, v in conformation_features.items() if k in tensor_feature_names
+        }
+
+        conformation_features = data_transforms.fix_templates_aatype(conformation_features)
+        conformation_features = data_transforms.make_template_mask(conformation_features)
+        conformation_features = make_pseudo_beta(conformation_features, "template_")
+
+        conformation_features = {
+            k: v.squeeze(0) for k, v in conformation_features.items() if k in tensor_feature_names
+        }
+
+
+        return conformation_features
+
 
 
 class DataPipelineMultimer:

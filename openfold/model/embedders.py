@@ -149,6 +149,7 @@ class InputEmbedder(nn.Module):
             .unsqueeze(-3)
             .expand(((-1,) * len(tf.shape[:-2]) + (n_clust, -1, -1)))
         )
+
         msa_emb = self.linear_msa_m(msa) + tf_m
 
         return msa_emb, pair_emb
@@ -982,3 +983,4 @@ class TemplateEmbedderMultimer(nn.Module):
         template_embeds["template_pair_embedding"] = t
 
         return template_embeds
+

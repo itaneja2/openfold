@@ -279,8 +279,7 @@ def run_rw_pipeline(args, scaling_factor=None, conformation_info=None, candidate
 
     config = model_config(args.config_preset, 
                           long_sequence_inference=args.long_sequence_inference, 
-                          use_conformation_vectorfield_module=False, 
-                          save_structure_module_intermediates=args.save_structure_module_intermediates)
+                          use_conformation_vectorfield_module=False)
 
     if(args.trace_model):
         if(not config.data.predict.fixed_size):

@@ -8,7 +8,8 @@ import numpy
 import torch
 from torch import nn
 
-from openfold.model.model import AlphaFold, ConformationFold, ConformationVectorField
+from openfold.model.model import AlphaFold
+from openfold.model.conformation_vectorfield_model import ConformationVectorField
 from openfold.np import residue_constants, protein
 from openfold.np.relax import relax
 from openfold.utils.import_weights import (

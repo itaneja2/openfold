@@ -121,6 +121,10 @@ def phi_theta_loss(
     eps: float = 1e-4,
 ):
 
+    print(normalized_phi_theta_gt.shape)
+    print(unnormalized_phi_theta.shape)
+    print(residues_mask.shape)
+
     normalized_phi_theta_gt_alt = normalized_phi_theta_gt.clone().detach()
     normalized_phi_theta_gt_alt[..., 0, 1] = -1*normalized_phi_theta_gt_alt[..., 0, 1] #negative y-val for phi  
 
@@ -163,12 +167,17 @@ def phi_theta_loss(
 
     #print(phi_theta_l2)
     #print(phi_theta_l2.shape)
+    #print(residues_mask)
     # [*]
     l_phi_theta = masked_mean(residues_mask[..., None], phi_theta_l2_min, dim=(-1,-2))
 
     #print(l_phi_theta)
     #print(l_phi_theta.shape)
     l_angle_norm = masked_mean(residues_mask[..., None], torch.abs(phi_theta_norm - 1.0), dim=(-1,-2))
+
+    #print('loss')
+    #print(l_phi_theta)
+    #print(l_angle_norm)
 
     an_weight = 0.02
     loss = l_phi_theta + an_weight * l_angle_norm
@@ -1942,11 +1951,6 @@ class ConformationVectorFieldLoss(nn.Module):
                 out["normalized_phi_theta"],
                 batch["normalized_phi_theta_gt"],
                 batch["raw_phi_theta_gt"],
-                batch["residues_mask"],
-            ),
-            "r": lambda: r_loss(
-                out["r"],
-                batch["r_gt"],
                 batch["residues_mask"],
             ),
             "vector_dot_product": lambda: vector_dot_product_loss(

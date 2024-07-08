@@ -405,6 +405,7 @@ def pseudo_beta_fn(aatype, all_atom_positions, all_atom_mask):
         return pseudo_beta
 
 
+
 @curry1
 def make_pseudo_beta(protein, prefix=""):
     """Create pseudo-beta (alpha for glycine) position and mask."""

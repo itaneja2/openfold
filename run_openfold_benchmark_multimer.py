@@ -424,9 +424,6 @@ if __name__ == "__main__":
         "--data_random_seed", type=str, default=None
     )
     parser.add_argument(
-        "--skip_relaxation", action="store_true", default=False,
-    )
-    parser.add_argument(
         "--multimer_ri_gap", type=int, default=200,
         help="""Residue index offset between multiple sequences, if provided"""
     )

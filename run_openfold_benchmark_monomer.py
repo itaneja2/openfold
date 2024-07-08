@@ -140,15 +140,12 @@ def eval_model(model, args, config, feature_processor, feature_dict, processed_f
     return mean_plddt, disordered_percentage, inference_time, unrelaxed_output_path 
 
 
-def main(args):
+def run_msa_sample(args):
+
     # Create the output directory
     os.makedirs(args.output_dir_base, exist_ok=True)
     output_dir_name = args.output_dir_base.split('/')[-1]
-
-    random_seed = args.data_random_seed
-    if random_seed is None:
-        random_seed = random.randrange(2**32)
-
+ 
     msa_sampling_params = []
     for max_extra_msa in [5120, 1024, 512, 256, 128, 64, 32, 16]:
         if max_extra_msa == 5120:
@@ -159,6 +156,9 @@ def main(args):
         msa_sampling_params.append(combo)
 
     config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference)
+
+    if not(args.use_templates):
+        config.model.template.enabled = False
     
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
@@ -166,9 +166,7 @@ def main(args):
                 "Tracing requires that fixed_size mode be enabled in the config"
             )
 
-
-    #if skipping i=0
-    pdb_path_initial = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d/pred_1_%d-%d_unrelaxed.pdb' % (args.output_dir_base, 'benchmark', msa_sampling_params[0][0], msa_sampling_params[0][1], msa_sampling_params[0][0], msa_sampling_params[0][1])
+    pdb_path_initial = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d/pred_1_%d-%d_unrelaxed.pdb' % (args.output_dir_base, 'benchmark/msa_sample', 5120, 512, 5120, 512)
 
     for i, items in enumerate(msa_sampling_params):
 
@@ -180,7 +178,7 @@ def main(args):
         config.data.predict.max_extra_msa = max_extra_msa
         config.data.predict.max_msa_clusters = max_msa_clusters 
 
-        output_dir = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d' % (args.output_dir_base, 'benchmark', max_extra_msa, max_msa_clusters)
+        output_dir = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d' % (args.output_dir_base, 'benchmark/msa_sample', max_extra_msa, max_msa_clusters)
         model_name = 'max_extra_msa=%d_max_msa_clusters=%d' % (max_extra_msa, max_msa_clusters) 
 
         pdb_files = glob.glob('%s/*.pdb' % output_dir)
@@ -197,9 +195,6 @@ def main(args):
           
         output_dir = os.path.abspath(output_dir)
         logging.info('Output Directory: %s' % output_dir)
-
-        np.random.seed(random_seed)
-        torch.manual_seed(random_seed + 1)
 
         os.makedirs(output_dir, exist_ok=True)
         alignment_dir = args.alignment_dir
@@ -266,7 +261,9 @@ def main(args):
 
         for j in range(0,args.num_predictions_per_model):
 
-            #process features after updating seed 
+            #process features after updating seed
+            np.random.seed(j)
+            torch.manual_seed(j+1)
             processed_feature_dict = feature_processor.process_features(
                 feature_dict, mode='predict',
             )
@@ -300,9 +297,169 @@ def main(args):
         timing_dict = {inference_key: run_time} 
         write_timings(timing_dict, output_dir, inference_key)
 
+
+def run_msa_mask(args):
+
+    MSA_X_IDX = residue_constants.restypes_with_x_and_gap.index('X') #20
+
+    # Create the output directory
+    os.makedirs(args.output_dir_base, exist_ok=True)
+    output_dir_name = args.output_dir_base.split('/')[-1]
+
+    config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference)
+
+    if not(args.use_templates):
+        config.model.template.enabled = False
+    
+    if(args.trace_model):
+        if(not config.data.predict.fixed_size):
+            raise ValueError(
+                "Tracing requires that fixed_size mode be enabled in the config"
+            )
+
+    pdb_path_initial = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d/pred_1_%d-%d_unrelaxed.pdb' % (args.output_dir_base, 'benchmark/msa_sample', 5120, 512, 5120, 512)
+
+    t0 = time.perf_counter()
+
+    output_dir = '%s/%s' % (args.output_dir_base, 'benchmark/msa_mask')
+    model_name = 'msa_mask_fraction=%d' % (int(args.msa_mask_fraction*100)) 
+
+    pdb_files = glob.glob('%s/*.pdb' % output_dir)
+    if len(pdb_files) >= args.num_predictions_per_model:
+        if args.overwrite_pred:
+            logging.info('removing pdb files in %s' % output_dir)
+            remove_files(pdb_files)
+        else:
+            logging.info('SKIPPING PREDICTION FOR: %s --%d files already exist--' % (output_dir, len(pdb_files)))
+            continue 
+    elif len(pdb_files) > 0: #incomplete job
+        logging.info('removing pdb files in %s' % output_dir)
+        remove_files(pdb_files)
+      
+    output_dir = os.path.abspath(output_dir)
+    logging.info('Output Directory: %s' % output_dir)
+
+    os.makedirs(output_dir, exist_ok=True)
+    alignment_dir = args.alignment_dir
+    file_id = os.listdir(alignment_dir)
+    if len(file_id) > 1:
+        raise ValueError("should only be a single directory under %s" % alignment_dir)
+    else:
+        file_id = file_id[0] #e.g 1xyz_A
+        file_id_wo_chain = file_id.split('_')[0]
+    alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+    logging.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
+
+    if args.fasta_file is None:
+        pattern = "%s/*.fasta" % alignment_dir_w_file_id
+        files = glob.glob(pattern, recursive=True)
+        if len(files) == 1:
+            fasta_file = files[0]
+        else: 
+            raise FileNotFoundError("Multiple .fasta files found in alignment_dir -- should only be one")
+    else:
+        fasta_file = args.fasta_file
+
+    with open(fasta_file, "r") as fp:
+        fasta_data = fp.read()
+    _, seq = parse_fasta(fasta_data)
+    logger.info("PROTEIN SEQUENCE:")
+    logger.info(seq)
+
+    pattern = "%s/features.pkl" % alignment_dir_w_file_id
+    files = glob.glob(pattern, recursive=True)
+    if len(files) == 1:
+        features_output_path = files[0]
+        logging.info('features.pkl path: %s' % features_output_path)
+    else:
+        features_output_path = ''
+
+    if os.path.isfile(features_output_path):
+        feature_dict = np.load(features_output_path, allow_pickle=True) #this is used for all predictions, so this assumes you are predicting a single sequence 
+    else:
+        template_featurizer = templates.HhsearchHitFeaturizer(
+            mmcif_dir=args.template_mmcif_dir,
+            max_template_date=args.max_template_date,
+            max_hits=4,
+            kalign_binary_path=args.kalign_binary_path,
+            release_dates_path=args.release_dates_path,
+            obsolete_pdbs_path=args.obsolete_pdbs_file_path
+        )
+        data_processor = data_pipeline.DataPipeline(
+            template_featurizer=template_featurizer,
+        )
+        feature_dict = data_processor.process_fasta(
+            fasta_path=fasta_file, alignment_dir=alignment_dir_w_file_id
+        )
+        features_output_path = os.path.join(alignment_dir_w_file_id, 'features.pkl')
+        with open(features_output_path, 'wb') as f:
+            pickle.dump(feature_dict, f, protocol=4)
+        logging.info('SAVED %s' % features_output_path)
+
+    feature_processor = feature_pipeline.FeaturePipeline(config.data)
+    model = load_model(config, args.model_device, args.openfold_checkpoint_path, args.jax_param_path)
+
+    conformation_info_dict = {}
+    conformation_info = [] 
+
+    for j in range(0,args.num_predictions_per_model):
+
+        #process features after updating seed
+        np.random.seed(j)
+        torch.manual_seed(j+1)
+
+        num_res = feature_dict['msa'].shape[1]
+        columns_to_randomize = np.random.choice(range(0, num_res), size=int(num_res*args.msa_mask_fraction), replace=False) # Without replacement
+        for col in columns_to_randomize:
+            feature_dict['msa'][1:,col] = np.array([MSA_X_IDX]*(feature_dict['msa'].shape[0]-1))  # Replace MSA columns with X (20)
+
+        processed_feature_dict = feature_processor.process_features(
+            feature_dict, mode='predict',
+        )
+        processed_feature_dict = {
+            k:torch.as_tensor(v, device=args.model_device)
+            for k,v in processed_feature_dict.items()
+        } 
+
+        tag = 'pred_%d' % (j+1)
+        logging.info('RUNNING model %s, pred %d' % (model_name,j))
+
+        mean_plddt, disordered_percentage, inference_time, pdb_path = eval_model(model, args, config, feature_processor, feature_dict, processed_feature_dict, tag, output_dir)    
+        logger.info('pLDDT: %.3f, disordered percentage: %.3f' % (mean_plddt, disordered_percentage)) 
+
+        rmsd = align_and_get_rmsd(pdb_path_initial, pdb_path)            
+
+        conformation_info.append((pdb_path, rmsd, mean_plddt, disordered_percentage, inference_time))
+
+    conformation_info_dict[model_name] = conformation_info
+    conformation_info_output_dir = output_dir
+    conformation_info_fname = '%s/conformation_info.pkl' % conformation_info_output_dir
+    with open(conformation_info_fname, 'wb') as f:
+        pickle.dump(conformation_info_dict, f)
+
+    inference_key = 'inference_%d' % i
+    run_time = time.perf_counter() - t0
+    timing_dict = {inference_key: run_time} 
+    write_timings(timing_dict, output_dir, inference_key)
+
+
+
+def main(args):
+
+    if args.benchmark_method == 'msa_sample':
+        run_msa_sample(args)
+    elif args.benchmark_method == 'msa_mask':
+        run_msa_mask(args)
+
            
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--benchmark_method", type=str, 
+    )
+    parser.add_argument(
+        "--use_templates", type=bool
+    )
     parser.add_argument(
         "--fasta_file", type=str, default=None,
         help="Path to FASTA file, one sequence per file. By default assumes that .fasta file is located in alignment_dir "
@@ -341,6 +498,9 @@ if __name__ == "__main__":
              checkpoint directory or a .pt file"""
     )
     parser.add_argument(
+        "--msa_mask_fraction", type=float, default=0.15
+    )
+    parser.add_argument(
         "--num_predictions_per_model", type=int, default=10
     )
     parser.add_argument(
@@ -361,9 +521,6 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--data_random_seed", type=str, default=None
-    )
-    parser.add_argument(
-        "--skip_relaxation", action="store_true", default=False,
     )
     parser.add_argument(
         "--multimer_ri_gap", type=int, default=1,

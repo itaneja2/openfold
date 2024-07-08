@@ -70,7 +70,7 @@ def dict_multimap(fn, dicts):
         else:
             all_v = [d[k] for d in dicts]
             new_dict[k] = fn(all_v)
-
+    
     return new_dict
 
 

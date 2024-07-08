@@ -108,7 +108,8 @@ def from_pdb_string(pdb_str: str, chain_id: Optional[str] = None, residues_ignor
         raise ValueError(
             f"Only single model PDBs are supported. Found {len(models)} models."
         )
-    model = models[0]
+    else:
+        model = models[0]
 
     atom_positions = []
     aatype = []

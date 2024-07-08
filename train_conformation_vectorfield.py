@@ -20,7 +20,7 @@ import torch
 from openfold.config import model_config
 from openfold.data.conformation_data_module import ConformationVectorFieldDataModule 
 from openfold.data import feature_pipeline
-from openfold.model.model import ConformationVectorField
+from openfold.model.conformation_vectorfield_model import ConformationVectorField
 from openfold.model.torchscript import script_preset_
 from openfold.np import residue_constants, protein 
 from openfold.utils.argparse_utils import remove_arguments
@@ -105,15 +105,10 @@ class ConformationVectorFieldWrapper(pl.LightningModule):
                     on_step=False, on_epoch=True, logger=True,
                 )
 
-    def training_step(self, batch, batch_idx):
-
-        ground_truth = batch.pop('gt_features', None)
+    def training_step(self, batch):
 
         # Run the model
         outputs = self(batch)
-
-        # Remove the recycling dimension
-        batch = tensor_tree_map(lambda t: t[..., -1], batch)
 
         # Compute loss
         loss, loss_breakdown = self.loss(
@@ -127,7 +122,7 @@ class ConformationVectorFieldWrapper(pl.LightningModule):
 
 
     def configure_optimizers(self, 
-        learning_rate: float = 1e-3,
+        learning_rate: float = 1e-4,
         eps: float = 1e-5,
     ) -> torch.optim.Adam:
 #        return torch.optim.Adam(
@@ -160,10 +155,11 @@ def main(args):
     if(args.seed is not None):
         seed_everything(args.seed) 
 
+    is_low_precision = args.precision in ["bf16-mixed", "16", "bf16", "16-true", "16-mixed", "bf16-mixed"]
     config = model_config(
         args.config_preset, 
         train=True, 
-        low_prec=(str(args.precision) == "16"),
+        low_prec=is_low_precision,
     ) 
 
     model_module = ConformationVectorFieldWrapper(config)
@@ -185,16 +181,16 @@ def main(args):
     
     #######
 
-    if args.fine_tuning_save_dir is None:
+    if args.training_save_dir is None:
         log_parent_dir = './conformationvec_training_logs'
         log_child_dir = 'tmp'
-        fine_tuning_save_dir = '%s/%s' % (log_parent_dir, log_child_dir)
+        training_save_dir = '%s/%s' % (log_parent_dir, log_child_dir)
     else:
-        fine_tuning_save_dir = args.fine_tuning_save_dir
-        log_parent_dir = fine_tuning_save_dir[0:fine_tuning_save_dir.rfind('/')]
-        log_child_dir = fine_tuning_save_dir.split('/')[-1] 
+        training_save_dir = args.training_save_dir
+        log_parent_dir = training_save_dir[0:training_save_dir.rfind('/')]
+        log_child_dir = training_save_dir.split('/')[-1] 
     
-    os.makedirs(fine_tuning_save_dir, exist_ok=True)
+    os.makedirs(training_save_dir, exist_ok=True)
 
     # TorchScript components of the model
     if(args.script_modules):
@@ -274,8 +270,9 @@ def main(args):
 
     trainer = pl.Trainer.from_argparse_args(
         args,
-        max_epochs = 500,
+        max_epochs = 1000,
         log_every_n_steps = 10,
+        gradient_clip_val=0.1,
         default_root_dir='./',
         strategy=strategy,
         callbacks=callbacks,
@@ -319,7 +316,7 @@ if __name__ == "__main__":
         help="Directory containing precomputed training alignments"
     )
     parser.add_argument(
-        "--fine_tuning_save_dir", type=str, default=None,
+        "--training_save_dir", type=str, default=None,
     )
     parser.add_argument(
         "--target_name", type=str, default=None,

@@ -1008,6 +1008,47 @@ def get_custom_template_features(
     return template_features
 
 
+def get_conformation_features(
+        mmcif_object: mmcif_parsing.MmcifObject,
+        pdb_id: str,
+        kalign_binary_path: str):
+
+    chain_id = 'A'
+
+    conformation_sequence = mmcif_object.chain_to_seqres[chain_id]
+    mapping = {x:x for x, _ in enumerate(conformation_sequence)}
+
+    #the 'template' (i.e the conformation) should have the same sequence as the query sequence
+    features, warnings = _extract_template_features(
+        mmcif_object=mmcif_object,
+        pdb_id=pdb_id,
+        mapping=mapping,
+        template_sequence=conformation_sequence,
+        query_sequence=conformation_sequence,
+        template_chain_id=chain_id,
+        kalign_binary_path=kalign_binary_path,
+        _zero_center_positions=True
+    )
+    features["template_sum_probs"] = [1.0]
+
+    # TODO: clean up this logic
+    conformation_features = {}
+    for conformation_feature_name in TEMPLATE_FEATURES:
+        conformation_features[conformation_feature_name] = []
+
+    for k in conformation_features:
+        conformation_features[k].append(features[k])
+
+    for name in conformation_features:
+        conformation_features[name] = np.stack(
+            conformation_features[name], axis=0
+        ).astype(TEMPLATE_FEATURES[name])
+
+
+    return conformation_features, conformation_sequence
+
+
+
 @dataclasses.dataclass(frozen=True)
 class TemplateSearchResult:
     features: Mapping[str, Any]

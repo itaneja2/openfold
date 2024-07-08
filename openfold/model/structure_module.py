@@ -66,9 +66,10 @@ class AngleResnetBlock(nn.Module):
     def forward(self, a: torch.Tensor) -> torch.Tensor:
 
         s_initial = a
-
+        print(a.shape)
         a = self.relu(a)
         a = self.linear_1(a)
+        print(a.shape)
         a = self.relu(a)
         a = self.linear_2(a)
 
@@ -852,9 +853,7 @@ class StructureModule(nn.Module):
         trans_scale_factor,
         epsilon,
         inf,
-        save_intermediates,
         is_multimer=False,
-        output_rigid=False,
         **kwargs,
     ):
         """
@@ -890,8 +889,6 @@ class StructureModule(nn.Module):
                 Small number used in angle resnet normalization
             inf:
                 Large number used for attention masking
-            save_intermediates:
-                Whether to save s (i.e first row of MSA) and backbone frames representation 
         """
         super(StructureModule, self).__init__()
 
@@ -910,9 +907,7 @@ class StructureModule(nn.Module):
         self.trans_scale_factor = trans_scale_factor
         self.epsilon = epsilon
         self.inf = inf
-        self.save_intermediates = save_intermediates
         self.is_multimer = is_multimer
-        self.output_rigid = output_rigid
 
         # Buffers to be lazily initialized later
         # self.default_frames
@@ -1110,9 +1105,6 @@ class StructureModule(nn.Module):
 
         outputs = dict_multimap(torch.stack, outputs)
         outputs["single"] = s
-        if self.output_rigid or self.save_intermediates: 
-            outputs["rigid_rotation"] = rigids.get_rots().get_rot_mats() 
-            outputs["rigid_translation"] = rigids.get_trans() 
 
         return outputs
 
