@@ -76,6 +76,7 @@ logger.addHandler(file_handler)
 finetune_openfold_path = './finetune_openfold.py'
 
 TRACING_INTERVAL = 50
+SEQ_LEN_EXTRAMSA_THRESHOLD = 600 #if length of seq > 600, extra_msa is disabled so backprop doesn't crash
 asterisk_line = '******************************************************************************'
 
 
@@ -288,6 +289,7 @@ def get_aligned_models_info(
 def finetune_wrapper(
     aligned_models_info: Tuple[Any,...],
     jax_param_path_dict: Mapping[str, str],
+    alignment_dir_wo_file_id: str,
     output_dir: str,
     args: argparse.Namespace,
 )
@@ -304,17 +306,17 @@ def finetune_wrapper(
     fine_tuning_save_dir = '%s/training/%s/%s' % (output_dir, source_str, target_str)
 
     arg1 = '--train_data_dir=%s' % target_pdb_path[0:target_pdb_path.rindex('/')]
-    arg2 = '--train_alignment_dir=%s' % args.alignment_dir
+    arg2 = '--train_alignment_dir=%s' % alignment_dir_wo_file_id
     arg3 = '--fine_tuning_save_dir=%s' % fine_tuning_save_dir
     arg4 = '--template_mmcif_dir=%s' % args.template_mmcif_dir
     arg5 = '--max_template_date=%s' % date.today().strftime("%Y-%m-%d")
-    arg6 = '--precision=bf16'
-    arg7 = '--gpus=1'
-    arg8 = '--resume_from_jax_params=%s' % jax_param_path_dict[model_name_source] 
-    arg9 = '--resume_model_weights_only=True'
-    arg10 = '--config_preset=multimer-custom_finetuning-SAID-all-%s' % model_name_source #fine tune w.r.t vanila model (i.e no chainmask) 
-    arg11 = '--module_config=%s' % args.module_config
-    arg12 = '--hp_config=%s' % args.train_hp_config
+    arg6 = '--gpus=1'
+    arg7 = '--resume_from_jax_params=%s' % jax_param_path_dict[model_name_source] 
+    arg8 = '--resume_model_weights_only=True'
+    arg9 = '--config_preset=multimer-custom_finetuning-SAID-all-%s' % model_name_source #fine tune w.r.t vanila model (i.e no chainmask) 
+    arg10 = '--module_config=%s' % args.module_config
+    arg11 = '--hp_config=%s' % args.train_hp_config
+    arg12 = '--precision=bf16'
     arg13 = '--save_structure_output'
 
     script_arguments = [arg1,arg2,arg3,arg4,arg5,arg6,arg7,arg8,arg9,arg10,arg11,arg12] 
@@ -771,8 +773,12 @@ def run_rw_pipeline(args):
         else:
             file_id = file_id[0] #e.g 1xyz-1xyz
         alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+        alignment_dir_wo_file_id = alignment_dir
     else:
+        file_id = alignment_dir.split('/')[-1]
+        file_id_wo_chain = file_id.split('_')[0]
         alignment_dir_w_file_id = alignment_dir
+        alignment_dir_wo_file_id = alignment_dir[0:alignment_dir.rindex('/')]
     logger.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
     
     if args.fasta_file is None:
@@ -790,6 +796,10 @@ def run_rw_pipeline(args):
     _, seqs = parse_fasta(fasta_data)
     logger.info("PROTEIN SEQUENCE:")
     logger.info(seqs)
+
+    total_seq_len = sum(len(s) for s in seqs)
+    if total_seq_len > SEQ_LEN_EXTRAMSA_THRESHOLD:
+       config.model.extra_msa.enabled = False 
 
     random_seed = args.data_random_seed
     if random_seed is None:
@@ -959,9 +969,11 @@ def run_rw_pipeline(args):
             conformation_info_dict[model_name] = (initial_pred_path, mean_plddt_initial, weighted_ptm_score_initial, disordered_percentage_initial) 
             initial_pred_path_dict[model_name] = initial_pred_path 
 
-        summary_output_dir = '%s/%s/initial_pred' % (args.output_dir_base, 'alternative_conformations-summary')
-        os.makedirs(summary_output_dir, exist_ok=True)
-        shutil.copytree(initial_pred_output_dir, summary_output_dir, dirs_exist_ok=True)
+        if args.write_summary_dir:
+            summary_output_dir = '%s/%s/initial_pred' % (args.output_dir_base, 'alternative_conformations-summary')
+            os.makedirs(summary_output_dir, exist_ok=True)
+            rw_helper_functions.remove_files_in_dir(summary_output_dir)
+            shutil.copytree(initial_pred_output_dir, summary_output_dir, dirs_exist_ok=True)
 
         run_time = time.perf_counter() - t0
         timing_dict = {'initial_pred': run_time} 
@@ -996,7 +1008,7 @@ def run_rw_pipeline(args):
         t0 = time.perf_counter()
         for i in range(0,len(aligned_models_info)): 
             finetune_wrapper(aligned_models_info[i], jax_param_path_dict, 
-                             output_dir, args)
+                             alignment_dir_wo_file_id, output_dir, args)
         run_time = time.perf_counter() - t0
         timing_dict = {'gradient_descent': run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, 'gradient_descent')
@@ -1130,10 +1142,12 @@ def run_rw_pipeline(args):
         timing_dict = {inference_key: run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, inference_key)
  
-    rw_output_parent_dir = '%s/rw_output' % output_dir
-    summary_output_dir = '%s/%s/rw_output' % (args.output_dir_base, 'alternative_conformations-summary')
-    os.makedirs(summary_output_dir, exist_ok=True)
-    shutil.copytree(rw_output_parent_dir, summary_output_dir, dirs_exist_ok=True)
+    if args.write_summary_dir:
+        rw_output_parent_dir = '%s/rw_output' % output_dir
+        summary_output_dir = '%s/%s/rw_output' % (args.output_dir_base, 'alternative_conformations-summary')
+        os.makedirs(summary_output_dir, exist_ok=True)
+        rw_helper_functions.remove_files_in_dir(summary_output_dir)
+        shutil.copytree(rw_output_parent_dir, summary_output_dir, dirs_exist_ok=True)
 
 
            
@@ -1148,7 +1162,7 @@ if __name__ == "__main__":
         help="Directory containing mmCIF files to search for templates"
     )
     parser.add_argument(
-        "--alignment_dir", type=str, required=True,
+        "--alignment_dir", type=str, default=None,
         help="""Path to alignment directory. If provided, alignment computation 
                 is skipped and database path arguments are ignored."""
     )
@@ -1270,6 +1284,9 @@ if __name__ == "__main__":
     )    
     parser.add_argument(
         "--overwrite_pred", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--write_summary_dir", type=bool, default=True
     )
     parser.add_argument(
         "--recycle_wo_early_stopping", action="store_true", default=False

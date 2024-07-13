@@ -50,7 +50,7 @@ from scripts.utils import add_data_args
 import pandas as pd 
 pd.set_option('display.max_rows', 500)
 
-from custom_openfold_utils.pdb_utils import get_ca_coords_matrix, save_ca_coords
+from custom_openfold_utils.pdb_utils import get_ca_coords_matrix, save_ca_coords, get_cif_string_from_pdb
 from rw_helper_functions import write_timings, remove_files, calc_disordered_percentage
 
 logger = logging.getLogger(__name__)
@@ -71,11 +71,59 @@ TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
 
 
-def eval_model(model, args, config, feature_dict, vectorfield_gt_feats, rw_conformation_path, nearest_aligned_gtc_path, output_dir):
+def eval_model(model, args, config, feature_dict, alt_conformation_path, output_dir):
 
     os.makedirs(output_dir, exist_ok=True)
 
-    rw_conformation_ca_coords = get_ca_coords_matrix(rw_conformation_path)
+    alt_conformation_ca_coords = get_ca_coords_matrix(alt_conformation_path)
+ 
+    with torch.no_grad():
+        t = time.perf_counter()
+        out = model(feature_dict)
+        inference_time = time.perf_counter() - t
+
+    out = tensor_tree_map(lambda x: np.array(x.cpu()), out)
+    vectorfield_gt_feats = tensor_tree_map(lambda x: np.array(x), vectorfield_gt_feats)
+
+    # [N,2]
+    norm_phi_pred = out["normalized_phi_theta"][..., 0, :]
+    norm_theta_pred = out["normalized_phi_theta"][..., 1, :]
+
+    #phi is between 0 and Pi, so y-val is between 0 and 1
+    norm_phi_pred[:,1] = np.abs(norm_phi_pred[:,1]) 
+
+    #convert normalized phi/theta to radians 
+    raw_phi_pred = np.arctan2(np.clip(norm_phi_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_phi_pred[..., 0], a_min=-1,a_max=1))
+    raw_theta_pred = np.arctan2(np.clip(norm_theta_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_theta_pred[..., 0], a_min=-1,a_max=1))
+
+    delta_x_pred = 1.0*np.cos(raw_theta_pred)*np.sin(raw_phi_pred)
+    delta_y_pred = 1.0*np.sin(raw_theta_pred)*np.sin(raw_phi_pred)
+    delta_z_pred = 1.0*np.cos(raw_phi_pred)
+
+    delta_xyz_pred = np.transpose(np.array([delta_x_pred,delta_y_pred,delta_z_pred]))
+    ca_coords_pred = rw_conformation_ca_coords + delta_xyz_pred
+
+    alt_conformation_name = alt_conformation_path.split('/')[-1].split('.')[0]
+    output_name = '%s-CVF.pdb' % alt_conformation_name
+    pdb_output_path = '%s/%s' % (output_dir, output_name)
+
+    save_ca_coords(alt_conformation_path, ca_coords_pred, pdb_output_path)
+
+    out_df = pd.DataFrame({'raw_phi_pred': raw_phi_pred, 'raw_theta_pred' raw_theta_pred,
+                           'norm_phi_pred_x': norm_phi_pred[:,0], 'norm_phi_pred_y': norm_phi_pred[:,1], 
+                           'norm_theta_pred_x': norm_theta_pred[:,0], 'norm_theta_pred_y': norm_theta_pred[:,1],
+                           'rw_conformation_path': rw_conformation_path}) 
+
+    out_df.to_csv('%s/phi_theta_pred.csv' % output_dir, index=False)
+ 
+    
+
+
+def eval_model(model, args, config, feature_dict, alt_conformation_path, output_dir):
+
+    os.makedirs(output_dir, exist_ok=True)
+
+    alt_conformation_ca_coords = get_ca_coords_matrix(alt_conformation_path)
  
     with torch.no_grad():
         t = time.perf_counter()
@@ -159,13 +207,66 @@ def main(args):
         random_seed = random.randrange(2**32)
 
     config = model_config(args.config_preset, long_sequence_inference=args.long_sequence_inference)
-    config.data.common.use_templates = False
-    config.data.common.use_template_torsion_angles = False
-    config.model.template.enabled = False
-    config.model.heads.tm.enabled = False
+    model = load_conformation_vectorfield(config, args.model_device, args.conformation_vectorfield_checkpoint_path)
+    
+    seq_embedding_dict = pickle.load(args.seq_embeddings_path)
+    seq_id = seq_embeddings_dict.keys()[0]
+    seq = seq_embeddings_dict[seq_id][0]
+    seq_embedding = {"s": seq_embeddings_dict[seq_id][1]}
+
+    if args.alt_conformation_data_dir and args.alt_conformation_path:
+        raise ValueError("Only one of alt_conformation_data_dir/alt_conformation_path should be set")
+    elif args.alt_conformation_data_dir:
+        all_alt_conformations_paths =  glob.glob('%s/*.pdb' % args.alt_conformation_data_dir)
+        if len(all_alt_conformations_path) == 0:
+            all_alt_conformations_paths =  glob.glob('%s/*.cif' % args.alt_conformation_data_dir)
+        if len(all_alt_conformations_paths) == 0:
+            raise ValueError('No pdb or cif files found in %s' % args.alt_conformation_data_dir)
+    elif args.alt_conformation_path:
+        all_alt_conformations_paths = [args.alt_conformation_path]
+
+    
+    template_featurizer = templates.HhsearchHitFeaturizer(
+        mmcif_dir=args.template_mmcif_dir,
+        max_template_date=args.max_template_date,
+        max_hits=0,
+        kalign_binary_path=args.kalign_binary_path,
+        release_dates_path=args.release_dates_path,
+        obsolete_pdbs_path=args.obsolete_pdbs_path
+    )
+
+    data_processor = data_pipeline.DataPipeline(
+        template_featurizer=template_featurizer,
+    )
+
+    tensor_feature_names = config.common.unsupervised_features
+    tensor_feature_names += config.common.template_features
+    tensor_feature_names += ['template_mask', 'template_pseudo_beta', 'template_pseudo_beta_mask']
+
+    for alt_conformation_path in all_alt_conformations_paths: 
+
+        alt_conformation_fname = alt_conformation_path.split('/')[-1].split('.')[0]
+        alt_conformation_cif_string = get_cif_string_from_pdb(alt_conformation_path) 
+        conformation_feats = data_processor.process_conformation(
+            cif_string=alt_conformation_cif_string,
+            file_id=alt_conformation_fname,
+            tensor_feature_names=tensor_feature_names
+        )
+
+        seq_features = data_pipeline.make_sequence_features(seq, seq_id, len(seq)) 
+        to_tensor = lambda t: torch.tensor(t) if type(t) != torch.Tensor else t.clone().detach()
+        seq_features = {
+            k: to_tensor(v).squeeze(0) for k, v in seq_features.items() if k in tensor_feature_names 
+        }
+
+        feature_dict = {**conformation_feats, **seq_features, **seq_embedding}
+
+        eval_model(model, args, config, feature_dict, alt_conformation_path, args.output_dir_base)
+
+
+    ########################
 
     feature_processor = feature_pipeline.FeaturePipeline(config.data)
-    model = load_conformation_vectorfield(config, args.model_device, args.conformation_vectorfield_checkpoint_path)
 
     children_dirs = glob.glob('%s/*/' % args.alignment_dir) #UNIPROT_ID
     children_dirs = [f[0:-1] for f in children_dirs] #remove trailing forward slash
@@ -274,9 +375,17 @@ if __name__ == "__main__":
         help="Directory containing training mmCIF files -- corresponds two conformations 1 and 2."
     )
     parser.add_argument(
-        "--rw_data_dir", type=str, default = None, 
-        help="Directory containing mmCIF files generated via random walk"
+        "--alt_conformation_data_dir", type=str, default = None, 
+        help="Directory containing files corresponding to alternative conformations"
     )
+    parser.add_argument(
+        "--alt_conformation_path", type=str, default = None,
+        help="Path to alternative conformation"
+    )
+    parser.add_argument(
+        "--seq_embeddings_path", type=str, default = None
+    )
+    
     parser.add_argument(
         "--alignment_dir", type=str, required=True,
         help="""Path to alignment directory. If provided, alignment computation 
@@ -296,7 +405,7 @@ if __name__ == "__main__":
              device name is accepted (e.g. "cpu", "cuda:0")"""
     )
     parser.add_argument(
-        "--config_preset", type=str, default="model_1",
+        "--config_preset", type=str, default="conformation_vectorfield",
         help="""Name of a model config preset defined in openfold/config.py"""
     )
     parser.add_argument(

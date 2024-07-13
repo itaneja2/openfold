@@ -1,17 +1,13 @@
 import argparse
-from pathlib import Path
 import os
 import subprocess 
-import shutil 
 import pandas as pd
 import itertools
 import pickle 
 import glob
 import sys  
 import json 
-import numpy as np
 import re 
-from typing import Any, List, Sequence, Optional, Tuple
 
 from esm.models.esm3 import ESM3
 from esm.sdk.api import ESMProtein, SamplingConfig

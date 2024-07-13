@@ -94,7 +94,7 @@ def load_models_from_command_line(config, model_device, openfold_checkpoint_path
                         ckpt_path,
                     )
                 d = torch.load(ckpt_path)
-                import_openfold_weights_(model=model, state_dict=d["ema"]["params"])
+                import_openfold_weights_(model=model, state_dict=d["ema"]["params"], config=config)
             else:
                 ckpt_path = path
                 d = torch.load(ckpt_path)
@@ -102,7 +102,7 @@ def load_models_from_command_line(config, model_device, openfold_checkpoint_path
                 if "ema" in d:
                     # The public weights have had this done to them already
                     d = d["ema"]["params"]
-                import_openfold_weights_(model=model, state_dict=d)
+                import_openfold_weights_(model=model, state_dict=d, config=config)
 
             model = model.to(model_device)
             logger.info(
@@ -138,7 +138,7 @@ def load_model(config, model_device, openfold_checkpoint_path, jax_param_path, e
         if "ema" in d:
             # The public weights have had this done to them already
             d = d["ema"]["params"]
-        import_openfold_weights_(model=af_model, state_dict=d)
+        import_openfold_weights_(model=af_model, state_dict=d, config=config)
         logger.info(
             f"Loaded OpenFold parameters at {ckpt_path}..."
         )
@@ -179,7 +179,7 @@ def load_model_w_intrinsic_param(config, module_config_data, model_device, openf
         if "ema" in d:
             # The public weights have had this done to them already
             d = d["ema"]["params"]
-        import_openfold_weights_(model=af_model, state_dict=d)
+        import_openfold_weights_(model=af_model, state_dict=d, config=config)
         logger.info(
             f"Loaded OpenFold parameters at {ckpt_path}..."
         )   
@@ -200,6 +200,7 @@ def load_model_w_intrinsic_param(config, module_config_data, model_device, openf
 
     return af_model_w_intrinsic_param
 
+'''
 def load_model_w_cvf_and_intrinsic_param(config, module_config_data, model_device, openfold_checkpoint_path, conformation_vectorfield_param_path, intrinsic_parameter, enable_dropout=False):
  
     intrinsic_parameter = torch.tensor(intrinsic_parameter).to(model_device)
@@ -223,7 +224,7 @@ def load_model_w_cvf_and_intrinsic_param(config, module_config_data, model_devic
     conformation_vectorfield_state_dict = conformation_vectorfield_state_dict["state_dict"]
     conformation_vectorfield_state_dict = {k.replace('model.',''):v for k,v in conformation_vectorfield_state_dict.items()}
 
-    import_openfold_weights_merged_architecture_(model=af_model, state_dict_original_components=openfold_state_dict, state_dict_new_components=conformation_vectorfield_state_dict)
+    import_openfold_weights_merged_architecture_(model=af_model, state_dict_original_components=openfold_state_dict, state_dict_new_components=conformation_vectorfield_state_dict, config=config)
     logger.info(
         f"Loaded OpenFold parameters at {openfold_checkpoint_path}... and ConformationVectorField parameters at {conformation_vectorfield_param_path}"
     )   
@@ -233,24 +234,8 @@ def load_model_w_cvf_and_intrinsic_param(config, module_config_data, model_devic
     af_model_w_intrinsic_param = af_model_w_intrinsic_param.to(model_device)
 
     return af_model_w_intrinsic_param
+'''
 
-
-def load_conformationfold(config, model_device, conformationfold_checkpoint_path):
- 
-    model = ConformationFold(config)
-    model = model.eval()
-   
-    ckpt_path = conformationfold_checkpoint_path
-    d = torch.load(ckpt_path)
-    sd = d["state_dict"]
-    sd = {k.replace('model.',''):v for k,v in sd.items()}
-    import_openfold_weights_(model=model, state_dict=sd)
-    logger.info(
-        f"Loaded ConformationFold parameters at {ckpt_path}..."
-    )
-    model = model.to(model_device)
-
-    return model
 
 def load_conformation_vectorfield(config, model_device, conformation_vectorfield_checkpoint_path):
  

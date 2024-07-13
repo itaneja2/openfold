@@ -21,11 +21,15 @@ import urllib.request
 
 from pymol import cmd
 
+from custom_openfold_utils.pdb_utils import clean_pdb, convert_mmcif_to_pdb 
+
 logger = logging.getLogger(__file__)
 logger.setLevel(level=logging.INFO)
 
-sifts_script = './parse_sifts.py'
-pdb_fixinsert_path = './pdb_fixinsert.py' 
+current_file_path = os.path.abspath(__file__)
+current_dir = os.path.dirname(current_file_path)
+
+sifts_script = '%s/parse_sifts.py' % current_dir
 
 def fetch_pdb_metadata_df(pdb_id):
     curl_cmd = ['curl --silent ftp://ftp.ebi.ac.uk/pub/databases/msd/sifts/xml/%s.xml.gz | gunzip | python %s' % (pdb_id.lower(),sifts_script)] 

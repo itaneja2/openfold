@@ -18,7 +18,7 @@ from typing import Tuple, List, Mapping, Optional, Sequence, Any, MutableMapping
 import contextlib 
 import copy 
 
-from openfold.utils.script_utils import load_model_w_intrinsic_param, load_model_w_cvf_and_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
+from openfold.utils.script_utils import load_model_w_intrinsic_param, parse_fasta, run_model_w_intrinsic_dim, prep_output, \
     update_timings, relax_protein
 from openfold.data.data_pipeline import make_template_features 
 
@@ -76,12 +76,13 @@ if __name__ == "__main__":
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 else:
-    logger = logging.getLogger("gen_cvf_training_conformations_batch")
+    logger = logging.getLogger("run_openfold_rw_monomer_testset")
 
 
 finetune_openfold_path = './finetune_openfold.py'
 
 TRACING_INTERVAL = 50
+SEQ_LEN_EXTRAMSA_THRESHOLD = 600 #if length of seq > 600, extra_msa is disabled so backprop doesn't crash
 asterisk_line = '******************************************************************************'
 
 @contextlib.contextmanager
@@ -150,12 +151,6 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
         processed_feature_dict
     )
     
-    if args.save_structure_module_intermediates and 'rigid_rotation' in out['sm']:
-        out_tensor = copy.deepcopy(out) #this is to keep a copy of out where values are of type torch.Tensor (as opposed to numpy) 
-        keys_to_remove = [key for key in out_tensor['sm'] if key not in ['single', 'rigid_rotation', 'rigid_translation']]
-        for key in keys_to_remove:
-            del out_tensor['sm'][key] 
-
     out = tensor_tree_map(lambda x: np.array(x.cpu()), out)
     mean_plddt = np.mean(out["plddt"])
 
@@ -237,22 +232,6 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
             pickle.dump(out, fp, protocol=pickle.HIGHEST_PROTOCOL)
         logger.info(f"Model embeddings written to {output_dict_path}...")
 
-    if args.save_structure_module_intermediates and accept_conformation:
-        sm_intermediates_output_dir = '%s/structure_module_intermediates' % model_output_dir
-        os.makedirs(sm_intermediates_output_dir, exist_ok=True)
-
-        sm_output_dict_path = os.path.join(
-            sm_intermediates_output_dir, f'{output_name}_sm_output_dict.pkl'
-        )
-        with open(sm_output_dict_path, "wb") as fp:
-            pickle.dump(out_tensor["sm"], fp, protocol=pickle.HIGHEST_PROTOCOL)
-        logger.info(f"Structure module intermediates written to {sm_output_dict_path}...")
-
-    if hasattr(args, 'use_conformation_vectorfield_module'):
-        if args.use_conformation_vectorfield_module and phase in ['bootstrap', 'rw']:
-            os.makedirs(cvf_output_dir, exist_ok=True) 
-            save_cvf_output(unrelaxed_output_path, out, cvf_output_dir)
-
 
     return mean_plddt, disordered_percentage, inference_time, accept_conformation, unrelaxed_output_path 
 
@@ -262,6 +241,7 @@ def finetune_wrapper(
     bootstrap_training_conformations_dir: str,
     initial_pred_path: str,
     file_id_wo_chain: str,
+    alignment_dir_wo_file_id: str,
     output_dir: str,
     args: argparse.Namespace,
 ):
@@ -280,18 +260,18 @@ def finetune_wrapper(
     fine_tuning_save_dir = '%s/training/%s' % (output_dir, target_str)
 
     arg1 = '--train_data_dir=%s' % bootstrap_training_conformations_dir_conformation_i
-    arg2 = '--train_alignment_dir=%s' % args.alignment_dir
+    arg2 = '--train_alignment_dir=%s' % alignment_dir_wo_file_id
     arg3 = '--fine_tuning_save_dir=%s' % fine_tuning_save_dir
     arg4 = '--template_mmcif_dir=%s' % args.template_mmcif_dir
     arg5 = '--max_template_date=%s' % date.today().strftime("%Y-%m-%d")
-    arg6 = '--precision=bf16'
-    arg7 = '--gpus=1'
-    arg8 = '--openfold_checkpoint_path=%s' % args.openfold_checkpoint_path 
-    arg9 = '--resume_model_weights_only=True'
-    arg10 = '--config_preset=custom_finetuning-SAID'
-    arg11 = '--module_config=%s' % args.module_config
-    arg12 = '--hp_config=%s' % args.train_hp_config
-    arg13 = '--initial_pred_path=%s' % initial_pred_path
+    arg6 = '--gpus=1'
+    arg7 = '--openfold_checkpoint_path=%s' % args.openfold_checkpoint_path 
+    arg8 = '--resume_model_weights_only=True'
+    arg9 = '--config_preset=custom_finetuning-SAID'
+    arg10 = '--module_config=%s' % args.module_config
+    arg11 = '--hp_config=%s' % args.train_hp_config
+    arg12 = '--initial_pred_path=%s' % initial_pred_path
+    arg13 = '--precision=bf16'
     arg14 = '--custom_template_pdb_id=%s' % args.custom_template_pdb_id
     arg15 = '--save_structure_output'
 
@@ -878,31 +858,32 @@ def run_rw_pipeline(args):
     output_dir_name = args.output_dir_base.split('/')[-1]
 
     config = model_config(args.config_preset, 
-                          long_sequence_inference=args.long_sequence_inference, 
-                          use_conformation_vectorfield_module=args.use_conformation_vectorfield_module)
+                          long_sequence_inference=args.long_sequence_inference)
 
     if not(args.use_templates):
         config.model.template.enabled = False
+        template_str = 'template=none'
+    elif args.custom_template_pdb_id:
+        template_str = 'template=%s' % args.custom_template_pdb_id
+    else:
+        template_str = 'template=default'
 
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
             raise ValueError(
                 "Tracing requires that fixed_size mode be enabled in the config"
             )
-
-    if args.use_conformation_vectorfield_module and not(args.conformation_vectorfield_checkpoint_path):
-        raise ValueError("If using conformation_vectorfield_module, then conformation_vectorfield_checkpoint_path must be set")
  
     if args.bootstrap_phase_only:
-        output_dir = '%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
-        l0_output_dir = '%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose')
-        l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config)
+        output_dir = '%s/%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config, args.rw_hp_config)
+        l0_output_dir = '%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str)
+        l1_output_dir = '%s/%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config)
         l2_output_dir = ''
     else: 
-        output_dir = '%s/%s/%s/rw-%s/train-%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config, args.train_hp_config)
-        l0_output_dir = '%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose')
-        l1_output_dir = '%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config)
-        l2_output_dir = '%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config) 
+        output_dir = '%s/%s/%s/%s/rw-%s/train-%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config, args.rw_hp_config, args.train_hp_config)
+        l0_output_dir = '%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str)
+        l1_output_dir = '%s/%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config)
+        l2_output_dir = '%s/%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config, args.rw_hp_config) 
 
     output_dir = os.path.abspath(output_dir)
     l0_output_dir = os.path.abspath(l0_output_dir)
@@ -922,8 +903,12 @@ def run_rw_pipeline(args):
             file_id = file_id[0] #e.g 1xyz_A
             file_id_wo_chain = file_id.split('_')[0]
         alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+        alignment_dir_wo_file_id = alignment_dir
     else:
+        file_id = alignment_dir.split('/')[-1]
+        file_id_wo_chain = file_id.split('_')[0]
         alignment_dir_w_file_id = alignment_dir
+        alignment_dir_wo_file_id = alignment_dir[0:alignment_dir.rindex('/')]
     logger.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
 
     if args.fasta_file is None:
@@ -942,6 +927,9 @@ def run_rw_pipeline(args):
     seq = seq[0]
     logger.info("PROTEIN SEQUENCE:")
     logger.info(seq)
+
+    if len(seq) > SEQ_LEN_EXTRAMSA_THRESHOLD:
+       config.model.extra_msa.enabled = False 
 
     random_seed = args.data_random_seed
     if random_seed is None:
@@ -1059,9 +1047,11 @@ def run_rw_pipeline(args):
         mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
         logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
 
-        summary_output_dir = '%s/%s/initial_pred' % (args.output_dir_base, 'alternative_conformations-summary')
-        os.makedirs(summary_output_dir, exist_ok=True)
-        shutil.copytree(initial_pred_output_dir, summary_output_dir, dirs_exist_ok=True)
+        if args.write_summary_dir:
+            summary_output_dir = '%s/%s/initial_pred' % (args.output_dir_base, 'alternative_conformations-summary')
+            os.makedirs(summary_output_dir, exist_ok=True)
+            rw_helper_functions.remove_files_in_dir(summary_output_dir)
+            shutil.copytree(initial_pred_output_dir, summary_output_dir, dirs_exist_ok=True)
 
         scaling_factor_bootstrap = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, args.num_bootstrap_hp_tuning_steps, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
         logger.info(asterisk_line)
@@ -1108,7 +1098,7 @@ def run_rw_pipeline(args):
         for conformation_num, conformation_info_i in enumerate(bootstrap_candidate_conformations):
             finetune_wrapper(conformation_num, conformation_info_i,
                              bootstrap_training_conformations_dir, initial_pred_path,
-                             file_id_wo_chain, output_dir, args)
+                             file_id_wo_chain, alignment_dir_wo_file_id, output_dir, args)
         run_time = time.perf_counter() - t0
         timing_dict = {'gradient_descent': run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, 'gradient_descent')
@@ -1232,10 +1222,12 @@ def run_rw_pipeline(args):
         timing_dict = {inference_key: run_time} 
         rw_helper_functions.write_timings(timing_dict, output_dir, inference_key)
 
-    rw_output_parent_dir = '%s/rw_output' % output_dir
-    summary_output_dir = '%s/%s/rw_output' % (args.output_dir_base, 'alternative_conformations-summary')
-    os.makedirs(summary_output_dir, exist_ok=True)
-    shutil.copytree(rw_output_parent_dir, summary_output_dir, dirs_exist_ok=True)
+    if args.write_summary_dir:
+        rw_output_parent_dir = '%s/rw_output' % output_dir
+        summary_output_dir = '%s/%s/rw_output' % (args.output_dir_base, 'alternative_conformations-summary')
+        os.makedirs(summary_output_dir, exist_ok=True)
+        rw_helper_functions.remove_files_in_dir(summary_output_dir)
+        shutil.copytree(rw_output_parent_dir, summary_output_dir, dirs_exist_ok=True)
         
 
 
@@ -1258,7 +1250,7 @@ if __name__ == "__main__":
               this structure is used as the only template."""
     )
     parser.add_argument(
-        "--alignment_dir", type=str, required=True,
+        "--alignment_dir", type=str, default=None,
         help="""Path to alignment directory. If provided, alignment computation 
                 is skipped and database path arguments are ignored."""
     )
@@ -1296,7 +1288,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_bootstrap_hp_tuning_steps", type=int, default=10
     )
-
     parser.add_argument(
         "--num_rw_steps", type=int, default=100
     )
@@ -1318,10 +1309,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--save_outputs", action="store_true", default=False,
         help="Whether to save all model outputs, including embeddings, etc."
-    )
-    parser.add_argument(
-        "--save_structure_module_intermediates", action="store_true", default=False,
-        help="Whether to save s (i.e first row of MSA) and backbone frames representation"
     )
     parser.add_argument(
         "--cpus", type=int, default=4,
@@ -1365,7 +1352,7 @@ if __name__ == "__main__":
         help="Output predicted models in ModelCIF format instead of PDB format (default)"
     )
     parser.add_argument(
-        "--use_templates", type=bool
+        "--use_templates", type=bool, default=True
     )
     parser.add_argument(
         "--module_config", type=str, default=None,
@@ -1385,14 +1372,6 @@ if __name__ == "__main__":
             "train_hp_config_x wheire x is a number"
         )
     )
-    parser.add_argument(
-        "--use_conformation_vectorfield_module", action="store_true", default=False,
-        help=(
-            """whether to run use_conformation_vectorfield_module after
-               generating structure prediction."""
-        )
-    )
-
     parser.add_argument(
         "--use_local_context_manager", action="store_true", default=False,
         help=(
@@ -1414,6 +1393,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--overwrite_pred", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--write_summary_dir", type=bool, default=True
     )
     parser.add_argument(
         "--mean_plddt_threshold", type=int, default=60

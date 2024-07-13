@@ -26,7 +26,7 @@ from openfold.data import (
 from openfold.data.tools import hhsearch, hmmsearch
 from scripts.utils import add_data_args
 
-from custom_openfold_utils.pdb_utils import num_to_chain, get_pdb_id_seq, get_uniprot_seq, get_uniprot_id
+from custom_openfold_utils.pdb_utils import num_to_chain, get_pdb_id_seq, get_uniprot_id
 
 bucket_name = 'openfold'
 s3 = boto3.resource(
@@ -110,6 +110,11 @@ if __name__ == "__main__":
     parser.add_argument(
         "--fasta_path", type=str, default=None
     )
+    parser.add_argument(
+        "--batch_processing", action="store_true", default=False, 
+        help="If true, will not prompt the user with I/O"
+    )
+
 
     add_data_args(parser)
     args = parser.parse_args()
@@ -201,14 +206,15 @@ if __name__ == "__main__":
             pdb_openprotein_dict[pdb_id] = 1
         else:
             print("pdb_id %s not found in OpenProteinSet" % pdb_id)
-            user_input = input("Do you want to continue? (y/n): If yes, then alignments will be computed from scratch. \n")
-            if user_input.lower() == 'n':
-                print("Exiting...")
-                sys.exit()
-            elif user_input.lower() == 'y':
-                print("Continuing...")
-            else:
-                print("Invalid input. Please enter 'y' to continue or 'n' to exit.")
+            if not(args.batch_processing):
+                user_input = input("Do you want to continue? (y/n): If yes, then alignments will be computed from scratch. \n")
+                if user_input.lower() == 'n':
+                    print("Exiting...")
+                    sys.exit()
+                elif user_input.lower() == 'y':
+                    print("Continuing...")
+                else:
+                    print("Invalid input. Please enter 'y' to continue or 'n' to exit.")
 
     print("pdb_id: %s" % pdb_id)
     print('************')

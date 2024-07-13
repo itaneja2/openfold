@@ -18,6 +18,7 @@ from openfold.utils.script_utils import load_model, parse_fasta, run_model, prep
 
 import subprocess 
 import pickle
+import copy 
 
 import random
 import time
@@ -159,6 +160,9 @@ def run_msa_sample(args):
 
     if not(args.use_templates):
         config.model.template.enabled = False
+        template_str = 'template=none'
+    else:
+        template_str = 'template=default'
     
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
@@ -166,7 +170,7 @@ def run_msa_sample(args):
                 "Tracing requires that fixed_size mode be enabled in the config"
             )
 
-    pdb_path_initial = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d/pred_1_%d-%d_unrelaxed.pdb' % (args.output_dir_base, 'benchmark/msa_sample', 5120, 512, 5120, 512)
+    pdb_path_initial = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d/pred_1_%d-%d_unrelaxed.pdb' % (args.output_dir_base, 'msa_sample', 5120, 512, 5120, 512)
 
     for i, items in enumerate(msa_sampling_params):
 
@@ -178,7 +182,7 @@ def run_msa_sample(args):
         config.data.predict.max_extra_msa = max_extra_msa
         config.data.predict.max_msa_clusters = max_msa_clusters 
 
-        output_dir = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d' % (args.output_dir_base, 'benchmark/msa_sample', max_extra_msa, max_msa_clusters)
+        output_dir = '%s/%s/%s/max_extra_msa=%d/max_msa_clusters=%d' % (args.output_dir_base, 'msa_sample', template_str, max_extra_msa, max_msa_clusters)
         model_name = 'max_extra_msa=%d_max_msa_clusters=%d' % (max_extra_msa, max_msa_clusters) 
 
         pdb_files = glob.glob('%s/*.pdb' % output_dir)
@@ -198,13 +202,22 @@ def run_msa_sample(args):
 
         os.makedirs(output_dir, exist_ok=True)
         alignment_dir = args.alignment_dir
-        file_id = os.listdir(alignment_dir)
-        if len(file_id) > 1:
-            raise ValueError("should only be a single directory under %s" % alignment_dir)
+
+        msa_files = glob.glob('%s/*.a3m' % alignment_dir)
+        if len(msa_files) == 0: 
+            file_id = os.listdir(alignment_dir)
+            if len(file_id) > 1:
+                raise ValueError("should only be a single directory under %s" % alignment_dir)
+            else:
+                file_id = file_id[0] #e.g 1xyz_A
+                file_id_wo_chain = file_id.split('_')[0]
+            alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+            alignment_dir_wo_file_id = alignment_dir
         else:
-            file_id = file_id[0] #e.g 1xyz_A
+            file_id = alignment_dir.split('/')[-1]
             file_id_wo_chain = file_id.split('_')[0]
-        alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+            alignment_dir_w_file_id = alignment_dir
+            alignment_dir_wo_file_id = alignment_dir[0:alignment_dir.rindex('/')]
         logging.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
 
         if args.fasta_file is None:
@@ -292,9 +305,8 @@ def run_msa_sample(args):
         with open(conformation_info_fname, 'wb') as f:
             pickle.dump(conformation_info_dict, f)
 
-        inference_key = 'inference_%d' % i
         run_time = time.perf_counter() - t0
-        timing_dict = {inference_key: run_time} 
+        timing_dict = {'msa_sample_benchmark': run_time} 
         write_timings(timing_dict, output_dir, inference_key)
 
 
@@ -310,6 +322,10 @@ def run_msa_mask(args):
 
     if not(args.use_templates):
         config.model.template.enabled = False
+        template_str = 'template=none'
+    else:
+        template_str = 'template=default'
+
     
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
@@ -317,11 +333,9 @@ def run_msa_mask(args):
                 "Tracing requires that fixed_size mode be enabled in the config"
             )
 
-    pdb_path_initial = '%s/%s/max_extra_msa=%d/max_msa_clusters=%d/pred_1_%d-%d_unrelaxed.pdb' % (args.output_dir_base, 'benchmark/msa_sample', 5120, 512, 5120, 512)
-
     t0 = time.perf_counter()
 
-    output_dir = '%s/%s' % (args.output_dir_base, 'benchmark/msa_mask')
+    output_dir = '%s/%s/%s' % (args.output_dir_base, 'msa_mask', template_str)
     model_name = 'msa_mask_fraction=%d' % (int(args.msa_mask_fraction*100)) 
 
     pdb_files = glob.glob('%s/*.pdb' % output_dir)
@@ -331,7 +345,6 @@ def run_msa_mask(args):
             remove_files(pdb_files)
         else:
             logging.info('SKIPPING PREDICTION FOR: %s --%d files already exist--' % (output_dir, len(pdb_files)))
-            continue 
     elif len(pdb_files) > 0: #incomplete job
         logging.info('removing pdb files in %s' % output_dir)
         remove_files(pdb_files)
@@ -341,13 +354,22 @@ def run_msa_mask(args):
 
     os.makedirs(output_dir, exist_ok=True)
     alignment_dir = args.alignment_dir
-    file_id = os.listdir(alignment_dir)
-    if len(file_id) > 1:
-        raise ValueError("should only be a single directory under %s" % alignment_dir)
+
+    msa_files = glob.glob('%s/*.a3m' % alignment_dir)
+    if len(msa_files) == 0: 
+        file_id = os.listdir(alignment_dir)
+        if len(file_id) > 1:
+            raise ValueError("should only be a single directory under %s" % alignment_dir)
+        else:
+            file_id = file_id[0] #e.g 1xyz_A
+            file_id_wo_chain = file_id.split('_')[0]
+        alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+        alignment_dir_wo_file_id = alignment_dir
     else:
-        file_id = file_id[0] #e.g 1xyz_A
+        file_id = alignment_dir.split('/')[-1]
         file_id_wo_chain = file_id.split('_')[0]
-    alignment_dir_w_file_id = '%s/%s' % (alignment_dir, file_id)
+        alignment_dir_w_file_id = alignment_dir
+        alignment_dir_wo_file_id = alignment_dir[0:alignment_dir.rindex('/')]
     logging.info("alignment directory with file_id: %s" % alignment_dir_w_file_id)
 
     if args.fasta_file is None:
@@ -399,6 +421,24 @@ def run_msa_mask(args):
     feature_processor = feature_pipeline.FeaturePipeline(config.data)
     model = load_model(config, args.model_device, args.openfold_checkpoint_path, args.jax_param_path)
 
+
+    #get initial prediction (no mask)
+    np.random.seed(0)
+    torch.manual_seed(1)
+    processed_feature_dict = feature_processor.process_features(
+        feature_dict, mode='predict',
+    )
+    processed_feature_dict = {
+        k:torch.as_tensor(v, device=args.model_device)
+        for k,v in processed_feature_dict.items()
+    }
+    mask_fraction_str = 'msa_mask_fraction-0' 
+    tag = 'initial_pred_%s' % mask_fraction_str
+    logging.info('RUNNING %s' % tag)
+    mean_plddt, disordered_percentage, inference_time, pdb_path_initial = eval_model(model, args, config, feature_processor, feature_dict, processed_feature_dict, tag, output_dir)    
+    logger.info('pLDDT: %.3f, disordered percentage: %.3f' % (mean_plddt, disordered_percentage)) 
+
+
     conformation_info_dict = {}
     conformation_info = [] 
 
@@ -408,21 +448,23 @@ def run_msa_mask(args):
         np.random.seed(j)
         torch.manual_seed(j+1)
 
-        num_res = feature_dict['msa'].shape[1]
+        masked_feature_dict = copy.deepcopy(feature_dict)
+        num_res = masked_feature_dict['msa'].shape[1]
         columns_to_randomize = np.random.choice(range(0, num_res), size=int(num_res*args.msa_mask_fraction), replace=False) # Without replacement
         for col in columns_to_randomize:
-            feature_dict['msa'][1:,col] = np.array([MSA_X_IDX]*(feature_dict['msa'].shape[0]-1))  # Replace MSA columns with X (20)
+            masked_feature_dict['msa'][1:,col] = np.array([MSA_X_IDX]*(masked_feature_dict['msa'].shape[0]-1))  # Replace MSA columns with X (20)
 
         processed_feature_dict = feature_processor.process_features(
-            feature_dict, mode='predict',
+            masked_feature_dict, mode='predict',
         )
         processed_feature_dict = {
             k:torch.as_tensor(v, device=args.model_device)
             for k,v in processed_feature_dict.items()
-        } 
+        }
 
-        tag = 'pred_%d' % (j+1)
-        logging.info('RUNNING model %s, pred %d' % (model_name,j))
+        mask_fraction_str = 'msa_mask_fraction-%d' % (int(args.msa_mask_fraction*100)) 
+        tag = 'pred_%d_%s' % (j+1, mask_fraction_str)
+        logging.info('RUNNING %s' % tag)
 
         mean_plddt, disordered_percentage, inference_time, pdb_path = eval_model(model, args, config, feature_processor, feature_dict, processed_feature_dict, tag, output_dir)    
         logger.info('pLDDT: %.3f, disordered percentage: %.3f' % (mean_plddt, disordered_percentage)) 
@@ -437,21 +479,11 @@ def run_msa_mask(args):
     with open(conformation_info_fname, 'wb') as f:
         pickle.dump(conformation_info_dict, f)
 
-    inference_key = 'inference_%d' % i
     run_time = time.perf_counter() - t0
-    timing_dict = {inference_key: run_time} 
-    write_timings(timing_dict, output_dir, inference_key)
+    timing_dict = {'inference': run_time} 
+    write_timings(timing_dict, output_dir, 'inference')
 
-
-
-def main(args):
-
-    if args.benchmark_method == 'msa_sample':
-        run_msa_sample(args)
-    elif args.benchmark_method == 'msa_mask':
-        run_msa_mask(args)
-
-           
+ 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -566,5 +598,10 @@ if __name__ == "__main__":
             --model_device for better performance"""
         )
 
-    main(args)
+
+    if args.benchmark_method == 'msa_sample':
+        run_msa_sample(args)
+    elif args.benchmark_method == 'msa_mask':
+        run_msa_mask(args)
+
 

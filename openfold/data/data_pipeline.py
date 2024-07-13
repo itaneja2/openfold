@@ -1235,7 +1235,6 @@ class DataPipeline:
     def process_conformation(
         self,
         cif_string: str,
-        alignment_dir: str,
         file_id: str,
         tensor_feature_names: Sequence[str],
     ) -> FeatureDict:

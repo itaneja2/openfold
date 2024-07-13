@@ -192,7 +192,6 @@ class ConformationVectorFieldSingleDataset(torch.utils.data.Dataset):
 
             conformation_feats = self.data_pipeline.process_conformation(
                 cif_string=rw_conformation_cif_string,
-                alignment_dir=alignment_dir,
                 file_id=rw_conformation_fname,
                 tensor_feature_names=tensor_feature_names
             )

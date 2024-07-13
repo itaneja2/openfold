@@ -63,11 +63,9 @@ def model_config(
     train=False, 
     low_prec=False, 
     long_sequence_inference=False,
-    use_conformation_vectorfield_module=False,
 ):
     c = copy.deepcopy(config)
     c.model.use_chainmask = False
-    c.model.use_conformation_vectorfield_module = use_conformation_vectorfield_module 
 
     # TRAINING PRESETS
     if name == "initial_training":

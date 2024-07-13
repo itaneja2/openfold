@@ -62,7 +62,17 @@ from collections import defaultdict
 from custom_openfold_utils.pdb_utils import convert_pdb_to_mmcif, align_and_get_rmsd
 from custom_openfold_utils.conformation_utils import get_residues_ignore_idx_between_af_conformations
 
+torch_versions = torch.__version__.split(".")
+torch_major_version = int(torch_versions[0])
+torch_minor_version = int(torch_versions[1])
+if(
+    torch_major_version > 1 or
+    (torch_major_version == 1 and torch_minor_version >= 12)
+):
+    # Gives a large speedup on Ampere-class GPUs
+    torch.set_float32_matmul_precision("high")
 
+SEQ_LEN_EXTRAMSA_THRESHOLD = 600 #if length of seq > 600, extra_msa is disabled so backprop doesn't crash
 
 class OpenFoldWrapper(pl.LightningModule):
     def __init__(self, config, module_config_data, hp_config_data, target_structure_path, train_alignment_dir_w_file_id, save_structure_ouptut):
@@ -379,19 +389,26 @@ def main(args):
     if(args.seed is not None):
         seed_everything(args.seed) 
 
+    is_low_precision = args.precision in ["bf16-mixed", "16", "bf16", "16-true", "16-mixed", "bf16-mixed"]
     config = model_config(
         args.config_preset, 
         train=True, 
-        low_prec=(str(args.precision) == "16")
+        low_prec=is_low_precision
     ) 
 
-    file_id = os.listdir(args.train_alignment_dir)
-    if len(file_id) > 1:
-        raise ValueError("should only be a single directory under %s" % args.train_alignment_dir)
+    msa_files = glob.glob('%s/*.a3m' % args.train_alignment_dir)
+    if len(msa_files) == 0: 
+        file_id = os.listdir(args.train_alignment_dir)
+        if len(file_id) > 1:
+            raise ValueError("should only be a single directory under %s" % alignment_dir)
+        else:
+            file_id = file_id[0] #e.g 1xyz_A
+            file_id_wo_chain = file_id.split('_')[0]
+        train_alignment_dir_w_file_id = '%s/%s' % (args.train_alignment_dir, file_id)
     else:
-        file_id = file_id[0] #e.g 1xyz-1xyz
-    train_alignment_dir_w_file_id = '%s/%s' % (args.train_alignment_dir, file_id)
-    print("Alignment directory with file_id: %s" % train_alignment_dir_w_file_id)
+        file_id = (args.train_alignment_dir).split('/')[-1]
+        file_id_wo_chain = file_id.split('_')[0]
+        train_alignment_dir_w_file_id = args.train_alignment_dir
 
     pattern = "%s/*.fasta" % train_alignment_dir_w_file_id
     files = glob.glob(pattern, recursive=True)
@@ -408,6 +425,10 @@ def main(args):
         fasta_data = fp.read()
     _, seqs = parse_fasta(fasta_data)
     num_chains = len(seqs)
+
+    total_seq_len = sum(len(s) for s in seqs)
+    if total_seq_len > SEQ_LEN_EXTRAMSA_THRESHOLD:
+       config.model.extra_msa.enabled = False 
 
     if config.globals.is_multimer:
         with open('./rw_multimer_config.json') as f:
@@ -494,7 +515,7 @@ def main(args):
         else:
             sd = torch.load(args.openfold_checkpoint_path)
         #sd = {('model.'+k):v for k,v in sd.items()}
-        import_openfold_weights_(model=model_module.model, state_dict=sd)
+        import_openfold_weights_(model=model_module.model, state_dict=sd, config=config)
         print("Successfully loaded model weights...")
     elif(args.resume_from_jax_params):
         model_module.load_from_jax(args.resume_from_jax_params)

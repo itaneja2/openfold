@@ -58,13 +58,13 @@ from random_corr_sap import gen_randcorr_sap
 from custom_openfold_utils.pdb_utils import align_and_get_rmsd
 import rw_helper_functions
 
-from gen_cvf_training_conformations import (
-    run_rw_pipeline 
+from run_openfold_rw_monomer import (
+    run_rw_pipeline
 )
 
 FeatureDict = MutableMapping[str, np.ndarray]
 
-logger = logging.getLogger('gen_cvf_training_conformations_batch')
+logger = logging.getLogger('run_openfold_rw_monomer_testset')
 logger.setLevel(logging.INFO)  
 logger.propagate = False
 formatter = logging.Formatter('%(asctime)s - %(filename)s - %(levelname)s : %(message)s')
@@ -72,7 +72,7 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO) 
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
-file_handler = logging.FileHandler('./cvf_training_conformations_batch.log', mode='w') 
+file_handler = logging.FileHandler('./rw_monomer_testset.log', mode='w') 
 file_handler.setLevel(logging.INFO) 
 file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
@@ -83,7 +83,7 @@ TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
 
 
-def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
+def gen_args(alignment_dir, output_dir_base, seed, use_templates=True):
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -95,7 +95,7 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
         help="Directory containing mmCIF files to search for templates"
     )
     parser.add_argument(
-        "--custom_template_pdb_id", type=str, default=None,
+        "--custom_template_pdb_id", type=str, default=None, 
         help="""String of the format PDB-ID_CHAIN-ID (e.g 4ake_A). If provided,
               this structure is used as the only template."""
     )
@@ -129,10 +129,32 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
              checkpoint directory or a .pt file"""
     )
     parser.add_argument(
-        "--num_rw_hp_tuning_steps", type=int, default=5
+        "--conformation_vectorfield_checkpoint_path", type=str, default=None,
+        help="Path to a model checkpoint from which to restore training state"
+    )
+    parser.add_argument(
+        "--num_bootstrap_steps", type=int, default=50
+    )
+    parser.add_argument(
+        "--num_bootstrap_hp_tuning_steps", type=int, default=10
     )
     parser.add_argument(
         "--num_rw_steps", type=int, default=100
+    )
+    parser.add_argument(
+        "--num_rw_hp_tuning_steps_per_round", type=int, default=10
+    )
+    parser.add_argument(
+        "--num_rw_hp_tuning_rounds_total", type=int, default=2
+    )
+    parser.add_argument(
+        "--early_stop_rw_hp_tuning", action="store_true", default=False,
+    )
+    parser.add_argument(
+        "--num_training_conformations", type=int, default=5
+    )
+    parser.add_argument(
+        "--save_training_conformations", action="store_true", default=False
     )
     parser.add_argument(
         "--save_outputs", action="store_true", default=False,
@@ -183,21 +205,21 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
         "--use_templates", type=bool, default=True
     )
     parser.add_argument(
-        "--module_config", type=str, default='model_config_0',
+        "--module_config", type=str, default=None,
         help=(
             "module_config_x where x is a number"
         )
     )
     parser.add_argument(
-        "--rw_hp_config", type=str, default='hp_config_0',
+        "--rw_hp_config", type=str, default=None,
         help=(
             "hp_config_x where x is a number"
         )
     )
     parser.add_argument(
-        "--train_hp_config", type=str, default='hp_config_2',
+        "--train_hp_config", type=str, default=None,
         help=(
-            "hp_config_x where x is a number"
+            "train_hp_config_x wheire x is a number"
         )
     )
     parser.add_argument(
@@ -207,11 +229,23 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
              when generating proposals. this means 
              that the same set of intrinsic_param
              will be produced within that context
-             block.""" 
+             block."""
             )
     )
     parser.add_argument(
+        "--bootstrap_phase_only", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--skip_bootstrap_phase", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--skip_gd_phase", action="store_true", default=False
+    )
+    parser.add_argument(
         "--overwrite_pred", action="store_true", default=False
+    )
+    parser.add_argument(
+        "--write_summary_dir", type=bool, default=True
     )
     parser.add_argument(
         "--mean_plddt_threshold", type=int, default=60
@@ -223,23 +257,26 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
         "--log_level", type=str, default='INFO'
     )
 
+
     add_data_args(parser)
     args = parser.parse_args()
 
     args.template_mmcif_dir = '/dev/shm/pdb_mmcif/mmcif_files'
-    args.custom_template_pdb_id = template_pdb_id 
+    args.use_templates = use_templates 
     args.alignment_dir = alignment_dir
     args.output_dir_base = output_dir_base 
     args.config_preset = 'model_1_ptm'
     args.openfold_checkpoint_path = '/opt/databases/openfold/openfold_params/finetuning_ptm_2.pt'
     args.module_config = 'module_config_0'
     args.rw_hp_config = 'hp_config_0'
+    args.train_hp_config = 'hp_config_1'
     args.model_device = 'cuda:0'
     args.data_random_seed = seed 
     args.use_local_context_manager = True 
-    args.num_rw_hp_tuning_steps = 5
     args.num_rw_steps = 100 
-        
+    args.num_training_conformations = 3 
+    args.write_summary_dir = False         
+
     if(args.jax_param_path is None and args.openfold_checkpoint_path is None):
         args.jax_param_path = os.path.join(
             "openfold", "resources", "params",
@@ -256,42 +293,27 @@ def gen_args(template_pdb_id, alignment_dir, output_dir_base, seed):
 
 
 
-def restart_incomplete_iterations(uniprot_id, pdb_id_ref, pdb_id_state_i, args):
+def restart_incomplete_iterations(output_dir, args):
 
     should_run_rw = True 
+    total_conformations = args.num_training_conformations*args.num_rw_steps
 
-    template_str = 'template=%s' % pdb_id_ref
-    output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
-    output_dir_ref = '%s/%s/%s/rw-%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
-    conformation_info_ref_fname = '%s/training_conformations/conformation_info.pkl' % output_dir_ref
-
-    template_str = 'template=%s' % pdb_id_state_i
-    output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
-    output_dir_state_i = '%s/%s/%s/rw-%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
-    conformation_info_ref_state_i_fname = '%s/training_conformations/conformation_info.pkl' % output_dir_state_i
-
-    pdb_files_ref = glob.glob('%s/*/*/*.pdb' % output_dir_ref)
-    pdb_files_state_i = glob.glob('%s/*/*/*.pdb' % output_dir_state_i)
-
-    #if either reference or state_i didn't finish we should restart 
-    if os.path.exists(conformation_info_ref_fname) and os.path.exists(conformation_info_ref_state_i_fname):
-        if len(pdb_files_ref) > 0 and len(pdb_files_state_i) > 0:
-            logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (output_dir_ref, len(pdb_files_ref)))      
-            logger.info('SKIPPING RW FOR: %s --%d files already exist--' % (output_dir_state_i, len(pdb_files_state_i)))       
-            should_run_rw = False 
-    elif len(pdb_files_ref) > 0: #incomplete job
-        logger.info('removing %d pdb files in %s' % (len(pdb_files_ref),output_dir_ref))
-        logger.info('removing %d pdb files in %s' % (len(pdb_files_state_i),output_dir_state_i))
-        rw_helper_functions.remove_files(pdb_files_ref)
-        rw_helper_functions.remove_files(pdb_files_state_i)
+    pdb_files = glob.glob('%s/*/*/*/*.pdb' % output_dir)    
+    if len(pdb_files) != total_conformations: #incomplete job
+        if len(pdb_files) > 0:
+            logger.info('removing %d pdb files in %s' % (len(pdb_files),output_dir))
+            rw_helper_functions.remove_files(pdb_files)
+    else:
+        should_run_rw = False 
 
     return should_run_rw 
 
 
-def run_rw_all_custom_template(num_top_rmsd: int = 40):
+def run_rw_all():
  
-    conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
-    conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
+    conformational_states_df = pd.read_csv('./conformational_states_testing_data/dataset/conformational_states_testing_data_processed_adjudicated.csv')
+    #conformational_states_df = conformational_states_df[conformational_states_df['seg_len'] <= 600]
+    conformational_states_df = conformational_states_df.sort_values('seg_len').reset_index(drop=True) 
 
     for index,row in conformational_states_df.iterrows():
 
@@ -300,49 +322,37 @@ def run_rw_all_custom_template(num_top_rmsd: int = 40):
         logger.info(row)
  
         uniprot_id = str(row['uniprot_id'])
-        pdb_id_ref = str(row['pdb_id_ref'])
-        pdb_id_state_i = str(row['pdb_id_state_i'])
-        seg_len = int(row['seg_len'])
+        pdb_id_msa = str(row['pdb_id_msa'])
 
-        for j,template_pdb_id in enumerate([pdb_id_ref, pdb_id_state_i]):
-            
-            alignment_dir = './conformational_states_training_data/alignment_data/%s/%s' % (uniprot_id,template_pdb_id)
-            seed = index #keep seed constant between conformations 
-            logger.info(asterisk_line)
-            logger.info('j = %d' % j)
-            logger.info('SEED = %d' % seed) 
-            logger.info(asterisk_line)
-            template_str = 'template=%s' % template_pdb_id
-            output_dir_base = './conformational_states_training_data/rw_predictions/%s/%s' % (uniprot_id, template_str) 
-            args = gen_args(template_pdb_id, alignment_dir, output_dir_base, seed)
-            output_dir = '%s/%s/%s/rw-%s' % (output_dir_base, 'alternative_conformations-verbose', args.module_config, args.rw_hp_config)
+        for j in [1]:
 
             if j == 0:
-                should_run_rw = restart_incomplete_iterations(uniprot_id, pdb_id_ref, pdb_id_state_i, args)
-                if should_run_rw:
-                    logger.info("RUNNING %s" % output_dir)
-                    scaling_factor, conformation_info, candidate_conformations = run_rw_pipeline(args)
-                else:
-                    logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
+                use_templates = True
+                template_str = 'template=default' 
             else:
-                if should_run_rw:
-                    logger.info("RUNNING %s" % output_dir)
-                    #use results from same sequence with different template
-                    #to save computational time 
-                    scaling_factor, conformation_info, candidate_conformations = run_rw_pipeline(args, scaling_factor, conformation_info, candidate_conformations, num_top_rmsd)
-                    if conformation_info is None: #no conformations were accepted
-                        logger.info('NO CONFORMATIONS WERE ACCEPTED, RETRYING FROM SCRATCH') 
-                        rejected_pdb_files = glob.glob('%s/*/*/*.pdb' % output_dir)
-                        logger.info('removing %d rejected pdb files in %s' % (len(rejected_pdb_files),output_dir))
-                        rw_helper_functions.remove_files(rejected_pdb_files)
-                        args.mean_plddt_threshold = args.mean_plddt_threshold-5  
-                        run_rw_pipeline(args)
-                else:
-                    logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir)
-                scaling_factor = None
-                conformation_info = None 
-                candidate_conformations = None 
+                use_templates = False
+                template_str = 'template=none' 
+            
+            alignment_dir = './conformational_states_testing_data/alignment_data/%s/%s' % (uniprot_id,pdb_id_msa)
+            seed = index #keep seed constant per uniprot_id  
+            logger.info(asterisk_line)
+            logger.info('TEMPLATE = %s' % template_str)
+            logger.info('SEED = %d' % seed) 
+            logger.info(asterisk_line)
+            output_dir_base = './conformational_states_testing_data/rw_predictions/%s' % uniprot_id 
+            args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
+            if index == 0:
+                args.skip_bootstrap_phase = True 
+                #args.num_bootstrap_steps = 3
+                #args.num_bootstrap_hp_tuning_steps = 1
+            output_dir = '%s/%s/%s/%s/rw-%s/train-%s' % (output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config, args.rw_hp_config, args.train_hp_config)
+            should_run_rw = restart_incomplete_iterations(output_dir, args)
+            if should_run_rw:
+                logger.info("RUNNING %s" % output_dir)
+                run_rw_pipeline(args)
+            else:
+                logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
 
+        break 
 
-
-run_rw_all_custom_template() 
+run_rw_all() 

@@ -108,7 +108,7 @@ def save_gtc_metadata(data, output_fname):
 
 
  
-conformational_states_df = pd.read_csv('../conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
+conformational_states_df = pd.read_csv('./dataset/conformational_states_testing_data.csv')
 conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
 
 af_conformations_residues_mask_dict = {}

@@ -47,6 +47,12 @@ from prody import *
 logger = logging.getLogger(__file__)
 logger.setLevel(level=logging.INFO)
 
+current_file_path = os.path.abspath(__file__)
+current_dir = os.path.dirname(current_file_path)
+
+sifts_script = '%s/parse_sifts.py' % current_dir
+TMalign_path = '../TMalign/TMalign'
+
 ##misc. functions##
 
 def num_to_chain(number):
@@ -75,6 +81,64 @@ def get_pymol_cmd_save(pdb_model_name, chain=None):
         out = '%s' % (pdb_model_name)
     return out 
 
+##fetch functions##
+
+def fetch_pdb_metadata_df(pdb_id):
+    curl_cmd = ['curl --silent ftp://ftp.ebi.ac.uk/pub/databases/msd/sifts/xml/%s.xml.gz | gunzip | python %s' % (pdb_id.lower(),sifts_script)] 
+    output = subprocess.check_output(curl_cmd, shell=True, universal_newlines=True)
+    lines = output.strip().split('\n')
+
+    #SIFTS file provides info on the pdb sequence construct without coordinate info. 
+    #This is reflected in the column pdb_res. 
+    #If a residue is missing, the pdb_resnum will show up as null. 
+    #If a mutation in a residue was made, the residue will differ from the uniprot_res.
+
+    lines_arr = [x.split('\t') for x in lines]
+    pdb_metadata_df = pd.DataFrame(lines_arr, columns = ['pdb_id', 'chain', 'pdb_res', 'pdb_resnum', 'uniprot_id', 'uniprot_res', 'uniprot_resnum'])
+    pdb_metadata_df = pdb_metadata_df[['pdb_id', 'chain', 'uniprot_id', 'pdb_res', 'pdb_resnum', 'uniprot_res', 'uniprot_resnum']]
+    return pdb_metadata_df
+
+def fetch_pdb(pdb_id: str, save_dir: str, clean=False) -> str:
+
+    """
+    Args:
+        pdb_id: e.g 1xyz_A or 1xyz
+        save_dir: e.g ./pdb_raw_structures_folder
+    """ 
+
+    pdb_save_path = "%s/%s.pdb" % (save_dir, pdb_id)
+
+    if os.path.exists(pdb_save_path):
+        return pdb_save_path
+
+    cmd.reinitialize()
+    if len(pdb_id.split('_')) > 1:
+        pdb_id_wo_chain = pdb_id.split('_')[0]
+        chain_id = pdb_id.split('_')[1]
+        cmd.fetch(pdb_id_wo_chain, async_=0)
+        cmd.save(pdb_save_path, "chain %s and %s" % (chain_id, pdb_id_wo_chain))
+        chain_id_list = [chain_id]
+    else:
+        cmd.fetch(pdb_id, async_=0)
+        cmd.save(pdb_save_path, pdb_id)
+        chain_id_list = None
+    cmd.delete('all')
+
+    if len(pdb_id.split('_')) > 1:
+        fetch_path = './%s.cif' % pdb_id_wo_chain
+    else:
+        fetch_path = './%s.cif' % pdb_id
+
+    if os.path.exists(fetch_path):
+        os.remove(fetch_path)    
+
+    if clean:
+        with open(pdb_save_path, "r") as f:
+            pdb_str = f.read()
+        clean_pdb(pdb_save_path, pdb_str)
+
+    return pdb_save_path
+
 
 ##file format conversion functions##
 
@@ -102,7 +166,21 @@ def convert_pdb_to_mmcif(pdb_path: str, output_dir: str) -> str:
     with open(cif_path, 'w') as f:
         f.write(cif_string)
 
-    return cif_path 
+    return cif_path
+
+def get_cif_string_from_pdb(pdb_path: str) -> str:
+    """
+    Args:
+        pdb_path: path to .pdb file 
+    """ 
+
+    with open(pdb_path, "r") as f:
+        pdb_str = f.read()
+    prot = protein.from_pdb_string(pdb_str)
+    cif_string = protein.to_modelcif(prot)
+
+    return cif_string 
+ 
 
 
 ##get functions##
@@ -132,7 +210,7 @@ def get_uniprot_id(pdb_id):
     return uniprot_id
 
 
-def get_pdb_id_seq(pdb_id, uniprot_id):
+def get_pdb_id_seq(pdb_id, uniprot_id=None):
     if len(pdb_id.split('_')) > 1:
         pdb_id_copy = pdb_id
         pdb_id = pdb_id_copy.split('_')[0]
@@ -141,9 +219,10 @@ def get_pdb_id_seq(pdb_id, uniprot_id):
         chain_id = 'A'
 
     pdb_metadata_df = fetch_pdb_metadata_df(pdb_id)
-    curr_uniprot_id = pdb_metadata_df.loc[0,'uniprot_id']
-    if curr_uniprot_id != uniprot_id:
-        raise ValueError('fetching pdb_id seq, but uniprot_id does not match expected')
+    if uniprot_id is not None:
+        curr_uniprot_id = pdb_metadata_df.loc[0,'uniprot_id']
+        if curr_uniprot_id != uniprot_id:
+            raise ValueError('fetching pdb_id seq, but uniprot_id does not match expected')
 
     pdb_metadata_df_relchain = pdb_metadata_df[pdb_metadata_df['chain'] == chain_id].reset_index()
     pdb_metadata_df_relchain = pdb_metadata_df_relchain[pdb_metadata_df_relchain['pdb_resnum'] != 'null']
@@ -215,7 +294,7 @@ def get_ca_coords_matrix(pdb_path):
 
 
 def get_ca_coords_dict(pdb_path):
-
+    
     parser = PDBParser()
     structure = parser.get_structure('protein', pdb_path)
     model = structure[0]
@@ -230,6 +309,11 @@ def get_ca_coords_dict(pdb_path):
             residue_name = residue.get_resname()
             residue_idx = residue.get_id()[1]-1
             residue_idx_ca_coords_dict[residue_idx] = (ca_coords[0], ca_coords[1], ca_coords[2], residue_name)
+        '''else:
+            print(residue)
+            print(residue.get_id()[1]-1)
+            for atom in residue:
+                print(f"  Atom: {atom.get_name()} {atom.get_coord()}") # Print atom name and coordinates'''
 
     return residue_idx_ca_coords_dict
 
@@ -262,7 +346,7 @@ def get_af_disordered_domains(pdb_path: str):
     cif_path = convert_pdb_to_mmcif(pdb_path, './cif_temp')
     plddt_scores, mean_plddt = get_bfactor(cif_path)
     os.remove(cif_path)
-    pdb_seq = get_pdb_path_seq(pdb_path, None)
+    af_seq = get_pdb_path_seq(pdb_path, None)
 
     af_disordered = 1-plddt_scores/100
     af_disordered = af_disordered >= .31
@@ -287,12 +371,23 @@ def get_af_disordered_domains(pdb_path: str):
                
     af_disordered_domains_seq = [] 
     for i in range(0,len(af_disordered_domains_idx)):
-        af_disordered_domains_seq.append([pdb_seq[af_disordered_domains_idx[i][0]:af_disordered_domains_idx[i][1]+1]])
+        af_disordered_domains_seq.append([af_seq[af_disordered_domains_idx[i][0]:af_disordered_domains_idx[i][1]+1]])
 
     return af_disordered_domains_idx, af_disordered_domains_seq
-    
 
-def get_pdb_disordered_domains(af_seq: str, pdb_seq: str, af_disordered_domains_idx: List[List[int]]):
+def get_af_disordered_residues(af_disordered_domains_idx: List[List[int]]):
+    
+    af_disordered_residues_idx = []
+    for i in range(0,len(af_disordered_domains_idx)):
+        d = af_disordered_domains_idx[i]
+        af_start_idx = d[0]
+        af_end_idx = d[1]
+        for j in range(af_start_idx,af_end_idx+1):
+            af_disordered_residues_idx.append(j)
+    return af_disordered_residues_idx
+
+
+def get_pdb_disordered_residues(af_seq: str, pdb_seq: str, af_disordered_domains_idx: List[List[int]]):
 
     alignments = pairwise2.align.globalxx(af_seq, pdb_seq)
     af_seq_aligned = alignments[0].seqA
@@ -303,8 +398,8 @@ def get_pdb_disordered_domains(af_seq: str, pdb_seq: str, af_disordered_domains_
         if af_seq_aligned[i] != '-':
             af_seq_original_to_aligned_idx_mapping[i-af_seq_aligned[0:i].count('-')] = i 
 
-    pdb_disordered_domains_idx = [] 
-    pdb_disordered_domains_seq = [] 
+    pdb_disordered_residues_idx = [] 
+    pdb_disordered_residues_seq = [] 
 
     #if ith residue of af_seq is disordered
     #then, to get the corresponding index in pdb_seq
@@ -320,14 +415,14 @@ def get_pdb_disordered_domains(af_seq: str, pdb_seq: str, af_disordered_domains_
             if pdb_seq_aligned[j] != '-':
                 num_gaps = pdb_seq_aligned[0:j].count('-')
                 pdb_seq_original_idx = j-num_gaps
-                pdb_disordered_domains_idx.append(pdb_seq_original_idx)
-                pdb_disordered_domains_seq.append(pdb_seq[pdb_seq_original_idx])
+                pdb_disordered_residues_idx.append(pdb_seq_original_idx)
+                pdb_disordered_residues_seq.append(pdb_seq[pdb_seq_original_idx])
 
-    return pdb_disordered_domains_idx, pdb_disordered_domains_seq 
+    return pdb_disordered_residues_idx, pdb_disordered_residues_seq 
    
 
 
-###rmsd related functions###
+###alignment related functions###
 
 def get_rmsd(pdb1_path, pdb2_path, pdb1_chain=None, pdb2_chain=None):
 
@@ -380,6 +475,20 @@ def align_and_get_rmsd(pdb1_path, pdb2_path, pdb1_chain=None, pdb2_chain=None):
     cmd.delete('all')
 
     return rmsd 
+
+
+def tmalign_wrapper(pdb1_path, pdb2_path):
+    
+    p = subprocess.Popen(
+        f'{TMalign_path} {pdb1_path} {pdb2_path} | grep -E "RMSD|TM-score=" ',
+        stdout=subprocess.PIPE,
+        shell=True,
+    )
+    
+    output, __ = p.communicate()
+    tm_score = float(str(output)[:-3].split("TM-score=")[-1].split("(if")[0])
+
+    return tm_score
 
 
 def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_source: str, pdb2_source: str, pdb1_path: str, pdb2_path: str, save_dir: str):
@@ -469,9 +578,10 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
     #pdb1_chain and pdb2_chain are set to A because
     #clean_pdb replaces chain_id with A 
     rmsd = align_and_get_rmsd(pdb1_input_path, pdb2_output_path, 'A', 'A')
+    tm_score = tmalign_wrapper(pdb1_input_path, pdb2_output_path)
     logger.info('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
  
-    return rmsd, pdb1_path, pdb2_path
+    return rmsd, tm_score, pdb1_path, pdb2_path
 
 
 def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, pdb2_source: str, pdb1_path: str, pdb2_path: str, save_dir: str):
@@ -572,10 +682,13 @@ def _get_pdb_string(topology: openmm_app.Topology, positions: unit.Quantity):
         openmm_app.PDBFile.writeFile(topology, positions, f)
         return f.getvalue()
 
-def clean_pdb(pdb_path: str, pdb_str: str):
+def clean_pdb(pdb_path: str, pdb_str: str, add_missing_residues: bool = False):
     pdb_file = io.StringIO(pdb_str)
     alterations_info = {}
-    fixed_pdb = cleanup.fix_pdb_wo_adding_missing_residues(pdb_file, alterations_info)
+    if add_missing_residues:
+        fixed_pdb = cleanup.fix_pdb(pdb_file, alterations_info)
+    else:
+        fixed_pdb = cleanup.fix_pdb_wo_adding_missing_residues(pdb_file, alterations_info)
     fixed_pdb_file = io.StringIO(fixed_pdb)
     pdb_structure = PdbStructure(fixed_pdb_file)
     cleanup.clean_structure(pdb_structure, alterations_info)

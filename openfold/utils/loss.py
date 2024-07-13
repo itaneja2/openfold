@@ -94,14 +94,9 @@ def vector_dot_product_loss(
     cos_phi_prod = torch.cos(phi_theta[..., 0])*torch.cos(raw_phi_theta_gt[..., 0])
     # [*, N]
     vector_dot_product = torch.acos(torch.clamp(sin_phi_prod*cos_theta_diff + cos_phi_prod, min=-1,max=1))
-    
-    print(vector_dot_product)
-    print(vector_dot_product.shape)
-    
+     
     # [*]
     l_phi_theta = torch.sum(vector_dot_product*residues_mask, dim=-1) / (eps + torch.sum(residues_mask, dim=-1))
-    #print(l_phi_theta)
-    #print(l_phi_theta.shape)
     l_angle_norm = masked_mean(residues_mask[..., None], torch.abs(phi_theta_norm - 1.0), dim=(-1,-2))
 
     an_weight = 0.02
@@ -331,9 +326,6 @@ def backbone_loss(
     # outright. This one hasn't been composed a bunch of times, though, so
     # it might be fine.
     gt_aff = Rigid.from_tensor_4x4(backbone_rigid_tensor)
-
-    print(backbone_rigid_mask)
-    print(backbone_rigid_mask.shape)
 
     fape_loss = compute_fape(
         pred_aff,

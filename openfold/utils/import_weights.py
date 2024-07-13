@@ -881,7 +881,7 @@ def import_jax_weights_(config, model, npz_path, version="model_1"):
     # Set weights
     assign(flat, data)
 
-def convert_deprecated_v1_keys(state_dict):
+def convert_deprecated_v1_keys(state_dict, templates_enabled, extra_msa_enabled):
     """Update older OpenFold model weight names to match the current model code."""
 
     replacements = {
@@ -903,45 +903,43 @@ def convert_deprecated_v1_keys(state_dict):
 
         # Add prefix for template modules
         if new_key.startswith('template'):
+            if not(templates_enabled):
+                continue 
             new_key = f'template_embedder.{new_key}'
+
+        if new_key.startswith('extra_msa_stack') or new_key.startswith('extra_msa_embedder'):
+            if not(extra_msa_enabled):
+                continue 
 
         converted_state_dict[new_key] = value
 
     return converted_state_dict
 
 
-def import_openfold_weights_(model, state_dict):
+def import_openfold_weights_(model, state_dict, config):
     """
     Import model weights. Several parts of the model were refactored in the process
     of adding support for Multimer. The state dicts of older models are translated
     to match the refactored model code.
-    """
+    """  
+    templates_enabled=config.model.template.enabled
+    extra_msa_enabled=config.model.extra_msa.enabled
+  
     try:
         model.load_state_dict(state_dict)
     except RuntimeError:
-        converted_state_dict = convert_deprecated_v1_keys(state_dict)
+        converted_state_dict = convert_deprecated_v1_keys(state_dict, templates_enabled, extra_msa_enabled)
         model.load_state_dict(converted_state_dict)
 
-def import_angle_resnet_weights_(model, state_dict):
-    """
-    Imports weights from AngleResNet of original model into ConformationModule
-    model: ConformationModule model 
-    state_dict: original openfold weights 
-    """
-    state_dict = convert_deprecated_v1_keys(state_dict)
-    for name, param in model.named_parameters():
-        if 'angle_resnet' in name:
-            print('importing parameter %s' % name)
-            sm_name = name.replace('conformation_module', 'structure_module')
-            param.data = state_dict[sm_name]
         
-def import_openfold_weights_merged_architecture_(model, state_dict_original_components, state_dict_new_components):
+def import_openfold_weights_merged_architecture_(model, state_dict_original_components, state_dict_new_components, config):
     """
     """
-    state_dict_original_components = convert_deprecated_v1_keys(state_dict_original_components)
+    templates_enabled=config.model.template.enabled
+    extra_msa_enabled=config.model.extra_msa.enabled
+
+    state_dict_original_components = convert_deprecated_v1_keys(state_dict_original_components, templates_enabled, extra_msa_enabled)
     print('new component keys:')
     print(state_dict_new_components.keys())
     merged_state_dict = {**state_dict_original_components, **state_dict_new_components} 
     model.load_state_dict(merged_state_dict)
-
-

@@ -24,13 +24,64 @@ from custom_openfold_utils.pdb_utils import superimpose_wrapper_monomer, superim
 
 asterisk_line = '******************************************************************************'
 
-def compare_rw_conformations_to_structure_multimer(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, superimposed_structures_save_dir):
+def get_template_str(input_str):
+    search_str = "template="
+    start_index = input_str.find(search_str)
+    template_str = input_str[start_index:]
+    template_str = template_str[0:template_str.find("/")]
+    return template_str 
+
+def compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_pdb_path, conformation_info_dir, superimposed_structures_save_dir, method_str):
+
+    pdb_pred_path_list = []
+    pdb_pred_path_named_by_cluster_list = []
+    rmsd_wrt_initial_list = [] 
+    mean_plddt_list = [] 
+
+    template_str = get_template_str(conformation_info_dir)
+
+    fname = '%s/cluster_representative_conformation_info.pkl' % conformation_info_dir
+    with open(fname, 'rb') as f:
+         conformation_info = pickle.load(f)
+    for key in conformation_info:
+        pdb_pred_path =  conformation_info[key][0] #this points to the original file
+        rmsd_wrt_initial = round(conformation_info[key][1],2)
+        mean_plddt = round(conformation_info[key][2],2)
+        pdb_pred_path_named_by_cluster = conformation_info[key][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to  
+        pdb_pred_path_list.append(pdb_pred_path)
+        pdb_pred_path_named_by_cluster_list.append(pdb_pred_path_named_by_cluster)
+        rmsd_wrt_initial_list.append(rmsd_wrt_initial)
+        mean_plddt_list.append(mean_plddt)
+
+    print('PDB files being evaluated:')
+    print(pdb_pred_path_list)
+        
+    rmsd_list = [] 
+    tm_list = [] 
+    for i,pdb_pred_path in enumerate(pdb_pred_path_list):
+        print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
+        print('superimposing %s and %s' % (ref_pdb_id, pdb_pred_path))
+        rmsd, tm_score, _, _ = superimpose_wrapper_monomer(ref_pdb_id, None, 'pdb', 'pred_rw', ref_pdb_path, pdb_pred_path, superimposed_structures_save_dir)
+        rmsd = round(rmsd,2)
+        tm_score = round(tm_score,2)
+        rmsd_list.append(rmsd)
+        tm_list.append(tm_score)
+
+    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_str, 'template': template_str, 'ref_pdb_iderence_structure': ref_pdb_id, 'pdb_pred_path': pdb_pred_path_list, 'pdb_pred_path_named_by_cluster': pdb_pred_path_named_by_cluster_list,
+                          'mean_plddt': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list, 'tm_score': tm_list})
+ 
+    return out_df
+
+
+def compare_clustered_conformations_to_reference_multimer(uniprot_id, ref_pdb_id, ref_pdb_path, conformation_info_dir, superimposed_structures_save_dir, method_str):
 
     pdb_pred_path_list = []
     pdb_pred_path_named_by_cluster_list = []
     rmsd_wrt_initial_list = [] 
     mean_plddt_list = []  
     ptm_iptm_list = [] 
+
+    template_str = get_template_str(conformation_info_dir)
 
     fname = '%s/cluster_representative_conformation_info.pkl' % conformation_info_dir
     with open(fname, 'rb') as f:
@@ -47,82 +98,106 @@ def compare_rw_conformations_to_structure_multimer(uniprot_id, pdb_ref_id, pdb_r
         mean_plddt_list.append(mean_plddt)
         ptm_iptm_list.append(ptm_iptm)
 
-    print('PDB FILES:')
+    print('PDB files being evaluated:')
     print(pdb_pred_path_list)
         
     rmsd_list = [] 
     dockq_list = [] 
     for i,pdb_pred_path in enumerate(pdb_pred_path_list):
         print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
-        print('superimposing %s and %s' % (pdb_ref_id, pdb_pred_path))
-        rmsd, pdb_ref_path_output, _ = superimpose_wrapper_multimer(pdb_ref_id, None, 'pdb', 'pred_rw', pdb_ref_path, pdb_pred_path, superimposed_structures_save_dir)
+        print('superimposing %s and %s' % (ref_pdb_id, pdb_pred_path))
+        rmsd, pdb_path_output, _ = superimpose_wrapper_multimer(ref_pdb_id, None, 'pdb', 'pred_rw', ref_pdb_path, pdb_pred_path, superimposed_structures_save_dir)
         rmsd = round(rmsd,2)
         rmsd_list.append(rmsd)
-        num_chains = renumber_chain_wrt_reference(pdb_ref_path_output, pdb_pred_path) #arg1 is the pdb to renumber, arg2 is the pdb to renumber w.r.t to 
+        num_chains = renumber_chain_wrt_reference(pdb_path_output, pdb_pred_path) #arg1 is the pdb to renumber, arg2 is the pdb to renumber w.r.t to 
         if num_chains == 2:
-            dockq_info = calc_DockQ(pdb_pred_path, pdb_ref_path_output)
+            dockq_info = calc_DockQ(pdb_pred_path, pdb_path_output)
             dockq_val = round(dockq_info['DockQ'],2)
         else:
             dockq_val = np.nan 
         dockq_list.append(dockq_val)
 
-    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'pdb_id_reference_structure': pdb_ref_id, 'pdb_pred_path': pdb_pred_path_list, 'pdb_pred_path_named_by_cluster': pdb_pred_path_named_by_cluster_list,
+    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_str, 'template': template_str, 'ref_pdb_iderence_structure': ref_pdb_id, 'pdb_pred_path': pdb_pred_path_list, 'pdb_pred_path_named_by_cluster': pdb_pred_path_named_by_cluster_list,
                           'mean_plddt': mean_plddt_list, 'ptm_iptm': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list, 'dockq': dockq_list})
  
     return out_df
 
-def compare_rw_conformations_to_structure_monomer(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, superimposed_structures_save_dir):
+
+def compare_all_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_pdb_path, conformation_info_dir, superimposed_structures_save_dir, method_str):
 
     pdb_pred_path_list = []
-    pdb_pred_path_named_by_cluster_list = []
     rmsd_wrt_initial_list = [] 
-    mean_plddt_list = []  
+    mean_plddt_list = [] 
 
-    fname = '%s/cluster_representative_conformation_info.pkl' % conformation_info_dir
-    with open(fname, 'rb') as f:
-         conformation_info = pickle.load(f)
-    for key in conformation_info:
-        pdb_pred_path =  conformation_info[key][0] #this points to the original file
-        rmsd_wrt_initial = round(conformation_info[key][1],2)
-        mean_plddt = round(conformation_info[key][2],2)
-        pdb_pred_path_named_by_cluster = conformation_info[key][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to  
-        pdb_pred_path_list.append(pdb_pred_path)
-        pdb_pred_path_named_by_cluster_list.append(pdb_pred_path_named_by_cluster)
-        rmsd_wrt_initial_list.append(rmsd_wrt_initial)
-        mean_plddt_list.append(mean_plddt)
+    template_str = get_template_str(conformation_info_dir)
 
-    print('PDB FILES:')
-    print(pdb_pred_path_list)
+    pattern = "%s/conformation_info.pkl" % conformation_info_dir
+    files = glob.glob(pattern, recursive=True)
+    if len(files) == 0:
+        pattern = "%s/**/conformation_info.pkl" % conformation_info_dir
+        files = glob.glob(pattern, recursive=True)
+        if len(files) == 0:
+            print('conformation_info file(s) do not exist in dir: %s' % conformation_info_dir)
+            sys.exit()
+    else:
+        print('conformation_info file(s) found:')
+        print(files)
+    
+    for fname in files: 
+        print('opening %s' % fname)
+        with open(fname, 'rb') as f:
+             conformation_info = pickle.load(f)
+        for key in conformation_info:
+            curr_conformation_info = conformation_info[key]
+            for i in range(0,len(curr_conformation_info)):
+                pdb_pred_path = curr_conformation_info[i][0] #this points to the original file
+                rmsd_wrt_initial = round(curr_conformation_info[i][1],2) 
+                mean_plddt = round(curr_conformation_info[i][2],2)
+                pdb_pred_path_list.append(pdb_pred_path)
+                rmsd_wrt_initial_list.append(rmsd_wrt_initial)
+                mean_plddt_list.append(mean_plddt)
+
+    print('%d total PDB files being evaluated' % len(pdb_pred_path_list))
         
     rmsd_list = [] 
+    tm_list = [] 
     for i,pdb_pred_path in enumerate(pdb_pred_path_list):
         print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
-        print('superimposing %s and %s' % (pdb_ref_id, pdb_pred_path))
-        rmsd, _, _ = superimpose_wrapper_monomer(pdb_ref_id, None, 'pdb', 'pred_rw', pdb_ref_path, pdb_pred_path, superimposed_structures_save_dir)
+        print('superimposing %s and %s' % (ref_pdb_id, pdb_pred_path))
+        rmsd, tm_score, _, _ = superimpose_wrapper_monomer(ref_pdb_id, None, 'pdb', 'pred_benchmark', ref_pdb_path, pdb_pred_path, superimposed_structures_save_dir)
         rmsd = round(rmsd,2)
+        tm_score = round(tm_score,2)
         rmsd_list.append(rmsd)
+        tm_list.append(tm_score)
 
-    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'pdb_id_reference_structure': pdb_ref_id, 'pdb_pred_path': pdb_pred_path_list, 'pdb_pred_path_named_by_cluster': pdb_pred_path_named_by_cluster_list,
-                          'mean_plddt': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list})
+    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_str, 'template': template_str, 'ref_pdb_iderence_structure': ref_pdb_id, 'pdb_pred_path': pdb_pred_path_list, 
+                            'mean_plddt': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list, 'tm_score': tm_list})
  
     return out_df
 
 
-def compare_benchmark_conformations_to_structure_multimer(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, superimposed_structures_save_dir):
+
+def compare_all_conformations_to_reference_multimer(uniprot_id, ref_pdb_id, ref_pdb_path, conformation_info_dir, superimposed_structures_save_dir, method_str):
 
     pdb_pred_path_list = []
     rmsd_wrt_initial_list = [] 
     mean_plddt_list = []  
     ptm_iptm_list = [] 
 
-    pattern = "%s/**/conformation_info.pkl" % conformation_info_dir
+    template_str = get_template_str(conformation_info_dir)
+
+    pattern = "%s/conformation_info.pkl" % conformation_info_dir
     files = glob.glob(pattern, recursive=True)
     if len(files) == 0:
-        print('conformation_info files for monomer benchmark do not exist')
-        sys.exit()
+        pattern = "%s/**/conformation_info.pkl" % conformation_info_dir
+        files = glob.glob(pattern, recursive=True)
+        if len(files) == 0:
+            print('conformation_info file(s) do not exist in dir: %s' % conformation_info_dir)
+            sys.exit()
     else:
-        print('conformation_info files for monomer benchmark:')
+        print('conformation_info file(s) found:')
         print(files)
+
 
     for fname in files:
         print('opening %s' % fname)
@@ -140,143 +215,85 @@ def compare_benchmark_conformations_to_structure_multimer(uniprot_id, pdb_ref_id
                 mean_plddt_list.append(mean_plddt)
                 ptm_iptm_list.append(ptm_iptm)
 
-    print('PDB FILES:')
-    print(pdb_pred_path_list)
-        
+    print('%d total PDB files being evaluated' % len(pdb_pred_path_list))
+    
     rmsd_list = [] 
     dockq_list = [] 
     for i,pdb_pred_path in enumerate(pdb_pred_path_list):
         print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
-        print('superimposing %s and %s' % (pdb_ref_id, pdb_pred_path))
-        rmsd, pdb_ref_path_output, _ = superimpose_wrapper_multimer(pdb_ref_id, None, 'pdb', 'pred_benchmark', pdb_ref_path, pdb_pred_path, superimposed_structures_save_dir)
+        print('superimposing %s and %s' % (ref_pdb_id, pdb_pred_path))
+        rmsd, pdb_path_output, _ = superimpose_wrapper_multimer(ref_pdb_id, None, 'pdb', 'pred_benchmark', ref_pdb_path, pdb_pred_path, superimposed_structures_save_dir)
         rmsd = round(rmsd,2)
         rmsd_list.append(rmsd)
-        num_chains = renumber_chain_wrt_reference(pdb_ref_path_output, pdb_pred_path) #arg1 is the pdb to renumber, arg2 is the pdb to renumber w.r.t to 
+        num_chains = renumber_chain_wrt_reference(pdb_path_output, pdb_pred_path) #arg1 is the pdb to renumber, arg2 is the pdb to renumber w.r.t to 
         if num_chains == 2:
-            dockq_info = calc_DockQ(pdb_pred_path, pdb_ref_path_output)
+            dockq_info = calc_DockQ(pdb_pred_path, pdb_path_output)
             dockq_val = round(dockq_info['DockQ'],2)
         else:
             dockq_val = np.nan 
         dockq_list.append(dockq_val)
 
-    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'pdb_id_reference_structure': pdb_ref_id, 'pdb_pred_path': pdb_pred_path_list, 
+    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_str, 'template': template_str, 'ref_pdb_iderence_structure': ref_pdb_id, 'pdb_pred_path': pdb_pred_path_list, 
                           'mean_plddt': mean_plddt_list, 'ptm_iptm': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list, 'dockq': dockq_list})
  
     return out_df
 
 
-def compare_benchmark_conformations_to_structure_monomer(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, superimposed_structures_save_dir):
 
-    def get_max_extra_msa(input_str):
-        search_str = "max_extra_msa="
-        start_index = input_str.find(search_str)
-        max_extra_msa = input_str[start_index+len(search_str):]
-        max_extra_msa = int(max_extra_msa[0:max_extra_msa.find("/")])
-        return max_extra_msa
 
-    def get_max_msa_clusters(input_str):
-        search_str = "max_msa_clusters="
-        start_index = input_str.find(search_str)
-        max_msa_clusters = input_str[start_index+len(search_str):]
-        max_msa_clusters = int(max_msa_clusters[0:max_msa_clusters.find("/")])
-        return max_msa_clusters
 
-    pdb_pred_path_list = []
-    rmsd_wrt_initial_list = [] 
-    mean_plddt_list = [] 
-    max_extra_msa_list = [] 
-    max_msa_clusters_list = [] 
-
-    pattern = "%s/**/conformation_info.pkl" % conformation_info_dir
-    files = glob.glob(pattern, recursive=True)
-    if len(files) == 0:
-        print('conformation_info files for monomer benchmark do not exist')
-        sys.exit()
-    else:
-        print('conformation_info files for monomer benchmark:')
-        print(files)
+def get_clustered_conformations_metrics(uniprot_id, ref_pdb_id, conformation_info_dir, monomer_or_multimer, method_str, ref_pdb_path=None, save=True):
     
-    for fname in files: 
-        print('opening %s' % fname)
-        with open(fname, 'rb') as f:
-             conformation_info = pickle.load(f)
-        max_extra_msa = get_max_extra_msa(fname)
-        max_msa_clusters = get_max_msa_clusters(fname)
-        for key in conformation_info:
-            curr_conformation_info = conformation_info[key]
-            for i in range(0,len(curr_conformation_info)):
-                pdb_pred_path = curr_conformation_info[i][0] #this points to the original file
-                rmsd_wrt_initial = round(curr_conformation_info[i][1],2) 
-                mean_plddt = round(curr_conformation_info[i][2],2)
-                pdb_pred_path_list.append(pdb_pred_path)
-                rmsd_wrt_initial_list.append(rmsd_wrt_initial)
-                mean_plddt_list.append(mean_plddt)
-                max_extra_msa_list.append(max_extra_msa)
-                max_msa_clusters_list.append(max_msa_clusters)
+    if monomer_or_multimer == 'monomer':
+        if ref_pdb_id is not None and len(ref_pdb_id.split('_')) != 2:
+            raise ValueError("specify chain in ref_pdb_id for predicting monomer")
+    if monomer_or_multimer == 'multimer':
+        if ref_pdb_id is not None and len(ref_pdb_id.split('_')) != 1:
+            raise ValueError("do not specify chain in ref_pdb_id for predicting multimer")
 
-    print('PDB FILES:')
-    print(pdb_pred_path_list)
+    superimposed_structures_save_dir = '%s/superimpose-%s' % (conformation_info_dir, ref_pdb_id)
+    if monomer_or_multimer == 'monomer':
+        out_df = compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_pdb_path, conformation_info_dir, superimposed_structures_save_dir, method_str)
+    elif monomer_or_multimer == 'multimer':
+        out_df = compare_clustered_conformations_to_reference_multimer(uniprot_id, ref_pdb_id, ref_pdb_path, conformation_info_dir, superimposed_structures_save_dir, method_str)
         
-    rmsd_list = [] 
-    for i,pdb_pred_path in enumerate(pdb_pred_path_list):
-        print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
-        print('superimposing %s and %s' % (pdb_ref_id, pdb_pred_path))
-        rmsd, _, _ = superimpose_wrapper_monomer(pdb_ref_id, None, 'pdb', 'pred_benchmark', pdb_ref_path, pdb_pred_path, superimposed_structures_save_dir)
-        rmsd = round(rmsd,2)
-        rmsd_list.append(rmsd)
+    print(out_df)
 
-    out_df = pd.DataFrame({'uniprot_id': uniprot_id, 'pdb_id_reference_structure': pdb_ref_id, 'pdb_pred_path': pdb_pred_path_list, 'max_extra_msa': max_extra_msa_list, 'max_msa_clusters': max_msa_clusters_list, 'mean_plddt': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list})
- 
+    if save:
+        Path(superimposed_structures_save_dir).mkdir(parents=True, exist_ok=True)
+        out_df.to_csv('%s/metrics.csv' % superimposed_structures_save_dir, index=False)
+
     return out_df
 
 
-
-def save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, pred_type):
+def get_all_conformations_metrics(uniprot_id, ref_pdb_id, conformation_info_dir, monomer_or_multimer, method_str, ref_pdb_path=None, save=True):
     
-    if pred_type == 'monomer':
-        if pdb_ref_id is not None and len(pdb_ref_id.split('_')) != 2:
-            raise ValueError("specify chain in pdb_ref_id for predicting monomer")
-    if pred_type == 'multimer':
-        if pdb_ref_id is not None and len(pdb_ref_id.split('_')) != 1:
-            raise ValueError("do not specify chain in pdb_ref_id for predicting monomer")
+    if monomer_or_multimer == 'monomer':
+        if ref_pdb_id is not None and len(ref_pdb_id.split('_')) != 2:
+            raise ValueError("specify chain in ref_pdb_id for predicting monomer")
+    if monomer_or_multimer == 'multimer':
+        if ref_pdb_id is not None and len(ref_pdb_id.split('_')) != 1:
+            raise ValueError("do not specify chain in ref_pdb_id for predicting multimer")
 
-    superimposed_structures_save_dir = '%s/superimpose-%s' % (conformation_info_dir, pdb_ref_id)
-    if pred_type == 'monomer':
-        out_df = compare_rw_conformations_to_structure_monomer(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, superimposed_structures_save_dir)
-    elif pred_type == 'multimer':
-        out_df = compare_rw_conformations_to_structure_multimer(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, superimposed_structures_save_dir)
+    superimposed_structures_save_dir = '%s/superimpose-%s' % (conformation_info_dir, ref_pdb_id)
+    if monomer_or_multimer == 'monomer':
+        out_df = compare_all_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_pdb_path, conformation_info_dir, superimposed_structures_save_dir, method_str)
+    elif monomer_or_multimer == 'multimer':
+        out_df = compare_all_conformations_to_reference_multimer(uniprot_id, ref_pdb_id, ref_pdb_path, conformation_info_dir, superimposed_structures_save_dir, method_str)
         
     print(out_df)
 
-    Path(superimposed_structures_save_dir).mkdir(parents=True, exist_ok=True)
-    out_df.to_csv('%s/metrics.csv' % superimposed_structures_save_dir, index=False)
+    if save:
+        Path(superimposed_structures_save_dir).mkdir(parents=True, exist_ok=True)
+        out_df.to_csv('%s/metrics.csv' % superimposed_structures_save_dir, index=False)
 
-
-def save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, pred_type):
-    
-    if pred_type == 'monomer':
-        if pdb_ref_id is not None and len(pdb_ref_id.split('_')) != 2:
-            raise ValueError("specify chain in pdb_ref_id for predicting monomer")
-    if pred_type == 'multimer':
-        if pdb_ref_id is not None and len(pdb_ref_id.split('_')) != 1:
-            raise ValueError("do not specify chain in pdb_ref_id for predicting monomer")
-
-    superimposed_structures_save_dir = '%s/superimpose-%s' % (conformation_info_dir, pdb_ref_id)
-    if pred_type == 'monomer':
-        out_df = compare_benchmark_conformations_to_structure_monomer(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, superimposed_structures_save_dir)
-    elif pred_type == 'multimer':
-        out_df = compare_benchmark_conformations_to_structure_multimer(uniprot_id, pdb_ref_id, pdb_ref_path, conformation_info_dir, superimposed_structures_save_dir)
-        
-    print(out_df)
-
-    Path(superimposed_structures_save_dir).mkdir(parents=True, exist_ok=True)
-    out_df.to_csv('%s/metrics.csv' % superimposed_structures_save_dir, index=False)
+    return out_df 
 
 
 
 
 '''
-pred_type = 'multimer'
+monomer_or_multimer = 'multimer'
 home_dir = '/gpfs/home/itaneja/af_conformational_states_multimer/openfold_multimer_experimental'
 module_config_str = 'module_config_0'
 train_hp_config_str = 'train-hp_config_1'
@@ -291,16 +308,16 @@ conformation_info_dir_list.append(conformation_info_dir)
 
 
 
-pdb_ref_id = '1qxe'
-pdb_ref_path = None
-save_metrics(pdb_ref_id, pdb_ref_path, conformation_info_dir_list, pred_type)
+ref_pdb_id = '1qxe'
+pdb_path = None
+save_metrics(ref_pdb_id, pdb_path, conformation_info_dir_list, monomer_or_multimer)
 
-pdb_ref_id = '2dn2'
-pdb_ref_path = None
-save_metrics(pdb_ref_id, pdb_ref_path, conformation_info_dir_list, pred_type)'''
+ref_pdb_id = '2dn2'
+pdb_path = None
+save_metrics(ref_pdb_id, pdb_path, conformation_info_dir_list, monomer_or_multimer)'''
 
 
-'''pred_type = 'multimer'
+'''monomer_or_multimer = 'multimer'
 home_dir = '/gpfs/home/itaneja/af_conformational_states_multimer/openfold_multimer_experimental'
 module_config_str = 'module_config_1'
 train_hp_config_str = 'train-hp_config_1'
@@ -313,14 +330,14 @@ conformation_info_dir = '%s/CNPase-Nb8d/rw_v4/%s/%s/%s/rw/cluster_representative
 conformation_info_dir_list.append(conformation_info_dir)
 
 
-pdb_ref_id = 'H1140'
-pdb_ref_path = './casp15/H1140/H1140_wallner.pdb'
-save_metrics(pdb_ref_id, pdb_ref_path, conformation_info_dir_list, pred_type)''' 
+ref_pdb_id = 'H1140'
+pdb_path = './casp15/H1140/H1140_wallner.pdb'
+save_metrics(ref_pdb_id, pdb_path, conformation_info_dir_list, monomer_or_multimer)
 
 
 print(asterisk_line)
 
-pred_type = 'monomer'
+monomer_or_multimer = 'monomer'
 home_dir = '/gpfs/home/itaneja/openfold'
 num_clusters = 10 
 
@@ -329,15 +346,15 @@ uniprot_id = 'P69441'
 rw_conformation_info_dir = '%s/%s/rw/module_config_0/train-hp_config_1/rw-hp_config_0-0/rw/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (home_dir, uniprot_id, num_clusters)
 benchmark_conformation_info_dir = '%s/%s/benchmark' % (home_dir, uniprot_id)
 
-pdb_ref_id = '1ake_A'
-pdb_ref_path = None
-save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, rw_conformation_info_dir, pred_type)
-save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, benchmark_conformation_info_dir, pred_type)
+ref_pdb_id = '1ake_A'
+pdb_path = None
+save_rw_metrics(uniprot_id, ref_pdb_id, pdb_path, rw_conformation_info_dir, monomer_or_multimer)
+save_benchmark_metrics(uniprot_id, ref_pdb_id, pdb_path, benchmark_conformation_info_dir, monomer_or_multimer)
 
-pdb_ref_id = '4ake_A'
-pdb_ref_path = None
-save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, rw_conformation_info_dir, pred_type)
-save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, benchmark_conformation_info_dir, pred_type)
+ref_pdb_id = '4ake_A'
+pdb_path = None
+save_rw_metrics(uniprot_id, ref_pdb_id, pdb_path, rw_conformation_info_dir, monomer_or_multimer)
+save_benchmark_metrics(uniprot_id, ref_pdb_id, pdb_path, benchmark_conformation_info_dir, monomer_or_multimer)
 
 print(asterisk_line)
 
@@ -345,16 +362,16 @@ uniprot_id = 'P00533'
 rw_conformation_info_dir = '%s/%s/rw/module_config_0/train-hp_config_1/rw-hp_config_0-0/rw/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (home_dir, uniprot_id, num_clusters)
 benchmark_conformation_info_dir = '%s/%s/benchmark' % (home_dir, uniprot_id)
 
-pdb_ref_id = '2itp_A'
-pdb_ref_path = None
-save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, rw_conformation_info_dir, pred_type)
-save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, benchmark_conformation_info_dir, pred_type)
+ref_pdb_id = '2itp_A'
+pdb_path = None
+save_rw_metrics(uniprot_id, ref_pdb_id, pdb_path, rw_conformation_info_dir, monomer_or_multimer)
+save_benchmark_metrics(uniprot_id, ref_pdb_id, pdb_path, benchmark_conformation_info_dir, monomer_or_multimer)
 
 
-pdb_ref_id = '2gs7_A'
-pdb_ref_path = None
-save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, rw_conformation_info_dir, pred_type)
-save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, benchmark_conformation_info_dir, pred_type)
+ref_pdb_id = '2gs7_A'
+pdb_path = None
+save_rw_metrics(uniprot_id, ref_pdb_id, pdb_path, rw_conformation_info_dir, monomer_or_multimer)
+save_benchmark_metrics(uniprot_id, ref_pdb_id, pdb_path, benchmark_conformation_info_dir, monomer_or_multimer)
 
 print(asterisk_line)
 
@@ -363,16 +380,16 @@ uniprot_id = 'Q9BYF1'
 rw_conformation_info_dir = '%s/%s/rw/module_config_0/train-hp_config_1/rw-hp_config_0-0/rw/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (home_dir, uniprot_id, num_clusters)
 benchmark_conformation_info_dir = '%s/%s/benchmark' % (home_dir, uniprot_id)
 
-pdb_ref_id = '1r42_A'
-pdb_ref_path = None
-save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, rw_conformation_info_dir, pred_type)
-save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, benchmark_conformation_info_dir, pred_type)
+ref_pdb_id = '1r42_A'
+pdb_path = None
+save_rw_metrics(uniprot_id, ref_pdb_id, pdb_path, rw_conformation_info_dir, monomer_or_multimer)
+save_benchmark_metrics(uniprot_id, ref_pdb_id, pdb_path, benchmark_conformation_info_dir, monomer_or_multimer)
 
 
-pdb_ref_id = '1r4l_A'
-pdb_ref_path = None
-save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, rw_conformation_info_dir, pred_type)
-save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, benchmark_conformation_info_dir, pred_type)
+ref_pdb_id = '1r4l_A'
+pdb_path = None
+save_rw_metrics(uniprot_id, ref_pdb_id, pdb_path, rw_conformation_info_dir, monomer_or_multimer)
+save_benchmark_metrics(uniprot_id, ref_pdb_id, pdb_path, benchmark_conformation_info_dir, monomer_or_multimer)
 
 print(asterisk_line)
 
@@ -380,25 +397,25 @@ uniprot_id = 'P42866'
 rw_conformation_info_dir = '%s/%s/rw/module_config_0/train-hp_config_1/rw-hp_config_0-0/rw/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (home_dir, uniprot_id, num_clusters)
 benchmark_conformation_info_dir = '%s/%s/benchmark' % (home_dir, uniprot_id)
 
-pdb_ref_id = '5c1m_A'
-pdb_ref_path = None
-save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, rw_conformation_info_dir, pred_type)
-save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, benchmark_conformation_info_dir, pred_type)
+ref_pdb_id = '5c1m_A'
+pdb_path = None
+save_rw_metrics(uniprot_id, ref_pdb_id, pdb_path, rw_conformation_info_dir, monomer_or_multimer)
+save_benchmark_metrics(uniprot_id, ref_pdb_id, pdb_path, benchmark_conformation_info_dir, monomer_or_multimer)
 
 
-pdb_ref_id = '4dkl_A'
-pdb_ref_path = None
-save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, rw_conformation_info_dir, pred_type)
-save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, benchmark_conformation_info_dir, pred_type)
+ref_pdb_id = '4dkl_A'
+pdb_path = None
+save_rw_metrics(uniprot_id, ref_pdb_id, pdb_path, rw_conformation_info_dir, monomer_or_multimer)
+save_benchmark_metrics(uniprot_id, ref_pdb_id, pdb_path, benchmark_conformation_info_dir, monomer_or_multimer)
 
 print(asterisk_line)
 
-pdb_ref_id = None
-pdb_ref_path = './casp15_targets/T1123-D1.pdb'
+ref_pdb_id = None
+pdb_path = './casp15_targets/T1123-D1.pdb'
 uniprot_id = 'Q82452'
 rw_conformation_info_dir = '%s/%s/rw/module_config_0/train-hp_config_1/rw-hp_config_0-0/rw/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (home_dir, uniprot_id, num_clusters)
 benchmark_conformation_info_dir = '%s/%s/benchmark' % (home_dir, uniprot_id)
 
-save_rw_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, rw_conformation_info_dir, pred_type)
-save_benchmark_metrics(uniprot_id, pdb_ref_id, pdb_ref_path, benchmark_conformation_info_dir, pred_type)
-
+save_rw_metrics(uniprot_id, ref_pdb_id, pdb_path, rw_conformation_info_dir, monomer_or_multimer)
+save_benchmark_metrics(uniprot_id, ref_pdb_id, pdb_path, benchmark_conformation_info_dir, monomer_or_multimer)
+'''

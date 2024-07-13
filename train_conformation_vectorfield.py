@@ -43,7 +43,6 @@ from openfold.utils.validation_metrics import (
     gdt_ha,
 )
 from openfold.utils.import_weights import (
-    import_angle_resnet_weights_,
     import_openfold_weights_
 )
 from scripts.zero_to_fp32 import (
@@ -461,7 +460,7 @@ if __name__ == "__main__":
         help="Whether to log the actual learning rate"
     )
     parser.add_argument(
-        "--config_preset", type=str, default="model_1",
+        "--config_preset", type=str, default="conformation_vectorfield",
         help=(
             'Config setting. Choose e.g. "initial_training", "finetuning", '
             '"model_1", etc. By default, the actual values in the config are '

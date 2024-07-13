@@ -66,10 +66,8 @@ class AngleResnetBlock(nn.Module):
     def forward(self, a: torch.Tensor) -> torch.Tensor:
 
         s_initial = a
-        print(a.shape)
         a = self.relu(a)
         a = self.linear_1(a)
-        print(a.shape)
         a = self.relu(a)
         a = self.linear_2(a)
 

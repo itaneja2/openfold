@@ -74,8 +74,8 @@ def create_clustering_dist_matrix(ca_pdist_all):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--conformation_dir", type=str, default=None,
-        help="",
+        "--conformation_info_dir", type=str, default=None,
+        help="Either points directly to the parent directory containing conformation_info.pkl or the grandparent directory if multiple conformation_info.pkl are present",
     )
     parser.add_argument(
         "--num_clusters", type=int, default=10,
@@ -103,14 +103,18 @@ if __name__ == "__main__":
         }
     )
 
-    pattern = "%s/**/conformation_info.pkl" % args.conformation_dir
+    pattern = "%s/conformation_info.pkl" % args.conformation_info_dir
     files = glob.glob(pattern, recursive=True)
     if len(files) == 0:
-        print('conformation_info files do not exist')
-        sys.exit()
+        pattern = "%s/**/conformation_info.pkl" % args.conformation_info_dir
+        files = glob.glob(pattern, recursive=True)
+        if len(files) == 0:
+            print('conformation_info file(s) do not exist in dir: %s' % args.conformation_info_dir)
+            sys.exit()
     else:
-        print('conformation_info files')
+        print('conformation_info file(s) found:')
         print(files)
+
 
     #combine into single dictionary
     for i in range(0,len(files)):
@@ -170,9 +174,9 @@ if __name__ == "__main__":
     print(cluster_representative_conformation_info_dict)
 
     if args.plddt_threshold is None:
-        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (args.conformation_dir, args.num_clusters)
+        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (args.conformation_info_dir, args.num_clusters)
     else:
-        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=%s' % (args.conformation_dir, args.num_clusters, str(args.plddt_threshold))
+        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=%s' % (args.conformation_info_dir, args.num_clusters, str(args.plddt_threshold))
 
     os.makedirs(cluster_dir, exist_ok=True)
     remove_files_in_dir(cluster_dir)
