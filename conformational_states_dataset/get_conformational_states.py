@@ -34,9 +34,6 @@ def get_all_pdb_openprotein():
             all_pdb_list.append(pdb_id_w_chain)
             all_pdb_dict[pdb_id_w_chain] = 1 
 
-    print(all_pdb_list)    
-    print(len(all_pdb_list))
-
     os.makedirs('./dataset', exist_ok=True)
     with open("./dataset/pdb_list_openprotein.pkl", "wb") as f:
         pickle.dump(all_pdb_list, f)
@@ -68,7 +65,7 @@ def parse_superposition_info(json_dict, uniprot_id, all_pdb_dict):
             if len(pdb_list) == len(cluster_data):
                 parsed_dict[uniprot_id][seg_key] = pdb_list
             #else:
-            #    print('not all values of pdb_list present in openprotein')
+            #    print('not all clusters have a pdb present in openprotein dataset')
             #    print(pdb_list)
 
     if parsed_dict[uniprot_id] == {}: 
