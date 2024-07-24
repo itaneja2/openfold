@@ -30,10 +30,8 @@ from openfold.utils.callbacks import (
 
 from openfold.utils.script_utils import prep_output, get_model_basename, parse_fasta 
 
-from openfold.utils.exponential_moving_average import ExponentialMovingAverage
 from openfold.utils.loss import ConformationVectorFieldLoss, lddt_ca
 from openfold.utils.lr_schedulers import AlphaFoldLRScheduler
-from openfold.utils.multi_chain_permutation import multi_chain_permutation_align
 from openfold.utils.seed import seed_everything
 from openfold.utils.superimposition import superimpose
 from openfold.utils.tensor_utils import tensor_tree_map
@@ -55,10 +53,7 @@ from openfold.utils.logger import PerformanceLoggingCallback
 
 import json 
 import re 
-from intrinsic_ft import modify_with_intrinsic_model
 from collections import defaultdict
-
-from custom_openfold_utils.pdb_utils import align_and_get_rmsd
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)  
@@ -81,7 +76,6 @@ class ConformationVectorFieldWrapper(pl.LightningModule):
         self.is_multimer = config.globals.is_multimer
         self.loss = ConformationVectorFieldLoss(config.loss)
         self.config = config 
-        self.cached_weights = None
         self.last_lr_step = -1
 
     def forward(self, batch):
@@ -117,11 +111,29 @@ class ConformationVectorFieldWrapper(pl.LightningModule):
         # Log it
         self._log(loss_breakdown, batch, outputs)
 
+        torch.cuda.empty_cache()
+
         return loss
+
+    '''def validation_step(self, batch, batch_idx):
+
+        # Run the model
+        outputs = self(batch)
+
+        # Compute loss
+        loss, loss_breakdown = self.loss(
+            outputs, batch, _return_breakdown=True
+        )
+
+        # Log it
+        self._log(loss_breakdown, batch, outputs, train=False)
+
+        return loss''' 
+
 
 
     def configure_optimizers(self, 
-        learning_rate: float = 1e-4,
+        learning_rate: float = 1e-3,
         eps: float = 1e-5,
     ) -> torch.optim.Adam:
 #        return torch.optim.Adam(
@@ -210,7 +222,7 @@ def main(args):
         mc = ModelCheckpoint(
             every_n_epochs=args.checkpoint_every_nth_epoch,
             auto_insert_metric_name=False,
-            save_top_k=-1,
+            filename='checkpoint_epoch={epoch}-loss={val/loss:.2f}',
         )
         callbacks.append(mc)
 
@@ -270,7 +282,8 @@ def main(args):
     trainer = pl.Trainer.from_argparse_args(
         args,
         max_epochs = 1000,
-        log_every_n_steps = 10,
+        check_val_every_n_epoch=1,
+        log_every_n_steps = 100,
         gradient_clip_val=0.1,
         default_root_dir='./',
         strategy=strategy,
@@ -315,6 +328,18 @@ if __name__ == "__main__":
         help="Directory containing precomputed training alignments"
     )
     parser.add_argument(
+        "--val_ground_truth_data_dir", type=str, default = None, 
+        help="Directory containing training mmCIF files -- corresponds two conformations 1 and 2."
+    )
+    parser.add_argument(
+        "--val_rw_data_dir", type=str, default = None, 
+        help="Directory containing mmCIF files generated via random walk"
+    )
+    parser.add_argument(
+        "--val_alignment_dir", type=str, default= None,
+        help="Directory containing precomputed training alignments"
+    )
+    parser.add_argument(
         "--training_save_dir", type=str, default=None,
     )
     parser.add_argument(
@@ -338,14 +363,6 @@ if __name__ == "__main__":
     parser.add_argument(
         "--distillation_alignment_dir", type=str, default=None,
         help="Directory containing precomputed distillation alignments"
-    )
-    parser.add_argument(
-        "--val_data_dir", type=str, default=None,
-        help="Directory containing validation mmCIF files"
-    )
-    parser.add_argument(
-        "--val_alignment_dir", type=str, default=None,
-        help="Directory containing precomputed validation alignments"
     )
     parser.add_argument(
         "--kalign_binary_path", type=str, default='/usr/bin/kalign',

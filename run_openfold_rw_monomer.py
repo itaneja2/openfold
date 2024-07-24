@@ -82,7 +82,7 @@ else:
 finetune_openfold_path = './finetune_openfold.py'
 
 TRACING_INTERVAL = 50
-SEQ_LEN_EXTRAMSA_THRESHOLD = 600 #if length of seq > 600, extra_msa is disabled so backprop doesn't crash
+SEQ_LEN_EXTRAMSA_THRESHOLD = 600 #if length of seq > 600, extra_msa is reduced so backprop doesn't crash
 asterisk_line = '******************************************************************************'
 
 @contextlib.contextmanager
@@ -138,7 +138,7 @@ def save_cvf_output(rw_conformation_path, model_output, output_dir):
     save_ca_coords(rw_conformation_path, ca_coords_pred, pdb_output_path)
 
 
-def eval_model(model, config, intrinsic_parameter, feature_processor, feature_dict, processed_feature_dict, tag, output_dir, phase, args):
+def eval_model(model, config, intrinsic_parameter, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, tag, output_dir, phase, args):
 
     os.makedirs(output_dir, exist_ok=True)
 
@@ -152,7 +152,14 @@ def eval_model(model, config, intrinsic_parameter, feature_processor, feature_di
     )
     
     out = tensor_tree_map(lambda x: np.array(x.cpu()), out)
-    mean_plddt = np.mean(out["plddt"])
+    plddt_all_residues = out["plddt"]
+    disordered_residues_mask = np.ones(plddt_all_residues.shape, dtype=bool)
+    if len(ncterm_disordered_residues_idx) > 0:
+        disordered_residues_mask[ncterm_disordered_residues_idx] = 0 
+  
+    #calculates plddt, excluding n/cterm disordred residues  
+    mean_plddt = np.mean(plddt_all_residues[disordered_residues_mask]) 
+    mean_plddt_vanila = np.mean(plddt_all_residues)
 
     unrelaxed_protein = prep_output(
         out,
@@ -403,6 +410,7 @@ def run_rw_monomer(
     num_total_steps: int, 
     L: np.ndarray, 
     cov_type: str, 
+    ncterm_disordered_residues_idx: List[int],
     model: nn.Module, 
     config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
@@ -412,7 +420,7 @@ def run_rw_monomer(
     phase: str, 
     args: argparse.Namespace,
     save_intrinsic_param: bool = False, 
-    early_stop: bool = False,
+    terminate_after_first_rejection: bool = False,
 ):
     """Generates new conformations by modifying parameter weights via a random walk on episilon. 
     
@@ -455,7 +463,7 @@ def run_rw_monomer(
                                                                                  rw_hp_dict['gamma'], cov_type, L)
 
         curr_tag = '%s_iter%d_step-iter%d_step-agg%d' % (base_tag, iter_n, curr_step_iter_n, curr_step_aggregate) 
-        mean_plddt, disordered_percentage, inference_time, accept_conformation, pdb_path_rw = eval_model(model, config, intrinsic_param_proposed, feature_processor, feature_dict, processed_feature_dict, curr_tag, output_dir, phase, args)    
+        mean_plddt, disordered_percentage, inference_time, accept_conformation, pdb_path_rw = eval_model(model, config, intrinsic_param_proposed, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, curr_tag, output_dir, phase, args)    
         state_history.append(accept_conformation)
         logger.info('pLDDT: %.3f, disordered percentage: %.3f, step: %d' % (mean_plddt, disordered_percentage, curr_step_aggregate)) 
 
@@ -471,7 +479,7 @@ def run_rw_monomer(
                 conformation_info.append((pdb_path_rw, rmsd, mean_plddt, disordered_percentage, inference_time, None, rw_hp_dict['epsilon_scaling_factor'], curr_step_aggregate)) #if this function is called within a local context manager, curr_step_aggregate can be used to reproduce intrinsic_param_proposed
         else:
             logger.info('STEP %d: REJECTED' % curr_step_aggregate)
-            if early_stop:
+            if terminate_after_first_rejection:
                 return state_history, conformation_info
             else:
                 intrinsic_param_prev = np.zeros(intrinsic_dim)
@@ -489,7 +497,8 @@ def run_rw_monomer(
 def get_scaling_factor_bootstrap(
     intrinsic_dim: int,
     rw_hp_config_data: Mapping[str, Any],
-    num_total_steps: int, 
+    num_total_steps: int,
+    ncterm_disordered_residues_idx: List[int],
     model: nn.Module, 
     config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
@@ -526,7 +535,7 @@ def get_scaling_factor_bootstrap(
             intrinsic_param_proposed = propose_new_intrinsic_param_vanila_rw(intrinsic_param_zero, intrinsic_dim, 
                                                                              scaling_factor_candidate, 'spherical')
             curr_tag = '%s_step%d' % (base_tag,i)         
-            mean_plddt, disordered_percentage, _, accept_conformation, _ = eval_model(model, config, intrinsic_param_proposed, feature_processor, feature_dict, processed_feature_dict, curr_tag, warmup_output_dir, 'bootstrap_warmup', args)    
+            mean_plddt, disordered_percentage, _, accept_conformation, _ = eval_model(model, config, intrinsic_param_proposed, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, curr_tag, warmup_output_dir, 'bootstrap_warmup', args)    
             state_history.append(accept_conformation)
             logger.info('pLDDT: %.3f, disordered percentage: %.3f, step: %d' % (mean_plddt, disordered_percentage, i)) 
             if accept_conformation:
@@ -569,9 +578,10 @@ def get_bootstrap_candidate_conformations(
        The candidate conformations are derived from the bootstrap phase. More specifically,
        the candidate conformations correspond to those that were outputted one step prior 
        to a rejected conformation.   
-    """ 
+    """
 
     bootstrap_conformations = {}
+    bootstrap_conformations_all = [] 
     iter_num_list = [] 
     for i in range(0,len(conformation_info)):
         f = conformation_info[i][0]
@@ -580,11 +590,15 @@ def get_bootstrap_candidate_conformations(
         iter_num = int(match.group(1)) #this corresponds to a given iteration (i.e a sequence of conformations that terminates in a rejection)
         match = re.search(r'step-iter(\d+)', f) 
         step_num = int(match.group(1)) #this corresponds to the step_num for a given iteration 
+        bootstrap_conformations_all.append((step_num,rmsd,f))
         if iter_num not in bootstrap_conformations:
             bootstrap_conformations[iter_num] = [(step_num,rmsd,f)]
         else:
             bootstrap_conformations[iter_num].append((step_num,rmsd,f)) 
         iter_num_list.append(iter_num)
+
+    if len(bootstrap_conformations_all) <= args.num_training_conformations:
+        return bootstrap_conformations_all 
 
     del bootstrap_conformations[max(iter_num_list)] #delete key corresponding to max(iter_num_list) because this iteration did not yield a rejected conformation (i.e it did not 'finish') 
 
@@ -700,6 +714,7 @@ def run_grid_search_monomer(
     intrinsic_dim: int, 
     num_total_steps: int, 
     L: np.ndarray, 
+    ncterm_disordered_residues_idx: List[int],
     model: nn.Module, 
     config: mlc.ConfigDict, 
     feature_processor: feature_pipeline.FeaturePipeline, 
@@ -744,7 +759,7 @@ def run_grid_search_monomer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, ncterm_disordered_residues_idx, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, terminate_after_first_rejection=True)
             shutil.rmtree(rw_hp_output_dir, ignore_errors=True)
 
             if items not in state_history_dict:
@@ -752,11 +767,12 @@ def run_grid_search_monomer(
             else:
                 state_history_dict[items].extend(state_history)
 
-            acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
+            acceptance_rate = round(sum(state_history_dict[items])/len(state_history_dict[items]),2)
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
+                    #mark all combinations except for current one with acceptance rate of '-1' so we ignore them
                     state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
-                                                                                             items, num_total_steps)
+                                                                                             num_total_steps, optimal_combination=items, extrapolation_val=-1)
                     return state_history_dict
 
     else:
@@ -787,7 +803,7 @@ def run_grid_search_monomer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, ncterm_disordered_residues_idx, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, terminate_after_first_rejection=True)
             shutil.rmtree(rw_hp_output_dir, ignore_errors=True)
 
 
@@ -796,18 +812,18 @@ def run_grid_search_monomer(
             else:
                 state_history_dict[items].extend(state_history)
 
-            acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
+            acceptance_rate = round(sum(state_history_dict[items])/len(state_history_dict[items]),2)
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
+                    #mark all combinations except for current one with acceptance rate of '-1' so we ignore them 
                     state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
-                                                                                             items, num_total_steps)
+                                                                                             num_total_steps, optimal_combination=items, extrapolation_val=-1)
                     return state_history_dict
                 
             if i == 0: #min_combination
                 if acceptance_rate < lower_bound_acceptance_threshold:
-                    #extrapolate all combinations with -1 
                     state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
-                                                                                             None, num_total_steps) 
+                                                                                             num_total_steps, optimal_combination=None, extrapolation_val=acceptance_rate) 
                     return state_history_dict
                 elif acceptance_rate >= lower_bound_acceptance_threshold and acceptance_rate <= upper_bound_acceptance_threshold:
                     min_combo_outside_acceptance_range = False
@@ -822,9 +838,8 @@ def run_grid_search_monomer(
                     #is also outside the acceptance range before terminating
                     #the search early  
                     if min_combo_outside_acceptance_range: 
-                        #extrapolate all combinations with -1 
                         state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
-                                                                                                 None, num_total_steps) 
+                                                                                                 num_total_steps, optimal_combination=None, extrapolation_val=acceptance_rate) 
                         return state_history_dict
                 
     return state_history_dict
@@ -929,7 +944,8 @@ def run_rw_pipeline(args):
     logger.info(seq)
 
     if len(seq) > SEQ_LEN_EXTRAMSA_THRESHOLD:
-       config.model.extra_msa.enabled = False 
+        print('REDUCING MAX_EXTRA_MSA TO 512 BECAUSE SEQUENCE LENGTH IS: %d' % len(seq))
+        config.data.predict.max_extra_msa = 512
 
     random_seed = args.data_random_seed
     if random_seed is None:
@@ -1022,6 +1038,7 @@ def run_rw_pipeline(args):
         if os.path.exists(conformation_info_fname) and os.path.exists(initial_pred_path) and os.path.exists(seed_fname):
             with open(conformation_info_fname, 'rb') as f:
                 conformation_info = pickle.load(f)
+            ncterm_disordered_residues_idx = rw_helper_functions.get_af_ncterm_disordered_residues_idx(initial_pred_path)
             random_seed = int(np.loadtxt(seed_fname))
             np.random.seed(random_seed)
             torch.manual_seed(random_seed + 1)
@@ -1043,9 +1060,12 @@ def run_rw_pipeline(args):
         logger.info('BEGINNING BOOTSTRAP PHASE:') 
         t0 = time.perf_counter()
 
-        logger.info('PREDICTING INITIAL STRUCTURE FROM ORIGINAL MODEL') 
-        mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path = eval_model(model, config, intrinsic_param_zero, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
+        logger.info('PREDICTING INITIAL STRUCTURE FROM ORIGINAL MODEL')
+        ncterm_disordered_residues_idx = []  
+        mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path = eval_model(model, config, intrinsic_param_zero, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
         logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
+
+        ncterm_disordered_residues_idx = rw_helper_functions.get_af_ncterm_disordered_residues_idx(initial_pred_path)
 
         if args.write_summary_dir:
             summary_output_dir = '%s/%s/initial_pred' % (args.output_dir_base, 'alternative_conformations-summary')
@@ -1053,7 +1073,7 @@ def run_rw_pipeline(args):
             rw_helper_functions.remove_files_in_dir(summary_output_dir)
             shutil.copytree(initial_pred_output_dir, summary_output_dir, dirs_exist_ok=True)
 
-        scaling_factor_bootstrap = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, args.num_bootstrap_hp_tuning_steps, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
+        scaling_factor_bootstrap = get_scaling_factor_bootstrap(intrinsic_dim, rw_hp_config_data, args.num_bootstrap_hp_tuning_steps, ncterm_disordered_residues_idx, model, config, feature_processor, feature_dict, processed_feature_dict, l1_output_dir, args)       
         logger.info(asterisk_line)
         logger.info('SCALING FACTOR TO BE USED FOR BOOTSTRAPPING: %s' % rw_helper_functions.remove_trailing_zeros(scaling_factor_bootstrap))
         logger.info('RUNNING RW TO GENERATE CONFORMATIONS FOR BOOTSTRAP PHASE') 
@@ -1062,9 +1082,9 @@ def run_rw_pipeline(args):
 
         if args.use_local_context_manager:
             with local_np_seed(random_seed):
-                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
+                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', ncterm_disordered_residues_idx, model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, terminate_after_first_rejection=False)
         else:
-                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, early_stop=False)
+                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, 'vanila', rw_hp_dict, args.num_bootstrap_steps, None, 'spherical', ncterm_disordered_residues_idx, model, config, feature_processor, feature_dict, processed_feature_dict, bootstrap_output_dir, 'bootstrap', args, save_intrinsic_param=False, terminate_after_first_rejection=False)
  
         bootstrap_acceptance_rate = sum(state_history)/len(state_history)
         logger.info('BOOTSTRAP ACCEPTANCE RATE: %.3f' % bootstrap_acceptance_rate)
@@ -1091,6 +1111,8 @@ def run_rw_pipeline(args):
 
     #####################################################
     logger.info(asterisk_line)
+
+    torch.cuda.empty_cache()
 
     if not(args.skip_gd_phase):        
         logger.info('BEGINNING GD PHASE:') 
@@ -1157,7 +1179,7 @@ def run_rw_pipeline(args):
                 model_train_out_dir = '%s/version_%d' % (fine_tuning_save_dir, latest_version_num)
                 sigma = rw_helper_functions.get_sigma(intrinsic_dim, model_train_out_dir)
                 L = rw_helper_functions.get_cholesky(rw_hp_config_data['cov_type'], sigma, random_corr)
-                state_history_dict = run_grid_search_monomer(grid_search_combinations, state_history_dict, None, target_str, initial_pred_path, intrinsic_dim, args.num_rw_hp_tuning_steps_per_round, L, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, args)
+                state_history_dict = run_grid_search_monomer(grid_search_combinations, state_history_dict, None, target_str, initial_pred_path, intrinsic_dim, args.num_rw_hp_tuning_steps_per_round, L, ncterm_disordered_residues_idx, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_config_data, rw_hp_parent_dir, args)
                 rw_hp_acceptance_rate_dict, grid_search_combinations, completion_status = rw_helper_functions.get_rw_hp_tuning_info(state_history_dict, rw_hp_acceptance_rate_dict, grid_search_combinations, rw_hp_config_data, conformation_num, args)
                 if completion_status == 1:
                     break
@@ -1206,9 +1228,9 @@ def run_rw_pipeline(args):
         logger.info('BEGINNING RW FOR: %s' % rw_output_dir)
         if args.use_local_context_manager:
             with local_np_seed(random_seed):
-                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+                state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], ncterm_disordered_residues_idx, model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, terminate_after_first_rejection=False)
         else:
-            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+            state_history, conformation_info = run_rw_monomer(initial_pred_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], ncterm_disordered_residues_idx, model, config, feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, terminate_after_first_rejection=False)
         conformation_info_dict[conformation_num] = conformation_info
 
         acceptance_rate = sum(state_history)/len(state_history)

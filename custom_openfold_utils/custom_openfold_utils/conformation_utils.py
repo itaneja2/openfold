@@ -198,6 +198,10 @@ def get_residues_ignore_idx_between_pdb_af_conformation(pdb_path, af_path, af_in
     if len(pdb_exclusive_residues_idx) > 0:
         print('Residues in PDB, but not AF:')
         print(pdb_exclusive_residues_idx)
+        print('PDB seq:')       
+        print(pdb_seq)
+        print('AF seq:')       
+        print(af_seq) 
         print('This should be empty')
         print('SKIPING THIS INPUT...')
         return None
@@ -282,10 +286,11 @@ def cartesian_to_spherical(ca_pos_diff):
     """Converts a cartesian coordinate (x, y, z) into a spherical one (radius, theta, phi)."""
 
     #utilizing this convention: https://dynref.engr.illinois.edu/rvs.html
+    ##https://gist.github.com/overdev/d0acea5729d43086b4841efb8f27c8e2
     radius = np.linalg.norm(ca_pos_diff, axis=1)
     xy_norm = np.linalg.norm(ca_pos_diff[:,0:2], axis=1)
-    phi = np.arctan2(xy_norm, ca_pos_diff[:,2])
-    theta = np.arctan2(ca_pos_diff[:,1], ca_pos_diff[:,0])
+    phi = np.arctan2(xy_norm, ca_pos_diff[:,2]) #inclination, range 0-Pi
+    theta = np.arctan2(ca_pos_diff[:,1], ca_pos_diff[:,0]) #azimuth, range -Pi to Pi
 
     return phi, theta, radius
 

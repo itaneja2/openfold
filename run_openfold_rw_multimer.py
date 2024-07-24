@@ -76,7 +76,7 @@ logger.addHandler(file_handler)
 finetune_openfold_path = './finetune_openfold.py'
 
 TRACING_INTERVAL = 50
-SEQ_LEN_EXTRAMSA_THRESHOLD = 600 #if length of seq > 600, extra_msa is disabled so backprop doesn't crash
+SEQ_LEN_EXTRAMSA_THRESHOLD = 600 #if length of seq > 600, extra_msa is reduced so backprop doesn't crash
 asterisk_line = '******************************************************************************'
 
 
@@ -165,7 +165,7 @@ def eval_model(model, config, intrinsic_parameter, epsilon, epsilon_scaling_fact
 
     logger.info(f"Output written to {unrelaxed_output_path}...")
 
-    if not args.relax_conformation:
+    if args.relax_conformation:
         # Relax the prediction.
         logger.info(f"Running relaxation on {unrelaxed_output_path}...")
         relax_protein(config, args.model_device, unrelaxed_protein, model_output_dir, output_name,
@@ -292,7 +292,7 @@ def finetune_wrapper(
     alignment_dir_wo_file_id: str,
     output_dir: str,
     args: argparse.Namespace,
-)
+):
 
     model_name_source = aligned_models_info[0] #this is model being used for training 
     model_name_target = aligned_models_info[1] 
@@ -325,7 +325,7 @@ def finetune_wrapper(
 
     cmd_to_run = ["python", finetune_openfold_path] + script_arguments
     cmd_to_run_str = s = ' '.join(cmd_to_run)
-    logger.info("RUNNING GRADIENT DESCENT WITH SOURCE %s AND TARGET %s" % (initial_pred_path_dict[model_name_source],initial_pred_path_dict[model_name_target]))
+    logger.info("RUNNING GRADIENT DESCENT WITH SOURCE %s AND TARGET %s" % (source_pdb_path,target_pdb_path))
     logger.info(asterisk_line)
     logger.info("RUNNING THE FOLLOWING COMMAND:")
     logger.info(cmd_to_run_str)
@@ -380,7 +380,7 @@ def run_rw_multimer(
     phase: str, 
     args: argparse.Namespace,
     save_intrinsic_param: bool = False, 
-    early_stop: bool = False
+    terminate_after_first_rejection: bool = False
 ):
     """Generates new conformations by modifying parameter weights via a random walk on episilon. 
     
@@ -430,7 +430,7 @@ def run_rw_multimer(
                 conformation_info.append((pdb_path_rw, rmsd, mean_plddt, weighted_ptm_score, disordered_percentage, num_recycles, inference_time, None, None))
         else:
             logger.info('STEP %d: REJECTED' % curr_step_aggregate)
-            if early_stop:
+            if terminate_after_first_rejection:
                 return state_history, conformation_info
             else:
                 epsilon_prev = epsilon_initial
@@ -630,7 +630,7 @@ def run_grid_search_multimer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, terminate_after_first_rejection=True)
             shutil.rmtree(rw_hp_output_dir, ignore_errors=True)
 
             if items not in state_history_dict:
@@ -638,10 +638,12 @@ def run_grid_search_multimer(
             else:
                 state_history_dict[items].extend(state_history)
 
-            acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
+            acceptance_rate = round(sum(state_history_dict[items])/len(state_history_dict[items]),2)
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
+                    #mark all combinations except for current one with acceptance rate of '-1' so we ignore them
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations,
+                                                                                             num_total_steps, optimal_combination=items, extrapolation_val=-1)
                     return state_history_dict
 
     else:
@@ -672,7 +674,7 @@ def run_grid_search_multimer(
 
             logger.info('BEGINNING RW FOR: %s' % rw_hp_output_dir)
 
-            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, early_stop=True)
+            state_history, conformation_info = run_rw_multimer(initial_pred_path, intrinsic_dim, rw_type, rw_hp_dict, num_total_steps, L, cov_type, model, config, feature_processor, feature_dict, processed_feature_dict, rw_hp_output_dir, 'rw_grid_search', args, save_intrinsic_param=False, terminate_after_first_rejection=True)
             shutil.rmtree(rw_hp_output_dir, ignore_errors=True)
 
             if items not in state_history_dict:
@@ -680,15 +682,18 @@ def run_grid_search_multimer(
             else:
                 state_history_dict[items].extend(state_history)
 
-            acceptance_rate = sum(state_history_dict[items])/len(state_history_dict[items])
+            acceptance_rate = round(sum(state_history_dict[items])/len(state_history_dict[items]),2)
             if args.early_stop_rw_hp_tuning:
                 if acceptance_rate <= upper_bound_acceptance_threshold and acceptance_rate >= lower_bound_acceptance_threshold:
-                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, items, num_total_steps)
+                    #mark all combinations except for current one with acceptance rate of '-1' so we ignore them
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations,
+                                                                                             num_total_steps, optimal_combination=items, extrapolation_val=-1)
                     return state_history_dict
                 
             if i == 0: #min_combination
                 if acceptance_rate < lower_bound_acceptance_threshold:
-                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1 
+                    state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
+                                                                                             num_total_steps, optimal_combination=None, extrapolation_val=acceptance_rate) 
                     return state_history_dict
                 elif acceptance_rate >= lower_bound_acceptance_threshold and acceptance_rate <= upper_bound_acceptance_threshold:
                     min_combo_outside_acceptance_range = False
@@ -703,7 +708,8 @@ def run_grid_search_multimer(
                     #is also outside the acceptance range before terminating
                     #the search early  
                     if min_combo_outside_acceptance_range: 
-                        state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, None, num_total_steps) #extrapolate all combinations with -1
+                        state_history_dict = rw_helper_functions.autopopulate_state_history_dict(state_history_dict, grid_search_combinations, 
+                                                                                                 num_total_steps, optimal_combination=None, extrapolation_val=acceptance_rate) 
                         return state_history_dict
                 
     return state_history_dict
@@ -798,8 +804,6 @@ def run_rw_pipeline(args):
     logger.info(seqs)
 
     total_seq_len = sum(len(s) for s in seqs)
-    if total_seq_len > SEQ_LEN_EXTRAMSA_THRESHOLD:
-       config.model.extra_msa.enabled = False 
 
     random_seed = args.data_random_seed
     if random_seed is None:
@@ -890,6 +894,11 @@ def run_rw_pipeline(args):
             config_name = 'multimer-%s' % m #model without chainmask 
         config = model_config(config_name, long_sequence_inference=args.long_sequence_inference)
         config = update_config(config, seqs, num_chains, args)
+        
+        if total_seq_len > SEQ_LEN_EXTRAMSA_THRESHOLD:
+            print('REDUCING MAX_EXTRA_MSA TO 512 BECAUSE TOTAL SEQUENCE LENGTH IS: %d' % total_seq_len)
+            config.data.predict.max_extra_msa = 512
+
         if m not in config_dict:
             config_dict[m] = config
             if(args.trace_model):
@@ -1124,9 +1133,9 @@ def run_rw_pipeline(args):
 
         if args.use_local_context_manager:
             with local_np_seed(random_seed):
-                state_history, conformation_info = run_rw_multimer(source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+                state_history, conformation_info = run_rw_multimer(source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, terminate_after_first_rejection=False)
         else:
-            state_history, conformation_info = run_rw_multimer(source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, early_stop=False)
+            state_history, conformation_info = run_rw_multimer(source_pdb_path, intrinsic_dim, rw_hp_config_data['rw_type'], rw_hp_dict, args.num_rw_steps, L, rw_hp_config_data['cov_type'], model_dict[model_name_source], config_dict[model_name_source], feature_processor, feature_dict, processed_feature_dict, rw_output_dir, 'rw', args, save_intrinsic_param=False, terminate_after_first_rejection=False)
 
         key = '%s-%s' % (model_name_source, model_name_target)
         conformation_info_dict[key] = conformation_info

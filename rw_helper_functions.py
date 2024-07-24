@@ -25,15 +25,8 @@ from torch import nn
 from Bio.PDB import PDBParser
 from Bio.PDB.DSSP import dssp_dict_from_pdb_file
 
-torch_versions = torch.__version__.split(".")
-torch_major_version = int(torch_versions[0])
-torch_minor_version = int(torch_versions[1])
-if(
-    torch_major_version > 1 or
-    (torch_major_version == 1 and torch_minor_version >= 12)
-):
-    # Gives a large speedup on Ampere-class GPUs
-    torch.set_float32_matmul_precision("high")
+from custom_openfold_utils.pdb_utils import convert_pdb_to_mmcif, get_bfactor
+
 
 logger = logging.getLogger(__file__)
 logger.setLevel(level=logging.INFO)
@@ -93,6 +86,50 @@ def get_latest_version_num(fine_tuning_save_dir):
                 version_num_list.append(version_num)
         latest_version_num = max(version_num_list)
     return latest_version_num
+
+def get_af_ncterm_disordered_residues_idx(pdb_path: str):
+    
+    #plddt_threshold sourced from https://onlinelibrary.wiley.com/doi/10.1002/pro.4466
+
+    cif_path = convert_pdb_to_mmcif(pdb_path, './cif_temp')
+    plddt_scores, mean_plddt = get_bfactor(cif_path)
+    os.remove(cif_path)
+
+    af_disordered = 1-plddt_scores/100
+    af_disordered = af_disordered >= .31
+     
+    af_ncterm_disordered_idx = []
+
+    #n-terminal disordered domain 
+    start_idx = 0
+    if af_disordered[start_idx]:
+        af_ncterm_disordered_idx.append(start_idx)
+        end_idx = start_idx+1
+        if end_idx < len(af_disordered):
+            while af_disordered[end_idx]:
+                af_ncterm_disordered_idx.append(end_idx)
+                end_idx += 1
+                if end_idx >= len(af_disordered):
+                    break  
+
+    #c-terminal disordered domain 
+    start_idx = len(af_disordered)-1
+    if af_disordered[start_idx]:
+        af_ncterm_disordered_idx.append(start_idx)
+        end_idx = start_idx-1
+        if end_idx >= 0:
+            while af_disordered[end_idx]:
+                af_ncterm_disordered_idx.append(end_idx)
+                end_idx -= 1
+                if end_idx < 0:
+                    break 
+
+    logger.info("AF N/C TERM DISORDERED RESIDUES IDX:")
+    logger.info(af_ncterm_disordered_idx)
+ 
+
+    return af_ncterm_disordered_idx
+
 
 
 def calc_disordered_percentage(pdb_path): 
@@ -184,11 +221,11 @@ def get_cholesky(cov_type, sigma, random_corr):
     return L 
 
 
-def autopopulate_state_history_dict(state_history_dict, grid_search_combinations, optimal_combination, num_total_steps):
+def autopopulate_state_history_dict(state_history_dict, grid_search_combinations, num_total_steps, optimal_combination=None, extrapolation_val=-1):
     #this is called to make early termination work 
     for i,items in enumerate(grid_search_combinations):
         if items != optimal_combination:
-            state_history_dict[items] = [-1]*num_total_steps 
+            state_history_dict[items] = [extrapolation_val]*num_total_steps 
     return state_history_dict
          
 

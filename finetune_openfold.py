@@ -428,7 +428,7 @@ def main(args):
 
     total_seq_len = sum(len(s) for s in seqs)
     if total_seq_len > SEQ_LEN_EXTRAMSA_THRESHOLD:
-       config.model.extra_msa.enabled = False 
+        config.data.custom_finetuning_train.max_extra_msa = 512
 
     if config.globals.is_multimer:
         with open('./rw_multimer_config.json') as f:

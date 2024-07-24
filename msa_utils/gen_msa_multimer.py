@@ -336,14 +336,6 @@ if __name__ == "__main__":
             #print(mgnify_src_path)
             #print(uniref90_src_path)
 
-            '''mgnify_tmp_path = '%s/mgnify_hits.a3m' % chain_alignment_dir
-            uniref90_tmp_path = '%s/uniref90_hits.a3m' % chain_alignment_dir
-
-            if os.path.exists(mgnify_src_path):
-                shutil.copyfile(mgnify_src_path, mgnify_tmp_path)
-            if os.path.exists(uniref90_src_path):
-                shutil.copyfile(uniref90_src_path, uniref90_tmp_path)''' 
-
             bfd_dst_path = '%s/bfd_uniref_hits.a3m' % chain_alignment_dir 
             mgnify_dst_path = '%s/mgnify_hits.a3m' % chain_alignment_dir
             uniref90_dst_path = '%s/uniref90_hits.a3m' % chain_alignment_dir

@@ -295,20 +295,6 @@ class ConformationBlock(nn.Module, ABC):
             no_heads=no_heads_s,
         )
                        
-        '''self.msa_att_row = MSAAttention(
-            c_in=c_m,
-            c_hidden=c_hidden_msa_att,
-            no_heads=no_heads_msa,
-            inf=inf,
-        )
-
-        self.msa_att_col = MSAColumnAttention(
-            c_m,
-            c_hidden_msa_att,
-            no_heads_msa,
-            inf=inf,
-        )'''
-
         self.pair_stack = PairStack(
             c_z=c_z,
             c_hidden_mul=c_hidden_mul,
@@ -318,7 +304,6 @@ class ConformationBlock(nn.Module, ABC):
             inf=inf,
             eps=eps
         )
-
 
         self.s_transition = Transition(
             c=c_s,

@@ -17,7 +17,7 @@ from eval_pred_conformations import get_clustered_conformations_metrics
 cluster_conformations_path = './cluster_conformations.py' 
 
 def get_uniprot_id(method_str, conformation_info_path):
-        if method_str == 'rw':
+    if method_str == 'rw':
         start_index = conformation_info_path.find('rw_predictions')+len('rw_predictions')+1
         end_index = conformation_info_path.find('alternative_conformations-verbose')-1
     elif method_str == 'benchmark':
@@ -34,36 +34,42 @@ def cluster_conformations_wrapper(script_arguments):
 
 
 
-def get_out_df(method_str, conformational_states_df):
+def get_out_df(method_str, template_str, conformational_states_df):
 
     monomer_or_multimer = 'monomer'
 
     if method_str == 'rw':
-        conformation_info_pattern = './conformational_states_testing_data/rw_predictions/**/conformation_info.pkl'
+        conformation_info_pattern = './conformational_states_testing_data/rw_predictions/*/*/%s/**/conformation_info.pkl' % template_str
     elif method_str == 'benchmark':
-        conformation_info_pattern = './conformational_states_testing_data/benchmark_predictions/**/conformation_info.pkl'
+        conformation_info_pattern = './conformational_states_testing_data/benchmark_predictions/*/*/%s/conformation_info.pkl' % template_str 
 
     files = glob.glob(conformation_info_pattern, recursive=True)
 
     if method_str == 'rw':
-        conformation_info_files_all = [] 
+        conformation_info_files_all_uniprot_id = [] 
         for f in files:
             if 'target=conformation0' in f:
-                conformation_info_files_all.append(f)
+                conformation_info_files_all_uniprot_id.append(f)
     else:
-        conformation_info_files_all = files 
+        conformation_info_files_all_uniprot_id = files 
 
-    conformation_info_dir_all = [] 
-    for f in conformation_info_files_all:
-        conformation_info_dir = conformation_info_files_all[0][0:conformation_info_files_all[0].rindex('/')]
-        conformation_info_dir = conformation_info_dir[0:conformation_info_dir.rindex('/')]
-        conformation_info_dir_all.append(conformation_info_dir)
+    conformation_info_dir_all_uniprot_id = [] 
+    for f in conformation_info_files_all_uniprot_id:
+        conformation_info_dir = f[0:f.rindex('/')]
+        if method_str == 'rw':
+            conformation_info_dir = conformation_info_dir[0:conformation_info_dir.rindex('/')] #grandparent dir for rw 
+        conformation_info_dir_all_uniprot_id.append(conformation_info_dir)
 
-    for f in conformation_info_dir_all:
+    print('**********************************')
+    print(conformation_info_dir_all_uniprot_id)
+    print(len(conformation_info_dir_all_uniprot_id))
+    print('**********************************')
+
+    for f in conformation_info_dir_all_uniprot_id:
 
         arg1 = '--conformation_info_dir=%s' % f
-        arg2 = '--skip_relaxation'
-        script_arguments = [arg1,arg2]
+        #arg2 = '--skip_relaxation'
+        script_arguments = [arg1]
         cluster_conformations_wrapper(script_arguments)
 
         cluster_representative_conformation_info_fname = glob.glob('%s/**/cluster_representative_conformation_info.pkl' % f, recursive=True)[0]
@@ -79,5 +85,7 @@ def get_out_df(method_str, conformational_states_df):
 
 
 conformational_states_df = pd.read_csv('./conformational_states_testing_data/dataset/conformational_states_testing_data_processed_adjudicated.csv')
-get_out_df('rw', conformational_states_df)
-get_out_df('benchmark', conformational_states_df)
+
+template_str = 'template=none' 
+get_out_df('rw', template_str, conformational_states_df)
+get_out_df('benchmark', template_str, conformational_states_df)

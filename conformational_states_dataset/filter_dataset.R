@@ -1,7 +1,7 @@
 library(dplyr)
 library(ggplot2)
 
-home_dir = '/home/ishan/Lasker/openfold/conformational_states_dataset'
+home_dir = './conformational_states_dataset'
 
 conformational_states_df = read.csv(paste(home_dir,'data/conformational_states_df.csv',sep='/'))
 conformational_states_df$seg_len = abs(conformational_states_df$seg_end-conformational_states_df$seg_start)+1

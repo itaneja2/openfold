@@ -77,7 +77,7 @@ for index,row in conformational_states_df.iterrows():
         print(seq_embeddings.shape)
 
         key = '%s-%s' % (uniprot_id, template_pdb_id)
-        seq_embeddings_dict[key] = seq_embeddings
+        seq_embeddings_dict[key] = (seq,seq_embeddings)
 
     '''if index == 1: 
         print('SAVING CHECKPOINT EMBEDDINGS') 

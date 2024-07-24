@@ -12,6 +12,7 @@ import sys
 import shutil 
 from scipy.spatial.distance import pdist
 import ml_collections as mlc
+import torch 
 
 from custom_openfold_utils.pdb_utils import clean_pdb
 from openfold.utils.script_utils import relax_protein
@@ -19,8 +20,7 @@ from openfold.np.protein import from_pdb_string
 
 asterisk_line = '******************************************************************************'
 
-def remove_files_in_dir(path):
-    file_list = glob.glob('%s/*.pdb' % path)
+def remove_files(file_list):
     for f in file_list:
         print('removing old file: %s' % f)
         os.remove(f)
@@ -88,6 +88,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--skip_relaxation", action="store_true", default=False
     )
+    parser.add_argument(
+        "--overwrite", action="store_true", default=False
+    )
 
     args = parser.parse_args()
 
@@ -102,6 +105,23 @@ if __name__ == "__main__":
             }
         }
     )
+
+    if args.plddt_threshold is None:
+        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (args.conformation_info_dir, args.num_clusters)
+    else:
+        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=%s' % (args.conformation_info_dir, args.num_clusters, str(args.plddt_threshold))
+
+    os.makedirs(cluster_dir, exist_ok=True)
+
+    cluster_representative_conformation_info_fname = '%s/cluster_representative_conformation_info.pkl' % cluster_dir
+    pdb_files = glob.glob('%s/*.pdb' % cluster_dir) 
+    if os.path.exists(cluster_representative_conformation_info_fname):
+        if not(args.overwrite):
+            print("SKIPPING CLUSTERING PROCEDURE, %s ALREADY EXISTS:" % cluster_representative_conformation_info_fname)
+            sys.exit(0)
+    else:
+        remove_files(pdb_files)
+
 
     pattern = "%s/conformation_info.pkl" % args.conformation_info_dir
     files = glob.glob(pattern, recursive=True)
@@ -128,7 +148,6 @@ if __name__ == "__main__":
     conformation_info_all = [] 
     ca_pdist_all = [] 
     for key in conformation_info:
-        print('KEY: %s' % key)
         for i,val in enumerate(conformation_info[key]):
             pdb_path = val[0]
             rmsd = val[1]
@@ -173,13 +192,6 @@ if __name__ == "__main__":
 
     print(cluster_representative_conformation_info_dict)
 
-    if args.plddt_threshold is None:
-        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=None' % (args.conformation_info_dir, args.num_clusters)
-    else:
-        cluster_dir = '%s/cluster_representative_structures/num_clusters=%d/plddt_threshold=%s' % (args.conformation_info_dir, args.num_clusters, str(args.plddt_threshold))
-
-    os.makedirs(cluster_dir, exist_ok=True)
-    remove_files_in_dir(cluster_dir)
 
     for cluster_num in cluster_representative_conformation_info_dict:
         pdb_source_path = cluster_representative_conformation_info_dict[cluster_num][0]
@@ -203,7 +215,7 @@ if __name__ == "__main__":
                               output_fname)
 
 
-        cluster_representative_conformation_info_dict[cluster_num].append(pdb_target_path)
+        cluster_representative_conformation_info_dict[cluster_num].append(os.path.abspath(pdb_target_path))
 
 
     cluster_representative_conformation_info_fname = '%s/cluster_representative_conformation_info.pkl' % cluster_dir

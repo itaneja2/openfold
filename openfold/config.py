@@ -78,7 +78,8 @@ def model_config(
         c.data.common.use_template_torsion_angles = False 
         c.data.common.max_recycling_iters = 0 
     elif "custom_finetuning" in name and "multimer" not in name:
-        c.data.custom_finetuning_train.max_extra_msa = 5120 
+        c.data.custom_finetuning_train.max_extra_msa = 1024
+        c.data.predict.max_extra_msa = 1024 
         c.data.common.reduce_max_clusters_by_max_templates = True
         c.data.common.use_templates = True
         c.data.common.use_template_torsion_angles = True
@@ -844,12 +845,6 @@ config = mlc.ConfigDict(
             },
             "phi_theta": {
                 "weight": 1.0,
-            },
-            "r": { 
-                "weight": 0.0,
-            },
-            "vector_dot_product": {
-                "weight": 0.0,
             },
             "eps": eps,
         },

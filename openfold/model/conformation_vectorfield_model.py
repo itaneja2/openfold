@@ -38,7 +38,7 @@ from openfold.model.structure_module import (
 
 
 class ConformationEmbedder(nn.Module):
-    def __init__(self, config, c_t=83, c_z=128):
+    def __init__(self, config, c_t=39, c_z=128):
         super(ConformationEmbedder, self).__init__()
         
         self.config = config

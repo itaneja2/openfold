@@ -186,7 +186,9 @@ def build_conformation_pair_feat(
     tpb = torch.squeeze(batch["template_pseudo_beta"], dim=-1)
     dgram = dgram_from_positions(tpb, min_bin, max_bin, no_bins, inf)
 
-    to_concat = [dgram]
+    return dgram 
+
+    '''to_concat = [dgram]
 
     aatype_one_hot = nn.functional.one_hot(
         batch["template_aatype"],
@@ -207,7 +209,7 @@ def build_conformation_pair_feat(
 
     act = torch.cat(to_concat, dim=-1)
 
-    return act
+    return act'''
 
 
 

@@ -232,6 +232,9 @@ class OpenFoldSingleDataset(torch.utils.data.Dataset):
                 file_id, = spl
                 chain_id = None
 
+            if self.mode == 'custom_finetuning_train':
+                chain_id = 'A' #assumes ground truth conformation arises from a AF-based monomer prediction, in which case chain=A
+
             path = os.path.join(self.data_dir, file_id)
 
             if self._structure_index is not None:

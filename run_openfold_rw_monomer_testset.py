@@ -30,16 +30,6 @@ from torch import nn
 from Bio.PDB import PDBParser
 from Bio.PDB.DSSP import dssp_dict_from_pdb_file
 
-torch_versions = torch.__version__.split(".")
-torch_major_version = int(torch_versions[0])
-torch_minor_version = int(torch_versions[1])
-if(
-    torch_major_version > 1 or
-    (torch_major_version == 1 and torch_minor_version >= 12)
-):
-    # Gives a large speedup on Ampere-class GPUs
-    torch.set_float32_matmul_precision("high")
-
 from openfold.config import model_config
 from openfold.data import templates, feature_pipeline, data_pipeline
 from openfold.np import residue_constants, protein
@@ -309,10 +299,12 @@ def restart_incomplete_iterations(output_dir, args):
     return should_run_rw 
 
 
-def run_rw_all():
+def run_rw_af2sample_dataset():
  
     conformational_states_df = pd.read_csv('./conformational_states_testing_data/dataset/conformational_states_testing_data_processed_adjudicated.csv')
-    #conformational_states_df = conformational_states_df[conformational_states_df['seg_len'] <= 600]
+
+    conformational_states_df = conformational_states_df[conformational_states_df['any_structures_present_in_training_set'] == 'n']
+    conformational_states_df = conformational_states_df[conformational_states_df['uniprot_id'] == 'Q53W80']
     conformational_states_df = conformational_states_df.sort_values('seg_len').reset_index(drop=True) 
 
     for index,row in conformational_states_df.iterrows():
@@ -341,10 +333,9 @@ def run_rw_all():
             logger.info(asterisk_line)
             output_dir_base = './conformational_states_testing_data/rw_predictions/%s' % uniprot_id 
             args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
-            if index == 0:
-                args.skip_bootstrap_phase = True 
-                #args.num_bootstrap_steps = 3
-                #args.num_bootstrap_hp_tuning_steps = 1
+            #if index == 0:
+                #args.skip_bootstrap_phase = True 
+                #args.skip_gd_phase = True 
             output_dir = '%s/%s/%s/%s/rw-%s/train-%s' % (output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config, args.rw_hp_config, args.train_hp_config)
             should_run_rw = restart_incomplete_iterations(output_dir, args)
             if should_run_rw:
@@ -353,6 +344,54 @@ def run_rw_all():
             else:
                 logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
 
-        break 
 
-run_rw_all() 
+
+def run_rw_custom_dataset():
+ 
+    conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated_post_AF_training_final.csv')
+
+    conformational_states_df = conformational_states_df[conformational_states_df['any_structures_present_in_training_set'] == 'n']
+    conformational_states_df = conformational_states_df.sort_values('seg_len').reset_index(drop=True) 
+
+    for index,row in conformational_states_df.iterrows():
+
+        logger.info('On row %d of %d' % (index, len(conformational_states_df)))  
+        logger.info(asterisk_line)
+        logger.info(row)
+ 
+        uniprot_id = str(row['uniprot_id'])
+        pdb_id_msa = str(row['pdb_id_outside_training_set'])
+        if pdb_id_msa == 'both':
+            pdb_id_msa = str(row['pdb_id_ref'])
+
+        for j in [1]:
+
+            if j == 0:
+                use_templates = True
+                template_str = 'template=default' 
+            else:
+                use_templates = False
+                template_str = 'template=none' 
+            
+            alignment_dir = './conformational_states_testing_data/alignment_data/%s/%s' % (uniprot_id,pdb_id_msa)
+            seed = index #keep seed constant per uniprot_id  
+            logger.info(asterisk_line)
+            logger.info('TEMPLATE = %s' % template_str)
+            logger.info('SEED = %d' % seed) 
+            logger.info(asterisk_line)
+            output_dir_base = './conformational_states_testing_data/rw_predictions/%s' % uniprot_id 
+            args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
+            #if index == 0:
+                #args.skip_bootstrap_phase = True 
+                #args.skip_gd_phase = True 
+            output_dir = '%s/%s/%s/%s/rw-%s/train-%s' % (output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config, args.rw_hp_config, args.train_hp_config)
+            should_run_rw = restart_incomplete_iterations(output_dir, args)
+            if should_run_rw:
+                logger.info("RUNNING %s" % output_dir)
+                run_rw_pipeline(args)
+            else:
+                logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
+
+
+
+run_rw_af2sample_dataset() 

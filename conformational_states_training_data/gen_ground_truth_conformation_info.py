@@ -27,7 +27,6 @@ def get_pdb_pred_path(pdb_pred_dir):
         print('no pdb predictions exist in %s' % pdb_pred_dir)
         return [] 
     else:
-        print(files_in_pdb_pred_dir)
         pdb_pred_path = files_in_pdb_pred_dir[0]
         print('reading %s' % pdb_pred_path)
     
@@ -71,7 +70,6 @@ def get_bootstrap_candidate_conformations(
 
 
 def save_ground_truth_conformation(pdb_model_name, uniprot_id):
-    #for training, we need the original mmcif 
     pdb_id, chain_id = pdb_model_name.split('_')
     cif_output_dir = './ground_truth_conformation_data/%s' % uniprot_id
     os.makedirs(cif_output_dir, exist_ok=True)
@@ -110,6 +108,7 @@ def save_gtc_metadata(data, output_fname):
  
 conformational_states_df = pd.read_csv('../conformational_states_dataset/dataset/conformational_states_filtered_adjudicated.csv')
 conformational_states_df = conformational_states_df[conformational_states_df['use'] == 'y'].reset_index(drop=True)
+#conformational_states_df = conformational_states_df[conformational_states_df['uniprot_id'] == 'O60989'].reset_index(drop=True)
 
 af_conformations_residues_mask_dict = {}
 pdb_conformations_residues_ignore_idx_dict = {} 
@@ -147,7 +146,7 @@ for index,row in conformational_states_df.iterrows():
 
     pdb_ref_ignore_residues_idx, pdb_state_i_ignore_residues_idx = get_residues_ignore_idx_between_pdb_conformations(pdb_ref_path, pdb_state_i_path, pdb_ref_af_pred_path, pdb_state_i_af_pred_path)
  
-    #this is not used for training, just for later downstream analysis 
+    #this is not used for training, just here for reference  
     pdb_conformations_residues_ignore_idx_dict[pdb_model_name_ref] = pdb_ref_ignore_residues_idx
     pdb_conformations_residues_ignore_idx_dict[pdb_model_name_state_i] = pdb_state_i_ignore_residues_idx
  
@@ -162,13 +161,15 @@ for index,row in conformational_states_df.iterrows():
             boostrap_candidate_conformations = get_bootstrap_candidate_conformations(conformation_info)
             num_candidate_conformations_state_i = len(boostrap_candidate_conformations)
             key = '%s-%s' % (uniprot_id, pdb_model_name_state_i)
-            template_id_rw_conformation_path_dict[key] = boostrap_candidate_conformations
-        else:
+            if len(boostrap_candidate_conformations) > 0:
+                template_id_rw_conformation_path_dict[key] = boostrap_candidate_conformations
+        elif pdb_model_name_ref in rw_conformation_info[i]:
             print('pdb_ref')
             boostrap_candidate_conformations = get_bootstrap_candidate_conformations(conformation_info)
             num_candidate_conformations_ref = len(boostrap_candidate_conformations)
             key = '%s-%s' % (uniprot_id, pdb_model_name_ref)
-            template_id_rw_conformation_path_dict[key] = boostrap_candidate_conformations
+            if len(boostrap_candidate_conformations) > 0:
+                template_id_rw_conformation_path_dict[key] = boostrap_candidate_conformations
 
         boostrap_candidate_conformations_all.extend(boostrap_candidate_conformations)
 
@@ -244,7 +245,7 @@ for index,row in conformational_states_df.iterrows():
 
     num_rows_included += 1 
 
-    if index > 0 and index % 100 == 0: 
+    '''if index > 0 and index % 100 == 0: 
         print('SAVING CHECKPOINT TRAINING DATA')
         index_str = '_%d' % index  
         print('saving rmsd_dict')   
@@ -258,8 +259,7 @@ for index,row in conformational_states_df.iterrows():
         print('saving conformation_vectorfield_dict')
         save_conformation_vectorfield_training_data(conformation_vectorfield_dict, 'conformation_vectorfield_dict%s' % index_str)
         print('saving template_id_rw_conformation_path_dict')
-        save_conformation_vectorfield_training_data(template_id_rw_conformation_path_dict, 'template_id_rw_conformation_path_dict%s' % index_str) 
-
+        save_conformation_vectorfield_training_data(template_id_rw_conformation_path_dict, 'template_id_rw_conformation_path_dict%s' % index_str)''' 
 
 
 

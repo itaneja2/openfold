@@ -101,8 +101,8 @@ def fetch_pdb_metadata_df(pdb_id):
 def fetch_pdb(pdb_id: str, save_dir: str, clean=False) -> str:
 
     """
-    Args:
-        pdb_id: e.g 1xyz_A or 1xyz
+    args:
+        pdb_id: e.g 1xyz_a or 1xyz
         save_dir: e.g ./pdb_raw_structures_folder
     """ 
 
@@ -121,7 +121,7 @@ def fetch_pdb(pdb_id: str, save_dir: str, clean=False) -> str:
     else:
         cmd.fetch(pdb_id, async_=0)
         cmd.save(pdb_save_path, pdb_id)
-        chain_id_list = None
+        chain_id_list = none
     cmd.delete('all')
 
     if len(pdb_id.split('_')) > 1:
