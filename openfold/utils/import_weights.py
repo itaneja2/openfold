@@ -138,7 +138,7 @@ def assign(translation_dict, orig_weights):
                 raise
 
 
-def generate_translation_dict(model, version, is_multimer=False, chain_mask=False, num_chains=None):
+def generate_translation_dict(model, version, no_template, is_multimer=False, chain_mask=False, num_chains=None):
     #######################
     # Some templates
     #######################
@@ -698,7 +698,7 @@ def generate_translation_dict(model, version, is_multimer=False, chain_mask=Fals
         "model_5_ptm",
     ]
 
-    if version not in no_templ:
+    if version not in no_templ and not(no_template):
         tps_blocks = model.template_embedder.template_pair_stack.blocks
         tps_blocks_params = stacked(
             [TemplatePairBlockParams(b) for b in tps_blocks]
@@ -848,20 +848,17 @@ def load_jax_weights_chainmask(npz_orig_path, npz_chainmask_path, num_chains):
 
     return data_w_chainmask 
 
-def import_jax_weights_(config, model, npz_path, version="model_1"):
+def import_jax_weights_(config, model, npz_path, no_template=False, version="model_1"):
   
-    chain_mask = False 
-    num_chains = None
     if config.model.use_chainmask:
         num_chains = config.custom_fine_tuning.num_chains
         os.makedirs('./openfold/chainmask_params/num_chains=%d' % num_chains, exist_ok=True)
         npz_chainmask_path = './openfold/chainmask_params/num_chains=%d/%s' % (num_chains, npz_path.split('/')[-1])
         data = load_jax_weights_chainmask(npz_path, npz_chainmask_path, num_chains)
-        chain_mask = True
+        translations = generate_translation_dict(model, version, no_template, is_multimer=("multimer" in version),  chain_mask=True, num_chains=num_chains)
     else:
         data = np.load(npz_path) 
-
-    translations = generate_translation_dict(model, version, is_multimer=("multimer" in version),  chain_mask=chain_mask, num_chains=num_chains)
+        translations = generate_translation_dict(model, version, no_template, is_multimer=("multimer" in version),  chain_mask=False, num_chains=None)
 
     # Flatten keys and insert missing key prefixes
     flat = process_translation_dict(translations)

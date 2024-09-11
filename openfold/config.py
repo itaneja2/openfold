@@ -71,13 +71,8 @@ def model_config(
     if name == "initial_training":
         # AF2 Suppl. Table 4, "initial training" setting
         pass
-    elif name == 'conformation_vectorfield':
-        c.data.data_module.data_loaders.num_workers = 1
-        c.data.data_module.data_loaders.batch_size = 1
-        c.data.data_module.data_loaders.num_conformations_to_sample = 8
-        c.data.common.use_template_torsion_angles = False 
-        c.data.common.max_recycling_iters = 0 
     elif "custom_finetuning" in name and "multimer" not in name:
+        #this is used for gradient descent phase of randomwalk pipeline
         c.data.custom_finetuning_train.max_extra_msa = 1024
         c.data.predict.max_extra_msa = 1024 
         c.data.common.reduce_max_clusters_by_max_templates = True
@@ -232,6 +227,7 @@ def model_config(
             c.model.use_chainmask = True
 
         if 'custom_finetuning' in name:
+            #this is used for gradient descent phase of randomwalk pipeline
             if len(name.split('-')) != 5:
                 raise ValueError("5 components required in config_preset")
                 print(name)
@@ -711,31 +707,6 @@ config = mlc.ConfigDict(
                 "epsilon": eps,  # 1e-12,
                 "inf": 1e5,
             },
-            "conformation_stack": {
-                "c_s": c_s,
-                "c_z": c_z,
-                "c_hidden_s_att": 32,
-                "c_hidden_mul": 128,
-                "c_hidden_pair_att": 32,
-                "no_heads_s": 8,
-                "no_heads_pair": 4,
-                "no_blocks": 4,
-                "transition_n": 4,
-                "clear_cache_between_blocks": False,
-                "tune_chunk_size": tune_chunk_size,
-                "blocks_per_ckpt": 1,
-                "inf": 1e9,
-                "eps": eps,  # 1e-10,
-            },
-            "conformation_vectorfield_module": {
-                "c_esm": 1536,
-                "c_s": c_s,
-                "c_resnet": 128,
-                "no_resnet_blocks": 2,
-                "epsilon": eps,  # 1e-12,
-                "inf": 1e5,
-            },
-
             "heads": {
                 "lddt": {
                     "no_bins": 50,

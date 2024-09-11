@@ -332,17 +332,9 @@ if __name__ == "__main__":
                 elif 'uniref90' in obj.key:
                     uniref90_src_path = output_fname
 
-            #print(bfd_src_path)
-            #print(mgnify_src_path)
-            #print(uniref90_src_path)
-
             bfd_dst_path = '%s/bfd_uniref_hits.a3m' % chain_alignment_dir 
             mgnify_dst_path = '%s/mgnify_hits.a3m' % chain_alignment_dir
             uniref90_dst_path = '%s/uniref90_hits.a3m' % chain_alignment_dir
-
-            #print(bfd_dst_path)
-            #print(mgnify_dst_path)
-            #print(uniref90_dst_path)
 
             if os.path.exists(mgnify_src_path):
                 shutil.copyfile(mgnify_src_path, mgnify_dst_path)

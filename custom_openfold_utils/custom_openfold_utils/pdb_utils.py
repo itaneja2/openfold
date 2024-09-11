@@ -42,6 +42,7 @@ import requests
 import urllib.request
 
 from pymol import cmd
+from scipy.spatial.distance import pdist
 from prody import * 
 
 logger = logging.getLogger(__file__)
@@ -309,13 +310,42 @@ def get_ca_coords_dict(pdb_path):
             residue_name = residue.get_resname()
             residue_idx = residue.get_id()[1]-1
             residue_idx_ca_coords_dict[residue_idx] = (ca_coords[0], ca_coords[1], ca_coords[2], residue_name)
-        '''else:
-            print(residue)
-            print(residue.get_id()[1]-1)
-            for atom in residue:
-                print(f"  Atom: {atom.get_name()} {atom.get_coord()}") # Print atom name and coordinates'''
 
     return residue_idx_ca_coords_dict
+
+
+def get_ca_pairwise_dist(pdb_fname, residues_include_idx=None):  
+    # Initialize a PDB parser
+  
+    if '.pdb' in pdb_fname:
+        parser = PDBParser(QUIET=True)
+    elif '.cif' in pdb_fname:
+        parser = MMCIFParser(QUIET=True)
+
+    # Load the CIF file
+    structure = parser.get_structure('structure', pdb_fname)
+
+    model = structure[0]
+    # Extract CA coordinates
+    ca_coordinates = []
+    for chain in model:
+        for residue in chain:
+            if residue.has_id('CA'):
+                residue_idx = residue.id[1]-1
+                #print(residue_idx) 
+                if residues_include_idx is None:
+                    ca_atom = residue['CA']
+                    ca_coordinates.append(list(ca_atom.get_coord()))
+                else:
+                    if residue_idx in residues_include_idx:
+                        ca_atom = residue['CA']
+                        ca_coordinates.append(list(ca_atom.get_coord()))
+
+    ca_coordinates = np.array(ca_coordinates)           
+    ca_pairwise_dist = pdist(ca_coordinates, 'euclidean')
+ 
+    return ca_pairwise_dist
+
 
 
 def get_bfactor(cif_path: str):
@@ -581,7 +611,7 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
     tm_score = tmalign_wrapper(pdb1_input_path, pdb2_output_path)
     logger.info('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
  
-    return rmsd, tm_score, pdb1_path, pdb2_path
+    return rmsd, tm_score, pdb1_input_path, pdb2_output_path
 
 
 def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, pdb2_source: str, pdb1_path: str, pdb2_path: str, save_dir: str):
@@ -654,7 +684,7 @@ def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, p
     rmsd = align_and_get_rmsd(pdb1_input_path, pdb2_output_path, pdb1_chain, pdb2_chain)
     logger.info('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
 
-    return rmsd, pdb1_path, pdb2_path
+    return rmsd, pdb1_input_path, pdb2_output_path
  
 
 
@@ -683,6 +713,7 @@ def _get_pdb_string(topology: openmm_app.Topology, positions: unit.Quantity):
         return f.getvalue()
 
 def clean_pdb(pdb_path: str, pdb_str: str, add_missing_residues: bool = False):
+
     pdb_file = io.StringIO(pdb_str)
     alterations_info = {}
     if add_missing_residues:
@@ -699,7 +730,7 @@ def clean_pdb(pdb_path: str, pdb_str: str, add_missing_residues: bool = False):
 
 
 def renumber_chain_wrt_reference(pdb_modify_path, pdb_ref_path):
-    # Parse the PDB files
+    
     parser = PDBParser()
     logger.info('Renumbering chains of %s to match %s' % (pdb_modify_path, pdb_ref_path))
     structure_to_modify = parser.get_structure('renumber', pdb_modify_path)
@@ -718,7 +749,6 @@ def renumber_chain_wrt_reference(pdb_modify_path, pdb_ref_path):
             chain.id = reference_chains_list[chain_num]
             chain_num += 1
 
-    # Save the modified structure
     io = PDBIO()
     io.set_structure(structure_to_modify)
     io.save(pdb_modify_path)

@@ -1,0 +1,10 @@
+uniprot_id,seg_start,seg_end,pdb_id_ref,pdb_id_state_i,pdb_id_msa,openprotein_present,pdb_id_ref_date,pdb_id_ref_exp_method,pdb_id_ref_resolution,pdb_id_state_i_date,pdb_id_state_i_exp_method,pdb_id_state_i_resolution,seg_len
+P31133,27,370,7oyz_A,6yed_B,7oyz_A,True,2021-06-25,X-ray,1.49,2020-03-24,X-ray,2.18,344
+P21589,1,553,4h2b_A,7jv8_A,4h2b_A,True,2012-09-12,X-ray,1.7,2020-08-20,X-ray,2.46,553
+A0QTT2,1,439,7cyr_A,7cy2_A,7cy2_A,True,2020-09-04,X-ray,2.05,2020-09-03,X-ray,2.75,439
+P62495,1,437,1dt9_A,6zme_CH,1dt9_A,True,2000-01-12,X-ray,2.7,2020-07-02,EM,3.0,437
+P71447,1,221,6hdh_A,6ydj_A,6hdh_A,True,2018-08-17,X-ray,1.62,2020-03-20,X-ray,1.04,221
+Q53W80,19,434,7c63_A,7c67_A,7c63_A,True,2020-05-21,X-ray,1.63,2020-05-21,X-ray,2.0,416
+P43005,1,524,8cua_C,6x2l_B,8cua_C,False,2022-05-17,EM,2.44,2020-05-20,EM,2.85,524
+M1VAN7,93,696,7dqv_A,3wmf_A,7dqv_A,True,2020-12-24,X-ray,2.15,2013-11-18,X-ray,2.6,604
+P30878,1,476,4m64_A,7l16_A,4m64_A,True,2013-08-08,X-ray,3.35,2020-12-14,X-ray,3.15,476

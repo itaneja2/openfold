@@ -18,6 +18,43 @@ from custom_openfold_utils.pdb_utils import get_ca_coords_dict, get_ca_coords_ma
 logger = logging.getLogger(__file__)
 logger.setLevel(level=logging.INFO)
 
+
+def get_rmsf(pdb1_seq, pdb2_seq, pdb1_path, pdb2_path, pdb1_include_idx, pdb2_include_idx, pdb1_exclude_idx=[], pdb2_exclude_idx=[]):
+
+    pdb1_seq_aligned, pdb2_seq_aligned, pdb1_seq_aligned_to_original_idx_mapping, pdb2_seq_aligned_to_original_idx_mapping = align_seqs(pdb1_seq, pdb2_seq)
+
+    pdb1_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb1_path)
+    pdb2_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb2_path)
+ 
+    pdb1_ca_pos_aligned = []
+    pdb2_ca_pos_aligned = [] 
+
+    pdb1_residue_idx_below_threshold = []
+    pdb2_residue_idx_below_threshold = [] 
+
+    #print(pdb1_residue_idx_ca_coords_dict)
+    #print('****')
+    #print(pdb2_residue_idx_ca_coords_dict)
+
+    out = []     
+
+    for i in range(0,len(pdb1_seq_aligned)):
+        if (pdb1_seq_aligned[i] == pdb2_seq_aligned[i]) and (pdb1_seq_aligned[i] != '-'):
+            pdb1_seq_original_idx = pdb1_seq_aligned_to_original_idx_mapping[i]
+            pdb2_seq_original_idx = pdb2_seq_aligned_to_original_idx_mapping[i]
+            valid_idx = (pdb1_seq_original_idx in pdb1_include_idx) and (pdb2_seq_original_idx in pdb2_include_idx) and (pdb1_seq_original_idx not in pdb1_exclude_idx) and (pdb2_seq_original_idx not in pdb2_exclude_idx)
+            if valid_idx:
+                #print("aligned idx for pdb1: %d, seq idx: %d:" % (i, pdb1_seq_original_idx))
+                #print("aligned idx for pdb2: %d, seq idx: %d:" % (i, pdb2_seq_original_idx))
+                if pdb1_seq_original_idx in pdb1_residue_idx_ca_coords_dict and pdb2_seq_original_idx in pdb2_residue_idx_ca_coords_dict:
+                    pdb1_ca_pos = list(pdb1_residue_idx_ca_coords_dict[pdb1_seq_original_idx][0:3])
+                    pdb2_ca_pos = list(pdb2_residue_idx_ca_coords_dict[pdb2_seq_original_idx][0:3])
+                    curr_ca_rmsf = np.linalg.norm(np.array(pdb1_ca_pos) - np.array(pdb2_ca_pos))
+                    out.append([pdb1_seq_original_idx+1,pdb2_seq_original_idx+1,pdb1_seq_aligned[i],pdb2_seq_aligned[i],curr_ca_rmsf])
+ 
+    return out
+
+
  
 def get_residue_idx_below_rmsf_threshold(pdb1_seq, pdb2_seq, pdb1_path, pdb2_path, pdb1_include_idx, pdb2_include_idx, pdb1_exclude_idx, pdb2_exclude_idx, rmsf_threshold=1.0):
 
@@ -241,6 +278,55 @@ def get_residues_ignore_idx_between_pdb_af_conformation(pdb_path, af_path, af_in
     return af_residues_ignore_idx
 
 
+def get_comparison_residues_idx_between_pdb_af_conformation(pdb_path, af_initial_pred_path):
+
+    """Compare residues based on:
+        1. disorder
+        2. common residues
+
+        af_initial_pred_path is to determine disordered residues
+        and corresponds to a standard, vanila AF prediction
+        while af_path corresponds to a perturbed prediction  
+
+    """  
+
+    pdb_seq = get_pdb_path_seq(pdb_path, None)
+    af_seq = get_pdb_path_seq(af_initial_pred_path, None)
+
+    try: 
+        af_disordered_domains_idx, _ = get_af_disordered_domains(af_initial_pred_path)      
+    except ValueError as e:
+        print('TROUBLE PARSING AF PREDICTION %s' % af_initial_pred_path) 
+        print(e)
+        print('SKIPING THIS INPUT...')
+        return None
+
+    pdb_disordered_residues_idx, _ = get_pdb_disordered_residues(af_seq, pdb_seq, af_disordered_domains_idx) 
+    af_disordered_residues_idx = get_af_disordered_residues(af_disordered_domains_idx)
+     
+    print('PDB seq:')       
+    print(pdb_seq)
+    print('AF seq:')       
+    print(af_seq)
+
+    pdb_common_residues_idx, af_common_residues_idx = get_residues_idx_in_seq1_and_seq2(pdb_seq, af_seq)
+    af_common_residue_idx_ignoring_disordered_residues = [idx for idx in af_common_residues_idx if idx not in af_disordered_residues_idx]
+    pdb_common_residue_idx_ignoring_disordered_residues = [idx for idx in pdb_common_residues_idx if idx not in pdb_disordered_residues_idx]
+    
+    print('AF common residues idx:')
+    print(af_common_residues_idx)
+    print('AF disordered:')
+    print(af_disordered_residues_idx)
+    print('PDB common residues idx:')
+    print(pdb_common_residues_idx)
+    print('PDB disordered:')
+    print(pdb_disordered_residues_idx)
+
+
+    return af_common_residue_idx_ignoring_disordered_residues, pdb_common_residue_idx_ignoring_disordered_residues
+
+
+
 def get_residues_ignore_idx_between_af_conformations(conformation1_af_path, conformation2_af_path, af_initial_pred_path, rmsf_threshold=1.0):
 
     """Ignore residues based on:
@@ -280,68 +366,17 @@ def get_residues_ignore_idx_between_af_conformations(conformation1_af_path, conf
 
     return af_residues_ignore_idx
 
- 
 
-def cartesian_to_spherical(ca_pos_diff):
-    """Converts a cartesian coordinate (x, y, z) into a spherical one (radius, theta, phi)."""
+def get_rmsf_pdb_af_conformation(pdb_path, af_path):
 
-    #utilizing this convention: https://dynref.engr.illinois.edu/rvs.html
-    ##https://gist.github.com/overdev/d0acea5729d43086b4841efb8f27c8e2
-    radius = np.linalg.norm(ca_pos_diff, axis=1)
-    xy_norm = np.linalg.norm(ca_pos_diff[:,0:2], axis=1)
-    phi = np.arctan2(xy_norm, ca_pos_diff[:,2]) #inclination, range 0-Pi
-    theta = np.arctan2(ca_pos_diff[:,1], ca_pos_diff[:,0]) #azimuth, range -Pi to Pi
+    print(pdb_path)
+    print(af_path)
 
-    return phi, theta, radius
-
-
-def get_conformation_vectorfield_spherical_coordinates(af_pred_path, pdb_path, af_residues_ignore_idx):
-
-    #transformation taking af_pred_path --> pdb_path
-
-    af_pred_seq = get_pdb_path_seq(af_pred_path, None)
     pdb_seq = get_pdb_path_seq(pdb_path, None)
-    af_pred_seq_aligned, pdb_seq_aligned, af_pred_seq_aligned_to_original_idx_mapping, pdb_seq_aligned_to_original_idx_mapping = align_seqs(af_pred_seq, pdb_seq)
+    af_seq = get_pdb_path_seq(af_path, None)
 
-    af_pred_residue_idx_ca_coords_dict = get_ca_coords_dict(af_pred_path)
-    pdb_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb_path)
-    
-    af_residues_include_idx = [] 
+    pdb_common_residues_idx, af_common_residues_idx = get_residues_idx_in_seq1_and_seq2(pdb_seq, af_seq)
+    out = get_rmsf(pdb_seq, af_seq, pdb_path, af_path, pdb_common_residues_idx, af_common_residues_idx)
+    out_df = pd.DataFrame(out, columns=['pdb_residue_num','af_residue_num','pdb_residue_name','af_residue_name','rmsf']) 
 
-    pdb_ca_pos_aligned = []
-    af_pred_ca_pos_aligned = [] 
-
-    for i in range(0,len(af_pred_seq_aligned)):
-        if af_pred_seq_aligned[i] != '-' and pdb_seq_aligned[i] != '-':
-            pdb_seq_original_idx = pdb_seq_aligned_to_original_idx_mapping[i]
-            af_pred_seq_original_idx = af_pred_seq_aligned_to_original_idx_mapping[i]
-            if af_pred_seq_original_idx not in af_residues_ignore_idx and pdb_seq_original_idx in pdb_residue_idx_ca_coords_dict:
-                af_residues_include_idx.append(af_pred_seq_original_idx)
-                pdb_ca_pos = list(pdb_residue_idx_ca_coords_dict[pdb_seq_original_idx][0:3]) 
-                af_pred_ca_pos = list(af_pred_residue_idx_ca_coords_dict[af_pred_seq_original_idx][0:3])
-                pdb_ca_pos_aligned.append(pdb_ca_pos)
-                af_pred_ca_pos_aligned.append(af_pred_ca_pos)
-            else:
-                pdb_ca_pos_aligned.append([0,0,0])
-                af_pred_ca_pos_aligned.append([0,0,0])
-        elif af_pred_seq_aligned[i] != '-' and pdb_seq_aligned[i] == '-':
-            pdb_ca_pos_aligned.append([0,0,0])
-            af_pred_ca_pos_aligned.append([0,0,0])
-
-    af_residues_include_idx = np.array(af_residues_include_idx)
-            
-    pdb_ca_pos_aligned = np.array(pdb_ca_pos_aligned)
-    af_pred_ca_pos_aligned = np.array(af_pred_ca_pos_aligned)
-
-    ca_pos_diff = pdb_ca_pos_aligned - af_pred_ca_pos_aligned
-    phi, theta, radius = cartesian_to_spherical(ca_pos_diff)
-
-    af_residues_mask = [] 
-    for i in range(0, len(af_pred_seq)):
-        if i in af_residues_include_idx:
-            af_residues_mask.append(1)
-        else:
-            af_residues_mask.append(0)
-
-    return np.array([af_residues_include_idx, phi, theta, radius]), af_residues_mask, af_pred_ca_pos_aligned, pdb_ca_pos_aligned
-
+    return out_df 

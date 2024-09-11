@@ -1,6 +1,0 @@
-for ML dataset:
-take each openfold prediction
-determine which pdb is further
-remove disrodered residues
-and make sure the protein has same number of residues as other pdb
-so chop off any flanking residues
