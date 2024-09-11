@@ -152,7 +152,7 @@ def calc_disordered_percentage(pdb_path):
 
 
 def accept_criteria(mean_plddt, disordered_percentage, mean_plddt_threshold, disordered_percentage_threshold):
-    if (mean_plddt > mean_plddt_threshold) and (disordered_percentage < disordered_percentage_threshold):
+    if (mean_plddt >= mean_plddt_threshold) and (disordered_percentage <= disordered_percentage_threshold):
         return 1
     else:
         return 0

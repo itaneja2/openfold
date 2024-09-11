@@ -14,8 +14,10 @@ from datetime import date
 import itertools
 import time 
 
-from openfold.utils.script_utils import load_conformation_vectorfield, parse_fasta, prep_output, \
+from openfold.utils.script_utils import parse_fasta, prep_output, \
     update_timings, relax_protein
+from openfold.model.conformation_vectorfield_model import ConformationVectorField
+
 
 import subprocess 
 import pickle
@@ -69,6 +71,24 @@ logger.addHandler(file_handler)
 
 TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
+
+
+def load_conformation_vectorfield(config, model_device, conformation_vectorfield_checkpoint_path):
+ 
+    model = ConformationVectorField(config)
+    model = model.eval()
+   
+    ckpt_path = conformation_vectorfield_checkpoint_path
+    d = torch.load(ckpt_path)
+    sd = d["state_dict"]
+    sd = {k.replace('model.',''):v for k,v in sd.items()}
+    import_openfold_weights_(model=model, state_dict=sd)
+    logger.info(
+        f"Loaded ConformationVectorField parameters at {ckpt_path}..."
+    )
+    model = model.to(model_device)
+
+    return model
 
 
 def eval_model(model, args, config, feature_dict, alt_conformation_path, output_dir):

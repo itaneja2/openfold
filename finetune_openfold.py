@@ -400,7 +400,7 @@ def main(args):
     if len(msa_files) == 0: 
         file_id = os.listdir(args.train_alignment_dir)
         if len(file_id) > 1:
-            raise ValueError("should only be a single directory under %s" % alignment_dir)
+            raise ValueError("should only be a single directory under %s" % args.train_alignment_dir)
         else:
             file_id = file_id[0] #e.g 1xyz_A
             file_id_wo_chain = file_id.split('_')[0]

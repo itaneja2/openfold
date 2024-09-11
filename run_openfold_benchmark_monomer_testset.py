@@ -73,7 +73,7 @@ TRACING_INTERVAL = 50
 asterisk_line = '******************************************************************************'
 
 
-def gen_args(alignment_dir, output_dir_base, seed, use_templates=True):
+def gen_args(alignment_dir, output_dir_base, seed, use_templates=True, use_af_weights=True):
 
     parser = argparse.ArgumentParser()
 
@@ -175,16 +175,36 @@ def gen_args(alignment_dir, output_dir_base, seed, use_templates=True):
     add_data_args(parser)
     args = parser.parse_args()
 
+    if use_templates:
+        if not(use_af_weights):
+            openfold_checkpoint_path = '/opt/databases/openfold/openfold_params/finetuning_ptm_2.pt'
+            config_preset = 'model_1_ptm'
+        else:
+            jax_param_path = '/opt/databases/openfold/params/params_model_1_ptm.npz'
+            config_preset = 'model_1_ptm'
+    else:
+        if not(use_af_weights):
+            openfold_checkpoint_path = '/opt/databases/openfold/openfold_params/finetuning_no_templ_ptm_1.pt'
+            config_preset = 'model_3_ptm'
+        else:
+            jax_param_path = '/opt/databases/openfold/params/params_model_3_ptm.npz'
+            config_preset = 'model_3_ptm'
+
+
     args.benchmark_method = 'msa_mask'
     args.template_mmcif_dir = '/dev/shm/pdb_mmcif/mmcif_files'
     args.use_templates = use_templates 
     args.alignment_dir = alignment_dir
     args.output_dir_base = output_dir_base 
-    args.config_preset = 'model_1_ptm'
-    args.openfold_checkpoint_path = '/opt/databases/openfold/openfold_params/finetuning_ptm_2.pt'
+    args.output_dir_base = output_dir_base 
+    args.config_preset = config_preset
+    if not(use_af_weights):
+        args.openfold_checkpoint_path = openfold_checkpoint_path
+    else:
+        args.jax_param_path = jax_param_path
     args.model_device = 'cuda:0'
     args.data_random_seed = seed 
-    args.msa_mask_fraction = 0.20 
+    args.msa_mask_fraction = 0.15 
     args.num_predictions_per_model = 300 
         
     if(args.jax_param_path is None and args.openfold_checkpoint_path is None):
@@ -220,12 +240,12 @@ def restart_incomplete_iterations(output_dir, args):
 
 def run_benchmark_af2sample_dataset():
 
-    conformational_states_df = pd.read_csv('./conformational_states_testing_data/dataset/conformational_states_testing_data_processed_adjudicated.csv')
-    
-    conformational_states_df = conformational_states_df[conformational_states_df['any_structures_present_in_training_set'] == 'n']
-    conformational_states_df = conformational_states_df[conformational_states_df['uniprot_id'].isin(['Q53W80'])]
-    conformational_states_df = conformational_states_df.sort_values('seg_len').reset_index(drop=True) 
+    conformational_states_df = pd.read_csv('./afsample2_dataset/afsample2_dataset_processed_adjudicated.csv')
 
+    #conformational_states_df = conformational_states_df[conformational_states_df['pdb_id_outside_training_set'] != 'none']
+    conformational_states_df = conformational_states_df.sort_values('seg_len').reset_index(drop=True)
+    print(conformational_states_df) 
+ 
     for index,row in conformational_states_df.iterrows():
 
         logger.info('On row %d of %d' % (index, len(conformational_states_df)))  
@@ -235,39 +255,32 @@ def run_benchmark_af2sample_dataset():
         uniprot_id = str(row['uniprot_id'])
         pdb_id_msa = str(row['pdb_id_msa'])
 
-        for j in [1]:
-
-            if j == 0:
-                use_templates = True
-                template_str = 'template=default' 
-            else:
-                use_templates = False
-                template_str = 'template=none' 
-            
-            alignment_dir = './conformational_states_testing_data/alignment_data/%s/%s' % (uniprot_id,pdb_id_msa)
-            seed = index #keep seed constant per uniprot_id  
-            logger.info(asterisk_line)
-            logger.info('TEMPLATE = %s' % template_str)
-            logger.info('SEED = %d' % seed) 
-            logger.info(asterisk_line)
-            output_dir_base = './conformational_states_testing_data/benchmark_predictions/%s' % uniprot_id 
-            args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
-            output_dir = '%s/msa_mask/%s' % (output_dir_base, template_str)
-            should_run_rw = restart_incomplete_iterations(output_dir, args)
-            if should_run_rw:
-                logger.info("RUNNING %s" % output_dir)
-                run_msa_mask(args)
-            else:
-                logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
+        use_templates = False
+        template_str = 'template=none' 
+        
+        alignment_dir = './conformational_states_testset_results/alignment_data/%s/%s' % (uniprot_id,pdb_id_msa)
+        seed = index #keep seed constant per uniprot_id  
+        logger.info(asterisk_line)
+        logger.info('TEMPLATE = %s' % template_str)
+        logger.info(asterisk_line)
+        output_dir_base = './conformational_states_testset_results/benchmark_predictions/%s' % uniprot_id 
+        args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
+        output_dir = '%s/msa_mask_fraction=15/%s' % (output_dir_base, template_str)
+        should_run_rw = restart_incomplete_iterations(output_dir, args)
+        if should_run_rw:
+            logger.info("RUNNING %s" % output_dir)
+            run_msa_mask(args)
+        else:
+            logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir)
 
 
 def run_benchmark_custom_dataset():
 
+    conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated_post_AF_training_adjudicated.csv')
 
-    conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated_post_AF_training_final.csv')
-
-    conformational_states_df = conformational_states_df[conformational_states_df['any_structures_present_in_training_set'] == 'n']
+    #conformational_states_df = conformational_states_df[conformational_states_df['pdb_id_outside_training_set'] != 'none']
     conformational_states_df = conformational_states_df.sort_values('seg_len').reset_index(drop=True) 
+    print(conformational_states_df)
 
     for index,row in conformational_states_df.iterrows():
 
@@ -280,31 +293,34 @@ def run_benchmark_custom_dataset():
         if pdb_id_msa == 'both':
             pdb_id_msa = str(row['pdb_id_ref'])
 
-        for j in [1]:
+        if pdb_id_msa == str(row['pdb_id_ref']):
+            other_pdb_id = str(row['pdb_id_state_i'])
+        else:
+            other_pdb_id = str(row['pdb_id_ref'])
 
-            if j == 0:
-                use_templates = True
-                template_str = 'template=default' 
-            else:
-                use_templates = False
-                template_str = 'template=none' 
-            
-            alignment_dir = './conformational_states_testing_data/alignment_data/%s/%s' % (uniprot_id,pdb_id_msa)
-            seed = index #keep seed constant per uniprot_id  
-            logger.info(asterisk_line)
-            logger.info('TEMPLATE = %s' % template_str)
-            logger.info('SEED = %d' % seed) 
-            logger.info(asterisk_line)
-            output_dir_base = './conformational_states_testing_data/benchmark_predictions/%s' % uniprot_id 
-            args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
-            output_dir = '%s/msa_mask/%s' % (output_dir_base, template_str)
-            should_run_rw = restart_incomplete_iterations(output_dir, args)
-            if should_run_rw:
-                logger.info("RUNNING %s" % output_dir)
-                run_msa_mask(args)
-            else:
-                logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
+        use_templates = False
+        template_str = 'template=none' 
+        
+        alignment_dir = './conformational_states_testset_results/alignment_data/%s/%s' % (uniprot_id,pdb_id_msa)
+        other_alignment_dir = './conformational_states_testset_results/alignment_data/%s/%s' % (uniprot_id,other_pdb_id)
+        if os.path.exists(other_alignment_dir):
+            print('removing %s' % other_alignment_dir)
+            shutil.rmtree(other_alignment_dir)
+        seed = index #keep seed constant per uniprot_id  
+        logger.info(asterisk_line)
+        logger.info('TEMPLATE = %s' % template_str)
+        logger.info(asterisk_line)
+        output_dir_base = './conformational_states_testset_results/benchmark_predictions/%s' % uniprot_id 
+        args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
+        output_dir = '%s/msa_mask_fraction=15/%s' % (output_dir_base, template_str)
+        should_run_rw = restart_incomplete_iterations(output_dir, args)
+        if should_run_rw:
+            logger.info("RUNNING %s" % output_dir)
+            run_msa_mask(args)
+        else:
+            logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
 
 
 
-run_benchmark_af2sample_dataset() 
+run_benchmark_af2sample_dataset()
+#run_benchmark_custom_dataset() 

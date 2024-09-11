@@ -335,8 +335,12 @@ def run_msa_mask(args):
 
     t0 = time.perf_counter()
 
-    output_dir = '%s/%s/%s' % (args.output_dir_base, 'msa_mask', template_str)
-    model_name = 'msa_mask_fraction=%d' % (int(args.msa_mask_fraction*100)) 
+    if args.msa_mask_fraction > 0:
+        mask_str = 'msa_mask_fraction=%d' % (int(args.msa_mask_fraction*100))    
+    else:
+        mask_str = 'msa_mask_fraction=None' 
+    output_dir = '%s/%s/%s' % (args.output_dir_base, mask_str, template_str)
+    model_name = mask_str
 
     pdb_files = glob.glob('%s/*.pdb' % output_dir)
     if len(pdb_files) >= args.num_predictions_per_model:
@@ -423,8 +427,13 @@ def run_msa_mask(args):
 
 
     #get initial prediction (no mask)
-    np.random.seed(0)
-    torch.manual_seed(1)
+    random_seed = args.data_random_seed
+    if random_seed is None:
+        random_seed = random.randrange(2**32)
+
+    np.random.seed(random_seed)
+    torch.manual_seed(random_seed + 1)
+
     processed_feature_dict = feature_processor.process_features(
         feature_dict, mode='predict',
     )
@@ -443,10 +452,6 @@ def run_msa_mask(args):
     conformation_info = [] 
 
     for j in range(0,args.num_predictions_per_model):
-
-        #process features after updating seed
-        np.random.seed(j)
-        torch.manual_seed(j+1)
 
         masked_feature_dict = copy.deepcopy(feature_dict)
         num_res = masked_feature_dict['msa'].shape[1]
@@ -490,7 +495,7 @@ if __name__ == "__main__":
         "--benchmark_method", type=str, 
     )
     parser.add_argument(
-        "--use_templates", type=bool
+        "--use_templates", type=bool, default=True
     )
     parser.add_argument(
         "--fasta_file", type=str, default=None,

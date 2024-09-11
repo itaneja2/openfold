@@ -14,9 +14,10 @@ from scipy.spatial.distance import pdist
 import ml_collections as mlc
 import torch 
 
-from custom_openfold_utils.pdb_utils import clean_pdb
 from openfold.utils.script_utils import relax_protein
 from openfold.np.protein import from_pdb_string 
+
+from custom_openfold_utils.pdb_utils import get_pdb_path_seq, get_af_disordered_domains, get_af_disordered_residues, get_ca_pairwise_dist
 
 asterisk_line = '******************************************************************************'
 
@@ -25,36 +26,6 @@ def remove_files(file_list):
         print('removing old file: %s' % f)
         os.remove(f)
 
-def get_ca_pairwise_dist(pdb_fname, md_conformation_str=None):  
-    # Initialize a PDB parser
-  
-    if 'step-agg' in pdb_fname:
-        temp = pdb_fname[pdb_fname.index('step-agg'):]
-        agg_step_num = int(temp.split('-')[1][3:])
-    else:
-        agg_step_num = md_conformation_str
-
-    if '.pdb' in pdb_fname:
-        parser = PDBParser(QUIET=True)
-    elif '.cif' in pdb_fname:
-        parser = MMCIFParser(QUIET=True)
-
-    # Load the CIF file
-    structure = parser.get_structure('structure', pdb_fname)
-
-    model = structure[0]
-    # Extract CA coordinates
-    ca_coordinates = []
-    for chain in model:
-        for residue in chain:
-            if residue.has_id('CA'):
-                ca_atom = residue['CA']
-                ca_coordinates.append(list(ca_atom.get_coord()))
-              
-    ca_coordinates = np.array(ca_coordinates)           
-    ca_pairwise_dist = pdist(ca_coordinates, 'euclidean')
- 
-    return ca_pairwise_dist
 
 def create_clustering_dist_matrix(ca_pdist_all):
 
@@ -76,6 +47,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--conformation_info_dir", type=str, default=None,
         help="Either points directly to the parent directory containing conformation_info.pkl or the grandparent directory if multiple conformation_info.pkl are present",
+    )
+    parser.add_argument(
+        "--initial_pred_path", type=str, default=None,
+        help="Points directly to the vanila AF prediction",
     )
     parser.add_argument(
         "--num_clusters", type=int, default=10,
@@ -119,9 +94,10 @@ if __name__ == "__main__":
         if not(args.overwrite):
             print("SKIPPING CLUSTERING PROCEDURE, %s ALREADY EXISTS:" % cluster_representative_conformation_info_fname)
             sys.exit(0)
+        else:
+            remove_files(pdb_files)
     else:
         remove_files(pdb_files)
-
 
     pattern = "%s/conformation_info.pkl" % args.conformation_info_dir
     files = glob.glob(pattern, recursive=True)
@@ -135,6 +111,14 @@ if __name__ == "__main__":
         print('conformation_info file(s) found:')
         print(files)
 
+    try: 
+        af_seq = get_pdb_path_seq(initial_pred_path, None)
+        af_disordered_domains_idx, _ = get_af_disordered_domains(initial_pred_path)     
+        af_disordered_residues_idx = get_af_disordered_residues(af_disordered_domains_idx)
+        af_disordered_residues_idx_complement = sorted(list(set(range(len(af_seq))) - set(af_disordered_residues_idx)))
+    except ValueError as e:
+        print('TROUBLE PARSING AF PREDICTION %s' % initial_pred_path) 
+        af_disordered_residues_idx_complement = None 
 
     #combine into single dictionary
     for i in range(0,len(files)):
@@ -155,12 +139,12 @@ if __name__ == "__main__":
 
             if args.plddt_threshold is None:
                 conformation_info_all.append([pdb_path,rmsd,mean_plddt])
-                ca_pdist = get_ca_pairwise_dist(pdb_path)
+                ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_residues_idx_complement)
                 ca_pdist_all.append(ca_pdist)
             else:
                 if mean_plddt >= args.plddt_threshold:
                     conformation_info_all.append([pdb_path,rmsd,mean_plddt])
-                    ca_pdist = get_ca_pairwise_dist(pdb_path)
+                    ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_residues_idx_complement)
                     ca_pdist_all.append(ca_pdist)
         
     ca_pdist_all = np.array(ca_pdist_all) 
@@ -191,7 +175,6 @@ if __name__ == "__main__":
         cluster_representative_conformation_info_dict[cluster_num] = clustering_info_dict[cluster_num][halfway_idx] 
 
     print(cluster_representative_conformation_info_dict)
-
 
     for cluster_num in cluster_representative_conformation_info_dict:
         pdb_source_path = cluster_representative_conformation_info_dict[cluster_num][0]

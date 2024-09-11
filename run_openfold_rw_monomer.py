@@ -138,19 +138,32 @@ def save_cvf_output(rw_conformation_path, model_output, output_dir):
     save_ca_coords(rw_conformation_path, ca_coords_pred, pdb_output_path)
 
 
-def eval_model(model, config, intrinsic_parameter, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, tag, output_dir, phase, args):
+def eval_model(model, config, intrinsic_parameter, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, apply_msa_mask, tag, output_dir, phase, args):
 
     os.makedirs(output_dir, exist_ok=True)
 
     model.intrinsic_parameter = nn.Parameter(torch.tensor(intrinsic_parameter, dtype=torch.float).to(args.model_device))
     out, inference_time = run_model_w_intrinsic_dim(model, processed_feature_dict, tag, output_dir, return_inference_time=True)
 
-    # Toss out the recycling dimensions --- we don't need them anymore
-    processed_feature_dict = tensor_tree_map(
-        lambda x: np.array(x[..., -1].cpu()),
-        processed_feature_dict
-    )
-    
+    if args.msa_mask_fraction > 0 and phase != 'initial':
+        if apply_msa_mask:
+            logger.info(f"Masking MSA columns")
+            MSA_X_IDX = residue_constants.restypes_with_x_and_gap.index('X') #20
+            masked_feature_dict = copy.deepcopy(feature_dict)
+            num_res = masked_feature_dict['msa'].shape[1]
+            columns_to_randomize = np.random.choice(range(0, num_res), size=int(num_res*args.msa_mask_fraction), replace=False) # Without replacement
+            for col in columns_to_randomize:
+                masked_feature_dict['msa'][1:,col] = np.array([MSA_X_IDX]*(masked_feature_dict['msa'].shape[0]-1))  # Replace MSA columns with X (20)
+
+            processed_feature_dict = feature_processor.process_features(
+                masked_feature_dict, mode='predict',
+            )
+            processed_feature_dict = {
+                k:torch.as_tensor(v, device=args.model_device)
+                for k,v in processed_feature_dict.items()
+            }
+
+ 
     out = tensor_tree_map(lambda x: np.array(x.cpu()), out)
     plddt_all_residues = out["plddt"]
     disordered_residues_mask = np.ones(plddt_all_residues.shape, dtype=bool)
@@ -163,7 +176,7 @@ def eval_model(model, config, intrinsic_parameter, ncterm_disordered_residues_id
 
     unrelaxed_protein = prep_output(
         out,
-        processed_feature_dict,
+        tensor_tree_map(lambda x: np.array(x[..., -1].cpu()),processed_feature_dict),
         feature_dict,
         feature_processor,
         args.config_preset,
@@ -240,7 +253,7 @@ def eval_model(model, config, intrinsic_parameter, ncterm_disordered_residues_id
         logger.info(f"Model embeddings written to {output_dict_path}...")
 
 
-    return mean_plddt, disordered_percentage, inference_time, accept_conformation, unrelaxed_output_path 
+    return mean_plddt, disordered_percentage, inference_time, accept_conformation, unrelaxed_output_path, processed_feature_dict
 
 def finetune_wrapper(
     conformation_num: int,
@@ -258,7 +271,7 @@ def finetune_wrapper(
     bootstrap_training_conformations_dir_conformation_i = '%s/conformation%d' % (bootstrap_training_conformations_dir,conformation_num)
     os.makedirs(bootstrap_training_conformations_dir_conformation_i, exist_ok=True)
     rw_helper_functions.remove_files_in_dir(bootstrap_training_conformations_dir_conformation_i) #this directory should contain a single conformation so we can run train_openfold on it 
-    curr_pdb_path = conformation_info_i[2]
+    curr_pdb_path = conformation_info_i[1]
     dst_fname = '%s.pdb' % file_id_wo_chain #during training, expected filename is without chain_id (i.e 1xyz)
     dst_path = '%s/%s' % (bootstrap_training_conformations_dir_conformation_i,dst_fname)
     shutil.copy(curr_pdb_path,dst_path)
@@ -272,7 +285,10 @@ def finetune_wrapper(
     arg4 = '--template_mmcif_dir=%s' % args.template_mmcif_dir
     arg5 = '--max_template_date=%s' % date.today().strftime("%Y-%m-%d")
     arg6 = '--gpus=1'
-    arg7 = '--openfold_checkpoint_path=%s' % args.openfold_checkpoint_path 
+    if args.openfold_checkpoint_path is not None:
+        arg7 = '--openfold_checkpoint_path=%s' % args.openfold_checkpoint_path 
+    elif args.jax_param_path is not None:
+        arg7 = '--resume_from_jax_params=%s' % args.jax_param_path 
     arg8 = '--resume_model_weights_only=True'
     arg9 = '--config_preset=custom_finetuning-SAID'
     arg10 = '--module_config=%s' % args.module_config
@@ -451,6 +467,11 @@ def run_rw_monomer(
     while (num_rejected_steps+num_accepted_steps) < num_total_steps:
 
         if rw_type == 'vanila':
+            if phase == 'bootstrap':
+                #reset each time
+                intrinsic_param_prev = np.zeros(intrinsic_dim)
+                iter_n = curr_step_aggregate
+                curr_step_iter_n = 0 
             intrinsic_param_proposed = propose_new_intrinsic_param_vanila_rw(intrinsic_param_prev, intrinsic_dim, 
                                                                              rw_hp_dict['epsilon_scaling_factor'], cov_type, L)
         elif rw_type == 'discrete_ou':
@@ -462,8 +483,14 @@ def run_rw_monomer(
                                                                                  intrinsic_dim, rw_hp_dict['epsilon_scaling_factor'], 
                                                                                  rw_hp_dict['gamma'], cov_type, L)
 
-        curr_tag = '%s_iter%d_step-iter%d_step-agg%d' % (base_tag, iter_n, curr_step_iter_n, curr_step_aggregate) 
-        mean_plddt, disordered_percentage, inference_time, accept_conformation, pdb_path_rw = eval_model(model, config, intrinsic_param_proposed, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, curr_tag, output_dir, phase, args)    
+        curr_tag = '%s_iter%d_step-iter%d_step-agg%d' % (base_tag, iter_n, curr_step_iter_n, curr_step_aggregate)
+
+        if phase == 'bootstrap' or curr_step_iter_n == 0:
+            apply_msa_mask = True
+        else:
+            apply_msa_mask = False
+            
+        mean_plddt, disordered_percentage, inference_time, accept_conformation, pdb_path_rw, processed_feature_dict = eval_model(model, config, intrinsic_param_proposed, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, apply_msa_mask, curr_tag, output_dir, phase, args)    
         state_history.append(accept_conformation)
         logger.info('pLDDT: %.3f, disordered percentage: %.3f, step: %d' % (mean_plddt, disordered_percentage, curr_step_aggregate)) 
 
@@ -535,7 +562,8 @@ def get_scaling_factor_bootstrap(
             intrinsic_param_proposed = propose_new_intrinsic_param_vanila_rw(intrinsic_param_zero, intrinsic_dim, 
                                                                              scaling_factor_candidate, 'spherical')
             curr_tag = '%s_step%d' % (base_tag,i)         
-            mean_plddt, disordered_percentage, _, accept_conformation, _ = eval_model(model, config, intrinsic_param_proposed, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, curr_tag, warmup_output_dir, 'bootstrap_warmup', args)    
+            apply_msa_mask = True 
+            mean_plddt, disordered_percentage, _, accept_conformation, _, _ = eval_model(model, config, intrinsic_param_proposed, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, apply_msa_mask, curr_tag, warmup_output_dir, 'bootstrap_warmup', args)    
             state_history.append(accept_conformation)
             logger.info('pLDDT: %.3f, disordered percentage: %.3f, step: %d' % (mean_plddt, disordered_percentage, i)) 
             if accept_conformation:
@@ -567,8 +595,8 @@ def get_scaling_factor_bootstrap(
   
     return scaling_factor_bootstrap
 
-
-def get_bootstrap_candidate_conformations(
+'''
+def get_bootstrap_candidate_conformations_old(
     conformation_info: List[Tuple[Any,...]],
     args: argparse.Namespace
 ):
@@ -620,6 +648,42 @@ def get_bootstrap_candidate_conformations(
     logger.info(bootstrap_candidate_conformations)
 
     return bootstrap_candidate_conformations
+'''
+
+
+def get_bootstrap_candidate_conformations(
+    conformation_info: List[Tuple[Any,...]],
+    args: argparse.Namespace
+):
+    """Generates a set of candidate conformations to use for the gradient descent phase
+       of the pipeline. 
+       
+       The candidate conformations are derived from the bootstrap phase. More specifically,
+       the candidate conformations correspond to those that were outputted one step prior 
+       to a rejected conformation.   
+    """
+
+    bootstrap_conformations_all = [] 
+    for i in range(0,len(conformation_info)):
+        f = conformation_info[i][0]
+        rmsd = conformation_info[i][1]
+        bootstrap_conformations_all.append((rmsd,f))
+
+    if len(bootstrap_conformations_all) <= args.num_training_conformations:
+        return bootstrap_conformations_all 
+ 
+    bootstrap_candidate_conformations = sorted(bootstrap_conformations_all, key=lambda x:x[0], reverse=True) #sort by rmsd in reverse order 
+    if len(bootstrap_candidate_conformations) >= args.num_training_conformations:
+        bootstrap_candidate_conformations = bootstrap_candidate_conformations[0:args.num_training_conformations]    
+    
+    logger.debug('BOOTSTRAP CONFORMATIONS ALL:')
+    logger.debug(bootstrap_conformations_all)    
+
+    logger.info('BOOTSTRAP CANDIDATE CONFORMATIONS:')
+    logger.info(bootstrap_candidate_conformations)
+
+    return bootstrap_candidate_conformations
+
 
 
 def get_new_scaling_factor_candidates(
@@ -883,6 +947,11 @@ def run_rw_pipeline(args):
     else:
         template_str = 'template=default'
 
+    if args.msa_mask_fraction > 0:
+        mask_str = 'msa_mask_fraction=%d' % (int(args.msa_mask_fraction*100))    
+    else:
+        mask_str = 'msa_mask_fraction=None' 
+
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
             raise ValueError(
@@ -890,15 +959,15 @@ def run_rw_pipeline(args):
             )
  
     if args.bootstrap_phase_only:
-        output_dir = '%s/%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config, args.rw_hp_config)
-        l0_output_dir = '%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str)
-        l1_output_dir = '%s/%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config)
+        output_dir = '%s/%s/%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, mask_str, args.module_config, args.rw_hp_config)
+        l0_output_dir = '%s/%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, mask_str)
+        l1_output_dir = '%s/%s/%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, mask_str, args.module_config)
         l2_output_dir = ''
     else: 
-        output_dir = '%s/%s/%s/%s/rw-%s/train-%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config, args.rw_hp_config, args.train_hp_config)
-        l0_output_dir = '%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str)
-        l1_output_dir = '%s/%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config)
-        l2_output_dir = '%s/%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, args.module_config, args.rw_hp_config) 
+        output_dir = '%s/%s/%s/%s/%s/rw-%s/train-%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, mask_str, args.module_config, args.rw_hp_config, args.train_hp_config)
+        l0_output_dir = '%s/%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, mask_str)
+        l1_output_dir = '%s/%s/%s/%s/%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, mask_str, args.module_config)
+        l2_output_dir = '%s/%s/%s/%s/%s/rw-%s' % (args.output_dir_base, 'alternative_conformations-verbose', template_str, mask_str, args.module_config, args.rw_hp_config) 
 
     output_dir = os.path.abspath(output_dir)
     l0_output_dir = os.path.abspath(l0_output_dir)
@@ -1017,7 +1086,8 @@ def run_rw_pipeline(args):
                                          module_config_data, 
                                          args.model_device, 
                                          args.openfold_checkpoint_path, 
-                                         args.jax_param_path, 
+                                         args.jax_param_path,
+                                         args.use_templates, 
                                          intrinsic_param_zero)
   
 
@@ -1061,8 +1131,9 @@ def run_rw_pipeline(args):
         t0 = time.perf_counter()
 
         logger.info('PREDICTING INITIAL STRUCTURE FROM ORIGINAL MODEL')
-        ncterm_disordered_residues_idx = []  
-        mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path = eval_model(model, config, intrinsic_param_zero, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, 'initial_pred', initial_pred_output_dir, 'initial', args)    
+        ncterm_disordered_residues_idx = [] 
+        apply_msa_mask = False 
+        mean_plddt_initial, disordered_percentage_initial, _, _, initial_pred_path, _ = eval_model(model, config, intrinsic_param_zero, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, apply_msa_mask, 'initial_pred', initial_pred_output_dir, 'initial', args)    
         logger.info('pLDDT: %.3f, disordered percentage: %.3f, ORIGINAL MODEL' % (mean_plddt_initial, disordered_percentage_initial)) 
 
         ncterm_disordered_residues_idx = rw_helper_functions.get_af_ncterm_disordered_residues_idx(initial_pred_path)
@@ -1301,14 +1372,10 @@ if __name__ == "__main__":
              checkpoint directory or a .pt file"""
     )
     parser.add_argument(
-        "--conformation_vectorfield_checkpoint_path", type=str, default=None,
-        help="Path to a model checkpoint from which to restore training state"
-    )
-    parser.add_argument(
         "--num_bootstrap_steps", type=int, default=50
     )
     parser.add_argument(
-        "--num_bootstrap_hp_tuning_steps", type=int, default=10
+        "--num_bootstrap_hp_tuning_steps", type=int, default=5
     )
     parser.add_argument(
         "--num_rw_steps", type=int, default=100
@@ -1375,6 +1442,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--use_templates", type=bool, default=True
+    )
+    parser.add_argument(
+        "--msa_mask_fraction", type=float, default=0.15
     )
     parser.add_argument(
         "--module_config", type=str, default=None,

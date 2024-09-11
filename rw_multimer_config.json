@@ -1,6 +1,6 @@
 {
     
-    "SAID": {
+    "finetuning-method_SAID": {
         "module_config_0": {
             "module_to_update": ["evoformer", "extra_msa_stack"],
             "layer_to_update": ["all"],
@@ -20,54 +20,48 @@
         },
 
 
-    "standard": {
+    "finetuning-method_standard": {
         "module_config_0": {
-            "module_to_update": ["evoformer", "extra_msa_stack"],
-            "layer_to_update": ["ft"],
-            "projection_index": "layer"
-            },
-        "module_config_1": {
             "module_to_update": ["evoformer"],
             "layer_to_update": ["all"]
             }
-
     },
 
     "hyperparameter": {
         "train": {
             "hp_config_0": {
                 "lr": 1e-3,
-                "max_epochs": 50,
+                "max_epochs": 10,
                 "initial_scaling_factor_candidate": [100]
             },
             "hp_config_1": {
                 "lr": 1e-2,
-                "max_epochs": 10,
+                "max_epochs": 5,
                 "initial_scaling_factor_candidate": [10]
             },
             "hp_config_2": {
                 "lr": 5e-2,
-                "max_epochs": 10,
+                "max_epochs": 5,
                 "initial_scaling_factor_candidate": [2]
             }
         },
         "rw": {
-            "hp_config_0-0": {
-                "rw_tuning_acceptance_threshold": 80e-2,
+            "hp_config_0": {
+                "rw_tuning_acceptance_threshold": 75e-2,
                 "rw_tuning_acceptance_threshold_ub_tolerance": 10e-2,
-                "rw_tuning_acceptance_threshold_lb_tolerance": 5e-2,
+                "rw_tuning_acceptance_threshold_lb_tolerance": 10e-2,
                 "chains_to_update": ["all"],
-                "chain_scaling_factor_type": "variable", 
+                "chain_scaling_factor_type": "uniform", 
                 "cov_type": "full",
                 "rw_type": "vanila",
                 "hp_tuning": "auto" 
             },
-            "hp_config_0-1": {
-                "rw_tuning_acceptance_threshold": 80e-2,
-                "rw_tuning_acceptance_threshold_ub_tolerance": 10e-2,
-                "rw_tuning_acceptance_threshold_lb_tolerance": 5e-2,
+            "hp_config_1": {
+                "rw_tuning_acceptance_threshold": 90e-2,
+                "rw_tuning_acceptance_threshold_ub_tolerance": 5e-2,
+                "rw_tuning_acceptance_threshold_lb_tolerance": 10e-2,
                 "chains_to_update": ["all"],
-                "chain_scaling_factor_type": "variable", 
+                "chain_scaling_factor_type": "uniform", 
                 "cov_type": "full",
                 "rw_type": "vanila",
                 "hp_tuning": "auto" 
