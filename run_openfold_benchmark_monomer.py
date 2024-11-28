@@ -161,6 +161,8 @@ def run_msa_sample(args):
     if not(args.use_templates):
         config.model.template.enabled = False
         template_str = 'template=none'
+    elif args.custom_template_pdb_id:
+        template_str = 'template=%s' % args.custom_template_pdb_id
     else:
         template_str = 'template=default'
     
@@ -323,9 +325,10 @@ def run_msa_mask(args):
     if not(args.use_templates):
         config.model.template.enabled = False
         template_str = 'template=none'
+    elif args.custom_template_pdb_id:
+        template_str = 'template=%s' % args.custom_template_pdb_id
     else:
         template_str = 'template=default'
-
     
     if(args.trace_model):
         if(not config.data.predict.fixed_size):
@@ -496,6 +499,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--use_templates", type=bool, default=True
+    )
+    parser.add_argument(
+        "--custom_template_pdb_id", type=str, default=None, 
+        help="""String of the format PDB-ID_CHAIN-ID (e.g 4ake_A). If provided,
+              this structure is used as the only template."""
     )
     parser.add_argument(
         "--fasta_file", type=str, default=None,

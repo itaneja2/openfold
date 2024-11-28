@@ -30,7 +30,7 @@ def remove_files(file_list):
 def create_clustering_dist_matrix(ca_pdist_all):
 
     #method derived from
-    #https://www.biorxiv.org/content/10.1101/2023.07.13.545008v2.supplementary-material
+    #https://www.biorxiv.org/content/10.1101/2023.07.13.545008v2.supplementary-material (pg. 3)
 
     clustering_dist_matrix = np.zeros((ca_pdist_all.shape[0],ca_pdist_all.shape[0]))
     for i in range(0,ca_pdist_all.shape[0]):
@@ -114,11 +114,18 @@ if __name__ == "__main__":
     try: 
         af_seq = get_pdb_path_seq(initial_pred_path, None)
         af_disordered_domains_idx, _ = get_af_disordered_domains(initial_pred_path)     
-        af_disordered_residues_idx = get_af_disordered_residues(af_disordered_domains_idx)
-        af_disordered_residues_idx_complement = sorted(list(set(range(len(af_seq))) - set(af_disordered_residues_idx)))
+        nterm_disorder_start_idx, nterm_disorder_end_idx = get_af_nterm_disorder_tail_idx(af_disordered_domains_idx)
+        cterm_disorder_start_idx, cterm_disorder_end_idx = get_af_cterm_disorder_tail_idx(af_disordered_domains_idx, len(af_seq))
+        print('nterminal disordered tail idx: %s-%s' % (str(nterm_disorder_start_idx),str(nterm_disorder_end_idx)))
+        print('cterminal disordered tail idx: %s-%s' % (str(cterm_disorder_start_idx),str(cterm_disorder_end_idx)))
+        af_disordered_tail_residues_idx = get_af_disordered_tail_residues(af_disordered_domains_idx, len(af_seq))
+        print('disordered tail residues idx:')
+        print(af_disordered_tail_residues_idx)
+        af_disordered_tail_residues_idx_complement = sorted(list(set(range(len(af_seq))) - set(af_disordered_tail_residues_idx)))
     except ValueError as e:
         print('TROUBLE PARSING AF PREDICTION %s' % initial_pred_path) 
-        af_disordered_residues_idx_complement = None 
+        af_disordered_tail_residues_idx_complement = None 
+
 
     #combine into single dictionary
     for i in range(0,len(files)):
@@ -136,15 +143,14 @@ if __name__ == "__main__":
             pdb_path = val[0]
             rmsd = val[1]
             mean_plddt = val[2]
-
             if args.plddt_threshold is None:
                 conformation_info_all.append([pdb_path,rmsd,mean_plddt])
-                ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_residues_idx_complement)
+                ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_tail_residues_idx_complement)
                 ca_pdist_all.append(ca_pdist)
             else:
                 if mean_plddt >= args.plddt_threshold:
                     conformation_info_all.append([pdb_path,rmsd,mean_plddt])
-                    ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_residues_idx_complement)
+                    ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_tail_residues_idx_complement)
                     ca_pdist_all.append(ca_pdist)
         
     ca_pdist_all = np.array(ca_pdist_all) 

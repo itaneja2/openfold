@@ -57,7 +57,7 @@ from openfold.utils.trace_utils import (
 from scripts.utils import add_data_args
 
 from random_corr_sap import gen_randcorr_sap
-from custom_openfold_utils.pdb_utils import align_and_get_rmsd, get_ca_coords_matrix, save_ca_coords
+from custom_openfold_utils.pdb_utils import align_and_get_rmsd, get_ca_coords_matrix
 import rw_helper_functions
 
 FeatureDict = MutableMapping[str, np.ndarray]
@@ -106,36 +106,6 @@ def local_np_seed(seed):
         yield
     finally:
         np.random.set_state(state)
-
-
-
-def save_cvf_output(rw_conformation_path, model_output, output_dir):
-
-    rw_conformation_ca_coords = get_ca_coords_matrix(rw_conformation_path)
-
-    # [N,2]
-    norm_phi_pred = model_output["conformation_vectorfield"]["normalized_phi_theta"][..., 0, :]
-    norm_theta_pred = model_output["conformation_vectorfield"]["normalized_phi_theta"][..., 1, :]
-
-    #phi is between 0 and Pi, so y-val is between 0 and 1
-    norm_phi_pred[:,1] = np.abs(norm_phi_pred[:,1]) 
-
-    #convert normalized phi/theta to radians 
-    raw_phi_pred = np.arctan2(np.clip(norm_phi_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_phi_pred[..., 0], a_min=-1,a_max=1))
-    raw_theta_pred = np.arctan2(np.clip(norm_theta_pred[..., 1], a_min=-1, a_max=1),np.clip(norm_theta_pred[..., 0], a_min=-1,a_max=1))
-
-    delta_x_pred = 1.0*np.cos(raw_theta_pred)*np.sin(raw_phi_pred)
-    delta_y_pred = 1.0*np.sin(raw_theta_pred)*np.sin(raw_phi_pred)
-    delta_z_pred = 1.0*np.cos(raw_phi_pred)
-
-    delta_xyz_pred = np.transpose(np.array([delta_x_pred,delta_y_pred,delta_z_pred]))
-
-    ca_coords_pred = rw_conformation_ca_coords + delta_xyz_pred
-
-    rw_conformation_name = rw_conformation_path.split('/')[-1].split('.')[0]
-    output_name = '%s-CVF.pdb' % rw_conformation_name
-    pdb_output_path = '%s/%s' % (output_dir, output_name)
-    save_ca_coords(rw_conformation_path, ca_coords_pred, pdb_output_path)
 
 
 def eval_model(model, config, intrinsic_parameter, ncterm_disordered_residues_idx, feature_processor, feature_dict, processed_feature_dict, apply_msa_mask, tag, output_dir, phase, args):

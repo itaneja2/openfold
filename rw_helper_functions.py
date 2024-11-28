@@ -48,7 +48,7 @@ def dump_pkl(data, fname, output_dir):
         pickle.dump(data, f)
 
 def remove_files_in_dir(path):
-    file_list = glob.glob('%s/*' % path)
+    file_list = sorted(glob.glob('%s/*' % path))
     for f in file_list:
         logger.info('removing old file: %s' % f)
         os.remove(f)

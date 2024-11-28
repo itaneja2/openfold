@@ -18,23 +18,25 @@ from custom_openfold_utils.pdb_utils import get_ca_coords_dict, get_ca_coords_ma
 logger = logging.getLogger(__file__)
 logger.setLevel(level=logging.INFO)
 
-
-def get_rmsf(pdb1_seq, pdb2_seq, pdb1_path, pdb2_path, pdb1_include_idx, pdb2_include_idx, pdb1_exclude_idx=[], pdb2_exclude_idx=[]):
+def renumber_keys(residue_idx_ca_coords_dict, source):
+    offset = min(residue_idx_ca_coords_dict.keys())
+    if source == 'af':
+        return {i: v for i, v in enumerate(residue_idx_ca_coords_dict.values())}, offset
+    return residue_idx_ca_coords_dict, offset
+    
+def get_rmsf(pdb1_seq, pdb2_seq, pdb1_path, pdb2_path, pdb1_source, pdb2_source, pdb1_include_idx, pdb2_include_idx, pdb1_exclude_idx=[], pdb2_exclude_idx=[]):
 
     pdb1_seq_aligned, pdb2_seq_aligned, pdb1_seq_aligned_to_original_idx_mapping, pdb2_seq_aligned_to_original_idx_mapping = align_seqs(pdb1_seq, pdb2_seq)
 
     pdb1_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb1_path)
     pdb2_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb2_path)
- 
+
+    #because residues from af can be chopped off, renumber starting from 0, pdb files are assumed to be cleaned so they start from 1  
+    pdb1_residue_idx_ca_coords_dict, pdb1_offset = renumber_keys(pdb1_residue_idx_ca_coords_dict, pdb1_source)
+    pdb2_residue_idx_ca_coords_dict, pdb2_offset = renumber_keys(pdb2_residue_idx_ca_coords_dict, pdb2_source)
+
     pdb1_ca_pos_aligned = []
     pdb2_ca_pos_aligned = [] 
-
-    pdb1_residue_idx_below_threshold = []
-    pdb2_residue_idx_below_threshold = [] 
-
-    #print(pdb1_residue_idx_ca_coords_dict)
-    #print('****')
-    #print(pdb2_residue_idx_ca_coords_dict)
 
     out = []     
 
@@ -46,32 +48,33 @@ def get_rmsf(pdb1_seq, pdb2_seq, pdb1_path, pdb2_path, pdb1_include_idx, pdb2_in
             if valid_idx:
                 #print("aligned idx for pdb1: %d, seq idx: %d:" % (i, pdb1_seq_original_idx))
                 #print("aligned idx for pdb2: %d, seq idx: %d:" % (i, pdb2_seq_original_idx))
-                if pdb1_seq_original_idx in pdb1_residue_idx_ca_coords_dict and pdb2_seq_original_idx in pdb2_residue_idx_ca_coords_dict:
+                residue_exists_in_both_structures_bool = pdb1_seq_original_idx in pdb1_residue_idx_ca_coords_dict and pdb2_seq_original_idx in pdb2_residue_idx_ca_coords_dict
+                if residue_exists_in_both_structures_bool:
                     pdb1_ca_pos = list(pdb1_residue_idx_ca_coords_dict[pdb1_seq_original_idx][0:3])
                     pdb2_ca_pos = list(pdb2_residue_idx_ca_coords_dict[pdb2_seq_original_idx][0:3])
                     curr_ca_rmsf = np.linalg.norm(np.array(pdb1_ca_pos) - np.array(pdb2_ca_pos))
-                    out.append([pdb1_seq_original_idx+1,pdb2_seq_original_idx+1,pdb1_seq_aligned[i],pdb2_seq_aligned[i],curr_ca_rmsf])
+                    out.append([pdb1_seq_original_idx+1,pdb2_seq_original_idx+1,pdb1_seq_original_idx+1+pdb1_offset,pdb2_seq_original_idx+1+pdb2_offset,pdb1_seq_aligned[i],pdb2_seq_aligned[i],curr_ca_rmsf])
  
     return out
 
 
  
-def get_residue_idx_below_rmsf_threshold(pdb1_seq, pdb2_seq, pdb1_path, pdb2_path, pdb1_include_idx, pdb2_include_idx, pdb1_exclude_idx, pdb2_exclude_idx, rmsf_threshold=1.0):
+def get_residue_idx_below_rmsf_threshold(pdb1_seq, pdb2_seq, pdb1_path, pdb2_path, pdb1_source, pdb2_source, pdb1_include_idx, pdb2_include_idx, pdb1_exclude_idx, pdb2_exclude_idx, rmsf_threshold=1.0):
 
     pdb1_seq_aligned, pdb2_seq_aligned, pdb1_seq_aligned_to_original_idx_mapping, pdb2_seq_aligned_to_original_idx_mapping = align_seqs(pdb1_seq, pdb2_seq)
 
     pdb1_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb1_path)
     pdb2_residue_idx_ca_coords_dict = get_ca_coords_dict(pdb2_path)
- 
+
+    #because residues from af can be chopped off, renumber starting from 0, pdb files are assumed to be cleaned so they start from 1 
+    pdb1_residue_idx_ca_coords_dict, pdb1_offset = renumber_keys(pdb1_residue_idx_ca_coords_dict, pdb1_source)
+    pdb2_residue_idx_ca_coords_dict, pdb2_offset = renumber_keys(pdb2_residue_idx_ca_coords_dict, pdb2_source)
+
     pdb1_ca_pos_aligned = []
     pdb2_ca_pos_aligned = [] 
 
     pdb1_residue_idx_below_threshold = []
     pdb2_residue_idx_below_threshold = [] 
-
-    #print(pdb1_residue_idx_ca_coords_dict)
-    #print('****')
-    #print(pdb2_residue_idx_ca_coords_dict)
 
     for i in range(0,len(pdb1_seq_aligned)):
         if (pdb1_seq_aligned[i] == pdb2_seq_aligned[i]) and (pdb1_seq_aligned[i] != '-'):
@@ -79,9 +82,17 @@ def get_residue_idx_below_rmsf_threshold(pdb1_seq, pdb2_seq, pdb1_path, pdb2_pat
             pdb2_seq_original_idx = pdb2_seq_aligned_to_original_idx_mapping[i]
             valid_idx = (pdb1_seq_original_idx in pdb1_include_idx) and (pdb2_seq_original_idx in pdb2_include_idx) and (pdb1_seq_original_idx not in pdb1_exclude_idx) and (pdb2_seq_original_idx not in pdb2_exclude_idx)
             if valid_idx:
-                #print("aligned idx for pdb1: %d, seq idx: %d:" % (i, pdb1_seq_original_idx))
-                #print("aligned idx for pdb2: %d, seq idx: %d:" % (i, pdb2_seq_original_idx))
-                if pdb1_seq_original_idx in pdb1_residue_idx_ca_coords_dict and pdb2_seq_original_idx in pdb2_residue_idx_ca_coords_dict:
+                ####we want to check if the residue exists in any pdb derived structure - it could be missing (either due to cleaning process or missing atom). 
+                ###for af derived structure, the residue should exist, so we don't check (this allows for more flexibility because its possible we chop off residues from af derived structure, which screws up with numbering)
+                if pdb1_source == 'pdb' and pdb2_source == 'pdb': #check both
+                    residue_exists_in_both_structures_bool = pdb1_seq_original_idx in pdb1_residue_idx_ca_coords_dict and pdb2_seq_original_idx in pdb2_residue_idx_ca_coords_dict
+                elif pdb1_source == 'pdb' and pdb2_source == 'af': #check pdb1
+                    residue_exists_in_both_structures_bool = pdb1_seq_original_idx in pdb1_residue_idx_ca_coords_dict
+                elif pdb1_source == 'af' and pdb2_source == 'pdb': #check pdb2
+                    residue_exists_in_both_structures_bool = pdb2_seq_original_idx in pdb2_residue_idx_ca_coords_dict 
+                elif pdb1_source == 'af' and pdb2_source == 'af': #check neither 
+                    residue_exists_in_both_structures_bool = True 
+                if residue_exists_in_both_structures_bool:
                     pdb1_ca_pos = list(pdb1_residue_idx_ca_coords_dict[pdb1_seq_original_idx][0:3])
                     pdb2_ca_pos = list(pdb2_residue_idx_ca_coords_dict[pdb2_seq_original_idx][0:3])
                     curr_ca_rmsf = np.linalg.norm(np.array(pdb1_ca_pos) - np.array(pdb2_ca_pos))
@@ -91,8 +102,6 @@ def get_residue_idx_below_rmsf_threshold(pdb1_seq, pdb2_seq, pdb1_path, pdb2_pat
                     pdb1_ca_pos_aligned.append(pdb1_ca_pos)
                     pdb2_ca_pos_aligned.append(pdb2_ca_pos)
                 else:
-                    #CA could be missing from either pdb structure (either due to cleaning process or missing atom)
-                    #so ignore these 
                     pdb1_residue_idx_below_threshold.append(pdb1_seq_original_idx)
                     pdb2_residue_idx_below_threshold.append(pdb2_seq_original_idx)
 
@@ -168,6 +177,8 @@ def get_residues_ignore_idx_between_pdb_conformations(conformation1_pdb_path, co
                                                                                                 conformation2_pdb_seq,
                                                                                                 conformation1_pdb_path,
                                                                                                 conformation2_pdb_path,
+                                                                                                'pdb',
+                                                                                                'pdb',
                                                                                                 conformation1_pdb_common_residues_idx,
                                                                                                 conformation2_pdb_common_residues_idx,
                                                                                                 conformation1_pdb_disordered_residues_idx,
@@ -255,6 +266,8 @@ def get_residues_ignore_idx_between_pdb_af_conformation(pdb_path, af_path, af_in
                                                                                                 af_seq,
                                                                                                 pdb_path,
                                                                                                 af_path,
+                                                                                                'pdb',
+                                                                                                'af',
                                                                                                 pdb_common_residues_idx,
                                                                                                 af_common_residues_idx,
                                                                                                 pdb_disordered_residues_idx,
@@ -376,7 +389,7 @@ def get_rmsf_pdb_af_conformation(pdb_path, af_path):
     af_seq = get_pdb_path_seq(af_path, None)
 
     pdb_common_residues_idx, af_common_residues_idx = get_residues_idx_in_seq1_and_seq2(pdb_seq, af_seq)
-    out = get_rmsf(pdb_seq, af_seq, pdb_path, af_path, pdb_common_residues_idx, af_common_residues_idx)
-    out_df = pd.DataFrame(out, columns=['pdb_residue_num','af_residue_num','pdb_residue_name','af_residue_name','rmsf']) 
+    out = get_rmsf(pdb_seq, af_seq, pdb_path, af_path, 'pdb', 'af', pdb_common_residues_idx, af_common_residues_idx)
+    out_df = pd.DataFrame(out, columns=['pdb_residue_num_remapped','af_residue_num_remapped','pdb_residue_num_orig','af_residue_num_orig','pdb_residue_name','af_residue_name','rmsf']) 
 
     return out_df 

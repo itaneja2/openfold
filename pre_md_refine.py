@@ -25,6 +25,13 @@ cutoffs = dict(
 # Using amber14 recommended protein force field
 forcefield = app.ForceField("amber14/protein.ff14SB.xml")
 
+def replace_hetatm_w_atom(pdb_path):
+    #when renaming cys->cyx, openmm labels as HETATM
+    with open(pdb_path, 'r') as f:
+        pdb_lines = f.read()
+    modified_pdb_lines = pdb_lines.replace('HETATM', 'ATOM  ') 
+    with open(pdb_path, 'w') as f:
+        f.writelines(modified_pdb_lines)
 
 def get_residues_idx_from_dict_keys(dict_keys):
     if len(dict_keys) == 0:
@@ -129,11 +136,7 @@ def get_structural_issues_info(input_file, output_file, check_for_strained_bonds
     return out 
 
 
-def refine_multiple_rounds(input_file, output_file, autodetect_disulfide_bonds=True, disulfide_bond_residues_idx=None, check_for_strained_bonds=True, num_attempts=20, num_iterations_per_round=6, n_threads=-1):
-
-    #note: disulfide_bond_residues_idx is 0-indexed 
-    if autodetect_disulfide_bonds and disulfide_bond_residues_idx is not None:
-        raise ValueError("Cannot both automatically and manually assign disulfide bonds. Choose one or the other")
+def refine_multiple_rounds(input_file, output_file, add_disulfide_bonds=True, disulfide_bond_residues_idx=None, check_for_strained_bonds=True, num_attempts=20, num_iterations_per_round=6, n_threads=-1):
 
     structural_issues_info_best_round = {}
     prev_num_bad_peptide_bonds_and_cis_residues = 10000
@@ -151,7 +154,7 @@ def refine_multiple_rounds(input_file, output_file, autodetect_disulfide_bonds=T
                                                                       prev_num_d_residues,
                                                                       i+1,
                                                                       check_for_strained_bonds, 
-                                                                      autodetect_disulfide_bonds,
+                                                                      add_disulfide_bonds,
                                                                       disulfide_bond_residues_idx,
                                                                       num_iterations_per_round, 
                                                                       n_threads)
@@ -169,7 +172,7 @@ def refine_multiple_rounds(input_file, output_file, autodetect_disulfide_bonds=T
     
 
 
-def refine_single_round(input_file, output_file, platform, prev_num_bad_peptide_bonds_and_cis_residues, prev_num_d_residues, round_num, check_for_strained_bonds, autodetect_disulfide_bonds, disulfide_bond_residues_idx, num_iterations_per_round, n_threads):
+def refine_single_round(input_file, output_file, platform, prev_num_bad_peptide_bonds_and_cis_residues, prev_num_d_residues, round_num, check_for_strained_bonds, add_disulfide_bonds, disulfide_bond_residues_idx, num_iterations_per_round, n_threads):
 
     fixed_peptide_and_cis = False 
     checked_chirality = False
@@ -198,7 +201,7 @@ def refine_single_round(input_file, output_file, platform, prev_num_bad_peptide_
 
         try:
             if i == 0:
-                topology, positions = disulfide_bonds_fixer(topology, positions, platform, autodetect_disulfide_bonds, disulfide_bond_residues_idx)
+                topology, positions = disulfide_bonds_fixer(topology, positions, platform, add_disulfide_bonds, disulfide_bond_residues_idx)
             cis_trans_bond_info, _ = get_cis_trans_bond_info(topology, positions)
             cis_residues_keys = [key for key in cis_trans_bond_info if cis_trans_bond_info[key] == 'cis']
             cis_residues_idx = get_residues_idx_from_dict_keys(cis_residues_keys)
@@ -321,6 +324,7 @@ def refine_single_round(input_file, output_file, platform, prev_num_bad_peptide_
 
     if num_bad_peptide_bonds_and_cis_residues <= prev_num_bad_peptide_bonds_and_cis_residues and num_d_residues <= prev_num_d_residues:
         print('SAVING %s' % output_file)
+        modeller = app.Modeller(topology, positions)
         with open(output_file, "w") as out_handle:
             app.PDBFile.writeFile(topology, positions, out_handle, keepIds=True)
         structural_issues_info = save_structural_issues_info(structural_issues_info, round_num, output_file) 
@@ -330,7 +334,16 @@ def refine_single_round(input_file, output_file, platform, prev_num_bad_peptide_
     return pass_all_checks, num_bad_peptide_bonds_and_cis_residues, num_d_residues, structural_issues_info
 
 
-def disulfide_bonds_fixer(topology, positions, platform, autodetect_disulfide_bonds, disulfide_bond_residues_idx, disulfide_bond_cutoff=5.0, n_threads=-1):
+def disulfide_bonds_fixer(topology, positions, platform, add_disulfide_bonds, disulfide_bond_residues_idx, disulfide_bond_cutoff=5.0, n_threads=-1):
+
+    #note: disulfide_bond_residues_idx is 0-indexed 
+    if add_disulfide_bonds and disulfide_bond_residues_idx is None:
+        print("***Automatically detecting disulfides")
+    elif add_disulfide_bonds and disulfide_bond_residues_idx is not None:
+        print("***Adding disulfides at specified indices:")
+        print(disulfide_bond_residues_idx)
+    else:
+        print("***Not adding any disulfide bonds")
 
     modeller = app.Modeller(topology, positions)
 
@@ -343,8 +356,8 @@ def disulfide_bonds_fixer(topology, positions, platform, autodetect_disulfide_bo
 
     pos = np.array(modeller.positions.value_in_unit(LENGTH))
 
-    #don't add any disulfide bonds if autodetect_disulfide_bonds = False 
-    if autodetect_disulfide_bonds and disulfide_bond_residues_idx is None: #autodetect disulfides 
+
+    if add_disulfide_bonds and disulfide_bond_residues_idx is None: #autodetect disulfides 
         disulfide_bonds_added = [] 
         for chain in modeller.topology.chains():
             for residue1 in chain.residues():
@@ -354,15 +367,16 @@ def disulfide_bonds_fixer(topology, positions, platform, autodetect_disulfide_bo
                         atom2 = next(atom for atom in residue2.atoms() if atom.name == 'SG')
                         disulfide_dist = round(np.linalg.norm(pos[atom1.index] -  pos[atom2.index]),2)
                         disulfide_bond_id = '%d_%d' % (min(residue1.index,residue2.index),max(residue1.index,residue2.index))
-                        if disulfide_dist >= 1.5 and disulfide_dist <= disulfide_bond_cutoff:  
+                        if disulfide_dist <= disulfide_bond_cutoff:  
                             if abs(residue2.index-residue1.index) > 2:
                                 if disulfide_bond_id not in disulfide_bonds_added:
                                     print('adding disulfide bond between residue %d and residue %d (current distance = %.2f)' % (residue1.index,residue2.index,disulfide_dist))
                                     modeller.topology.addBond(atom1, atom2)
                                     disulfide_bonds_added.append(disulfide_bond_id)
+
         print('disulfide bonds added')
         print(disulfide_bonds_added)
-    elif autodetect_disulfide_bonds and disulfide_bond_residues_idx is not None:
+    elif add_disulfide_bonds and disulfide_bond_residues_idx is not None: #add disulfides at prespecified indices 
         disulfide_bonds_added = [] 
         for chain in modeller.topology.chains():
             for residue1 in chain.residues():
@@ -380,6 +394,9 @@ def disulfide_bonds_fixer(topology, positions, platform, autodetect_disulfide_bo
                                     print('adding disulfide bond between residue %d and residue %d (current distance = %.2f)' % (residue1.index,residue2.index,disulfide_dist))
                                     modeller.topology.addBond(atom1, atom2)
                                     disulfide_bonds_added.append(disulfide_bond_id)
+
+                                    
+                                  
         print('disulfide bonds added')
         print(disulfide_bonds_added)
 
@@ -564,7 +581,8 @@ def get_disulfide_bonds_info(topology, positions, disulfide_bond_cutoff=5.0, n_t
     for chain in modeller.topology.chains():
         for residue1 in chain.residues():
             for residue2 in chain.residues():
-                if residue1.name == 'CYS' and residue2.name == 'CYS' and residue1.index != residue2.index:
+                if residue1.name in ['CYS','CYX'] and residue2.name in ['CYS','CYX'] and residue1.index != residue2.index:
+
                     atom1 = next(atom for atom in residue1.atoms() if atom.name == 'SG')
                     atom2 = next(atom for atom in residue2.atoms() if atom.name == 'SG')
                     disulfide_dist = round(np.linalg.norm(pos[atom1.index] -  pos[atom2.index]),2)
@@ -732,8 +750,3 @@ def get_strained_sidechain_bonds_info(topology, positions, disulfide_bond_residu
              
     return strained_residues, strained_bond_info, pass_check
 
-
-
-#input_file = '/gpfs/home/itaneja/openfold/conformational_states_testing_data/rw_predictions/P31133/alternative_conformations-verbose/template=none/module_config_0/rw-hp_config_0/train-hp_config_1/rw_output/md_starting_structures/num_clusters=10/plddt_threshold=None/cluster_6_idx_10_plddt_77.pdb'
-#output_file = input_file.replace('.pdb', '_openmm_refinement.pdb')
-#refine_multiple_rounds(input_file, output_file) 

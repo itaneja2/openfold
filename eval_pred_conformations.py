@@ -21,6 +21,7 @@ import functools
 
 from DockQ.DockQ import calc_DockQ
 
+from custom_openfold_utils.seq_utils import get_residues_idx_in_seq1_and_seq2 
 from custom_openfold_utils.pdb_utils import superimpose_wrapper_monomer, superimpose_wrapper_multimer, renumber_chain_wrt_reference, convert_pdb_to_mmcif, get_bfactor, get_pdb_path_seq, get_af_disordered_domains, get_af_disordered_residues, get_ca_pairwise_dist
 from custom_openfold_utils.conformation_utils import get_rmsf_pdb_af_conformation, get_comparison_residues_idx_between_pdb_af_conformation
 
@@ -29,6 +30,8 @@ from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
 asterisk_line = '******************************************************************************'
+
+TMalign_path = '/gpfs/home/itaneja/TMalign/TMalign'
 
 def get_template_str(input_str):
     search_str = "template="
@@ -50,40 +53,31 @@ def get_cluster_num(cluster_str):
         cluster_num = 'initial_pred'
     return cluster_num
 
-def compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_pdb_path, initial_pred_path, conformation_info_dir, superimposed_structures_save_dir, method_str):
+def compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_pdb_id_outside_training_set_bool, ref_pdb_path, initial_pred_path, conformation_info_dir, superimposed_structures_save_dir, method_str):
 
     pdb_pred_path_list = []
-    pdb_pred_path_named_by_cluster_list = []
+    pdb_pred_path_openmm_refined_list = []
     rmsd_wrt_initial_list = [] 
     mean_plddt_list = [] 
-
-    cif_path = convert_pdb_to_mmcif(initial_pred_path, './cif_temp')
-    _, mean_plddt = get_bfactor(cif_path)
-    mean_plddt = round(mean_plddt,2)
-    os.remove(cif_path)
-    pdb_pred_path_list.append(initial_pred_path)
-    pdb_pred_path_named_by_cluster_list.append(initial_pred_path)
-    rmsd_wrt_initial_list.append(0)
-    mean_plddt_list.append(mean_plddt)
 
     template_str = get_template_str(conformation_info_dir)
 
     fname = '%s/md_starting_structure_info.pkl' % conformation_info_dir
     with open(fname, 'rb') as f:
          conformation_info = pickle.load(f)
-    for cluster_num in sorted(conformation_info.keys()):
+    for cluster_num in conformation_info.keys():
         for cluster_idx in range(0,len(conformation_info[cluster_num])):
             pdb_pred_path = conformation_info[cluster_num][cluster_idx][0] #this points to the original file
+            pdb_pred_path_openmm_refined = conformation_info[cluster_num][cluster_idx][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to
             rmsd_wrt_initial = round(conformation_info[cluster_num][cluster_idx][1],2)
             mean_plddt = round(conformation_info[cluster_num][cluster_idx][2],2)
-            pdb_pred_path_named_by_cluster = conformation_info[cluster_num][cluster_idx][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to  
             pdb_pred_path_list.append(pdb_pred_path)
-            pdb_pred_path_named_by_cluster_list.append(pdb_pred_path_named_by_cluster)
+            pdb_pred_path_openmm_refined_list.append(pdb_pred_path_openmm_refined)
             rmsd_wrt_initial_list.append(rmsd_wrt_initial)
             mean_plddt_list.append(mean_plddt)
 
-    print('PDB files being evaluated:')
-    print(pdb_pred_path_list[0:5])
+    print('PDB files being evaluated [first 5 of N]:')
+    print(pdb_pred_path_openmm_refined_list[0:5])
 
     cluster_num_list = []    
     rmsd_list = [] 
@@ -91,15 +85,15 @@ def compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id,
     rmsf_df = []
     ca_pdist_all = [] 
  
-    for i,pdb_pred_path in enumerate(pdb_pred_path_list):
+    for i,pdb_pred_path in enumerate(pdb_pred_path_openmm_refined_list):
 
         print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
         print('superimposing %s and %s' % (ref_pdb_id, pdb_pred_path))
 
-        cluster_num = get_cluster_num(pdb_pred_path_named_by_cluster_list[i])
+        cluster_num = get_cluster_num(pdb_pred_path_openmm_refined_list[i])
         cluster_num_list.append(cluster_num)
 
-        rmsd, tm_score, ref_pdb_path_aligned, pdb_pred_path_aligned = superimpose_wrapper_monomer(ref_pdb_id, None, 'pdb', 'pred_rw', ref_pdb_path, pdb_pred_path, superimposed_structures_save_dir)
+        rmsd, tm_score, ref_pdb_path_aligned, pdb_pred_path_aligned = superimpose_wrapper_monomer(ref_pdb_id, None, 'pdb', 'pred_rw', ref_pdb_path, pdb_pred_path, superimposed_structures_save_dir, TMalign_path=TMalign_path)
         rmsd = round(rmsd,2)
         tm_score = round(tm_score,2)
         rmsd_list.append(rmsd)
@@ -116,6 +110,7 @@ def compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id,
         curr_rmsf_df['method'] = method_str
         curr_rmsf_df['template'] = template_str 
         curr_rmsf_df['ref_pdb_id'] = ref_pdb_id
+        curr_rmsf_df['ref_pdb_id_outside_training_set'] = ref_pdb_id_outside_training_set_bool
         curr_rmsf_df['pdb_pred_path'] = pdb_pred_path_aligned
         curr_rmsf_df['cluster_num'] = cluster_num
 
@@ -124,16 +119,11 @@ def compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id,
         else:
             rmsf_df = pd.concat([rmsf_df, curr_rmsf_df], axis=0, ignore_index=True)
  
-    summary_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_str, 'template': template_str, 'ref_pdb_id': ref_pdb_id, 'pdb_pred_path': pdb_pred_path_list, 'pdb_pred_path_named_by_cluster': pdb_pred_path_named_by_cluster_list, 'cluster_num': cluster_num_list,
+    summary_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_str, 'template': template_str, 'ref_pdb_id': ref_pdb_id, 'ref_pdb_id_outside_training_set': ref_pdb_id_outside_training_set_bool, 'pdb_pred_path': pdb_pred_path_list, 'pdb_pred_path_openmm_refined': pdb_pred_path_openmm_refined_list, 'cluster_num': cluster_num_list,
                           'mean_plddt': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list, 'tm_score': tm_list})
 
+    '''
     print('Running PCA')
-    #pdb_pred_path_list.append(ref_pdb_path_aligned_initial)
-    #cluster_num_list.append('reference')
-    #ca_pdist = get_ca_pairwise_dist(ref_pdb_path_aligned_initial)
-    #ca_pdist_all = np.vstack((ca_pdist_all, np.array(ca_pdist)))
-    #print(ca_pdist_all)
-    #print(ca_pdist_all.shape)
     scaler = StandardScaler()
     ca_pdist_all_scaled = scaler.fit_transform(ca_pdist_all)
     pca = PCA(n_components=2)
@@ -141,45 +131,33 @@ def compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id,
 
     pca_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_str, 'template': template_str, 'ref_pdb_id': ref_pdb_id, 'pdb_pred_path': pdb_pred_path_list, 'cluster_num': cluster_num_list, 'pc1': pc_coords[:,0], 'pc2': pc_coords[:,1]})
 
-    print(pca_df)
-
+    '''
  
-    return summary_df, rmsf_df, pca_df
+    return summary_df, rmsf_df
 
 
-def compare_clustered_conformations_pca(uniprot_id, ref_pdb_id, rw_initial_pred_path, benchmark_initial_pred_path, rw_conformation_info_dir, benchmark_conformation_info_dir):
+def compare_clustered_conformations_pca(uniprot_id, pdb_id_outside_training_set_enum, rw_initial_pred_path, benchmark_initial_pred_path, rw_conformation_info_dir, benchmark_conformation_info_dir):
 
     pdb_pred_path_list = []
-    pdb_pred_path_named_by_cluster_list = []
+    pdb_pred_path_openmm_refined_list = []
     rmsd_wrt_initial_list = [] 
     mean_plddt_list = [] 
     method_list = []
 
-    try: 
-        af_seq = get_pdb_path_seq(rw_initial_pred_path, None)
-        af_disordered_domains_idx, _ = get_af_disordered_domains(rw_initial_pred_path)     
-        af_disordered_residues_idx = get_af_disordered_residues(af_disordered_domains_idx)
-        af_disordered_residues_idx_complement = sorted(list(set(range(len(af_seq))) - set(af_disordered_residues_idx)))
-    except ValueError as e:
-        print('TROUBLE PARSING AF PREDICTION %s' % initial_pred_path) 
-        af_disordered_residues_idx_complement = None
+    '''print(rw_initial_pred_openmm_refined_path)
+    print(benchmark_initial_pred_openmm_refined_path)
 
-    print('Index of residues that are not disordered based on initial AF prediction')
-    print(af_disordered_residues_idx_complement) 
- 
-    for i,initial_pred_path in enumerate([rw_initial_pred_path, benchmark_initial_pred_path]):
-        cif_path = convert_pdb_to_mmcif(initial_pred_path, './cif_temp')
-        _, mean_plddt = get_bfactor(cif_path)
-        mean_plddt = round(mean_plddt,2)
-        os.remove(cif_path)
-        pdb_pred_path_list.append(initial_pred_path)
-        pdb_pred_path_named_by_cluster_list.append(initial_pred_path)
-        rmsd_wrt_initial_list.append(0)
-        mean_plddt_list.append(mean_plddt)
-        if i == 0:
-            method_list.append('initial-rw')
-        else:
-            method_list.append('initial-benchmark')
+    rw_seq = get_pdb_path_seq(rw_initial_pred_openmm_refined_path, None)
+    benchmark_seq = get_pdb_path_seq(benchmark_initial_pred_openmm_refined_path, None)
+
+    print(rw_seq)
+    print(benchmark_seq)
+
+    rw_common_residues_idx, benchmark_common_residues_idx = get_residues_idx_in_seq1_and_seq2(rw_seq, benchmark_seq)
+    print('rw common residues idx')
+    print(rw_common_residues_idx)
+    print('benchmark common residues idx')
+    print(benchmark_common_residues_idx)'''
 
     template_str = get_template_str(rw_conformation_info_dir)
 
@@ -191,14 +169,14 @@ def compare_clustered_conformations_pca(uniprot_id, ref_pdb_id, rw_initial_pred_
          benchmark_conformation_info = pickle.load(f)
 
     for i,conformation_info in enumerate([rw_conformation_info, benchmark_conformation_info]):
-        for cluster_num in sorted(conformation_info.keys()):
+        for cluster_num in conformation_info.keys():
             for cluster_idx in range(0,len(conformation_info[cluster_num])):
                 pdb_pred_path = conformation_info[cluster_num][cluster_idx][0] #this points to the original file
+                pdb_pred_path_openmm_refined = conformation_info[cluster_num][cluster_idx][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to
                 rmsd_wrt_initial = round(conformation_info[cluster_num][cluster_idx][1],2)
                 mean_plddt = round(conformation_info[cluster_num][cluster_idx][2],2)
-                pdb_pred_path_named_by_cluster = conformation_info[cluster_num][cluster_idx][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to  
                 pdb_pred_path_list.append(pdb_pred_path)
-                pdb_pred_path_named_by_cluster_list.append(pdb_pred_path_named_by_cluster)
+                pdb_pred_path_openmm_refined_list.append(pdb_pred_path_openmm_refined)
                 rmsd_wrt_initial_list.append(rmsd_wrt_initial)
                 mean_plddt_list.append(mean_plddt)
                 if i == 0:
@@ -209,14 +187,22 @@ def compare_clustered_conformations_pca(uniprot_id, ref_pdb_id, rw_initial_pred_
     cluster_num_list = []    
     ca_pdist_all = []
  
-    for i,pdb_pred_path in enumerate(pdb_pred_path_list):
+    for i,pdb_pred_path in enumerate(pdb_pred_path_openmm_refined_list):
 
         print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
+    
+        print(pdb_pred_path)
 
-        cluster_num = get_cluster_num(pdb_pred_path_named_by_cluster_list[i])
+        cluster_num = get_cluster_num(pdb_pred_path_openmm_refined_list[i])
         cluster_num_list.append(cluster_num)
 
-        ca_pdist = get_ca_pairwise_dist(pdb_pred_path, residues_include_idx=af_disordered_residues_idx_complement)
+        '''if method_list[i] == 'rw':
+            residues_include_idx = rw_common_residues_idx
+        else:
+            residues_include_idx = benchmark_common_residues_idx'''
+
+        ca_pdist = get_ca_pairwise_dist(pdb_pred_path)
+
         if len(ca_pdist_all) == 0:
             ca_pdist_all = np.array(ca_pdist)
         else:
@@ -234,7 +220,7 @@ def compare_clustered_conformations_pca(uniprot_id, ref_pdb_id, rw_initial_pred_
     pca = PCA(n_components=2)
     pc_coords = pca.fit_transform(ca_pdist_all_scaled)
 
-    pca_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_list, 'template': template_str, 'pdb_pred_path': pdb_pred_path_list, 'cluster_num': cluster_num_list, 'mean_plddt': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'pc1': pc_coords[:,0], 'pc2': pc_coords[:,1]})
+    pca_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_list, 'template': template_str, 'pdb_id_outside_training_set_enum': pdb_id_outside_training_set_enum, 'pdb_pred_path': pdb_pred_path_list, 'cluster_num': cluster_num_list, 'mean_plddt': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'pc1': pc_coords[:,0], 'pc2': pc_coords[:,1]})
 
     print(pca_df)
 
@@ -247,7 +233,7 @@ def compare_clustered_conformations_pca(uniprot_id, ref_pdb_id, rw_initial_pred_
 def compare_clustered_conformations_pca_w_ref(uniprot_id, ref_pdb_id, initial_pred_path, rw_conformation_info_dir, benchmark_conformation_info_dir):
 
     pdb_pred_path_list = []
-    pdb_pred_path_named_by_cluster_list = []
+    pdb_pred_path_openmm_refined_list = []
     rmsd_wrt_initial_list = [] 
     mean_plddt_list = [] 
     method_list = [] 
@@ -256,15 +242,15 @@ def compare_clustered_conformations_pca_w_ref(uniprot_id, ref_pdb_id, initial_pr
     ref_pdb_path = '%s/%s_clean.pdb' % (superimposed_structures_save_dir, ref_pdb_id)
     ref_pdb_comparison_residues_idx, af_comparison_residues_idx = get_comparison_residues_idx_between_pdb_af_conformation(ref_pdb_path, initial_pred_path)
 
-    cif_path = convert_pdb_to_mmcif(initial_pred_path, './cif_temp')
+    '''cif_path = convert_pdb_to_mmcif(initial_pred_path, './cif_temp')
     _, mean_plddt = get_bfactor(cif_path)
     mean_plddt = round(mean_plddt,2)
     os.remove(cif_path)
     pdb_pred_path_list.append(initial_pred_path)
-    pdb_pred_path_named_by_cluster_list.append(initial_pred_path)
+    pdb_pred_path_openmm_refined_list.append(initial_pred_path)
     rmsd_wrt_initial_list.append(0)
     mean_plddt_list.append(mean_plddt)
-    method_list.append('initial')
+    method_list.append('initial')'''
 
     template_str = get_template_str(rw_conformation_info_dir)
 
@@ -276,14 +262,21 @@ def compare_clustered_conformations_pca_w_ref(uniprot_id, ref_pdb_id, initial_pr
          benchmark_conformation_info = pickle.load(f)
 
     for i,conformation_info in enumerate([rw_conformation_info, benchmark_conformation_info]):
-        for cluster_num in sorted(conformation_info.keys()):
+        for cluster_num in conformation_info.keys():
             for cluster_idx in range(0,len(conformation_info[cluster_num])):
                 pdb_pred_path = conformation_info[cluster_num][cluster_idx][0] #this points to the original file
+                pdb_pred_path_openmm_refined = conformation_info[cluster_num][cluster_idx][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to
+                #if cluster_num == 'initial':
+                #    cif_path = convert_pdb_to_mmcif(pdb_pred_path_openmm_refined, './cif_temp')
+                #    _, mean_plddt = get_bfactor(cif_path)
+                #    mean_plddt = round(mean_plddt,2)
+                #    os.remove(cif_path)
+                #    rmsd_wrt_initial = 0 
+                #else:
                 rmsd_wrt_initial = round(conformation_info[cluster_num][cluster_idx][1],2)
                 mean_plddt = round(conformation_info[cluster_num][cluster_idx][2],2)
-                pdb_pred_path_named_by_cluster = conformation_info[cluster_num][cluster_idx][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to  
                 pdb_pred_path_list.append(pdb_pred_path)
-                pdb_pred_path_named_by_cluster_list.append(pdb_pred_path_named_by_cluster)
+                pdb_pred_path_openmm_refined_list.append(pdb_pred_path_openmm_refined)
                 rmsd_wrt_initial_list.append(rmsd_wrt_initial)
                 mean_plddt_list.append(mean_plddt)
                 if i == 0:
@@ -294,14 +287,14 @@ def compare_clustered_conformations_pca_w_ref(uniprot_id, ref_pdb_id, initial_pr
     cluster_num_list = []    
     ca_pdist_all = []
  
-    for i,pdb_pred_path in enumerate(pdb_pred_path_list):
+    for i,pdb_pred_path in enumerate(pdb_pred_path_openmm_refined_list):
 
         print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
 
-        cluster_num = get_cluster_num(pdb_pred_path_named_by_cluster_list[i])
+        cluster_num = get_cluster_num(pdb_pred_path_openmm_refined_list[i])
         cluster_num_list.append(cluster_num)
 
-        ca_pdist = get_ca_pairwise_dist(pdb_pred_path, residues_include_idx=af_comparison_residues_idx)
+        ca_pdist = get_ca_pairwise_dist(pdb_pred_path)
         if len(ca_pdist_all) == 0:
             ca_pdist_all = np.array(ca_pdist)
         else:
@@ -339,7 +332,7 @@ def compare_clustered_conformations_pca_w_ref(uniprot_id, ref_pdb_id, initial_pr
 def compare_clustered_conformations_to_reference_multimer(uniprot_id, ref_pdb_id, ref_pdb_path, initial_pred_path, conformation_info_dir, superimposed_structures_save_dir, method_str):
 
     pdb_pred_path_list = []
-    pdb_pred_path_named_by_cluster_list = []
+    pdb_pred_path_openmm_refined_list = []
     rmsd_wrt_initial_list = [] 
     mean_plddt_list = []  
     ptm_iptm_list = [] 
@@ -349,7 +342,7 @@ def compare_clustered_conformations_to_reference_multimer(uniprot_id, ref_pdb_id
     mean_plddt = round(mean_plddt,2)
     os.remove(cif_path)
     pdb_pred_path_list.append(initial_pred_path)
-    pdb_pred_path_named_by_cluster_list.append(initial_pred_path)
+    pdb_pred_path_openmm_refined_list.append(initial_pred_path)
     rmsd_wrt_initial_list.append(0)
     mean_plddt_list.append(mean_plddt)
     ptm_iptm_list.append(0)
@@ -365,15 +358,15 @@ def compare_clustered_conformations_to_reference_multimer(uniprot_id, ref_pdb_id
         rmsd_wrt_initial = round(conformation_info[key][1],2)
         mean_plddt = round(conformation_info[key][2],2)
         ptm_iptm = round(conformation_info[key][3],2)
-        pdb_pred_path_named_by_cluster = conformation_info[key][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to  
+        pdb_pred_path_openmm_refined = conformation_info[key][-1] #this is the same structure as pdb_pred_path except named by the cluster it belongs to  
         pdb_pred_path_list.append(pdb_pred_path)
-        pdb_pred_path_named_by_cluster_list.append(pdb_pred_path_named_by_cluster)
+        pdb_pred_path_openmm_refined_list.append(pdb_pred_path_openmm_refined)
         rmsd_wrt_initial_list.append(rmsd_wrt_initial)
         mean_plddt_list.append(mean_plddt)
         ptm_iptm_list.append(ptm_iptm)
 
-    print('PDB files being evaluated:')
-    print(pdb_pred_path_list)
+    print('PDB files being evaluated: [first 5 of N]')
+    print(pdb_pred_path_list[0:5])
         
     rmsd_list = [] 
     dockq_list = []
@@ -382,7 +375,7 @@ def compare_clustered_conformations_to_reference_multimer(uniprot_id, ref_pdb_id
     for i,pdb_pred_path in enumerate(pdb_pred_path_list):
         print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
         print('superimposing %s and %s' % (ref_pdb_id, pdb_pred_path))
-        cluster_num = get_cluster_num(pdb_pred_path_named_by_cluster_list[i])
+        cluster_num = get_cluster_num(pdb_pred_path_openmm_refined_list[i])
         cluster_num_list.append(cluster_num)
         rmsd, pdb_path_output, _ = superimpose_wrapper_multimer(ref_pdb_id, None, 'pdb', 'pred_rw', ref_pdb_path, pdb_pred_path, superimposed_structures_save_dir)
         rmsd = round(rmsd,2)
@@ -395,7 +388,7 @@ def compare_clustered_conformations_to_reference_multimer(uniprot_id, ref_pdb_id
             dockq_val = np.nan 
         dockq_list.append(dockq_val)
 
-    summary_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_str, 'template': template_str, 'ref_pdb_id': ref_pdb_id, 'pdb_pred_path': pdb_pred_path_list, 'pdb_pred_path_named_by_cluster': pdb_pred_path_named_by_cluster_list, 'cluster_num': cluster_num_list,
+    summary_df = pd.DataFrame({'uniprot_id': uniprot_id, 'method': method_str, 'template': template_str, 'ref_pdb_id': ref_pdb_id, 'pdb_pred_path': pdb_pred_path_list, 'pdb_pred_path_openmm_refined': pdb_pred_path_openmm_refined_list, 'cluster_num': cluster_num_list,
                           'mean_plddt': mean_plddt_list, 'ptm_iptm': mean_plddt_list, 'rmsd_wrt_initial': rmsd_wrt_initial_list, 'rmsd': rmsd_list, 'dockq': dockq_list})
  
     return summary_df
@@ -412,7 +405,7 @@ def compare_all_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_p
     mean_plddt = round(mean_plddt,2)
     os.remove(cif_path)
     pdb_pred_path_list.append(initial_pred_path)
-    pdb_pred_path_named_by_cluster_list.append(initial_pred_path)
+    pdb_pred_path_openmm_refined_list.append(initial_pred_path)
     rmsd_wrt_initial_list.append(0)
     mean_plddt_list.append(mean_plddt)
  
@@ -453,7 +446,7 @@ def compare_all_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_p
     for i,pdb_pred_path in enumerate(pdb_pred_path_list):
         print('completion percentage: %.2f' % (i/len(pdb_pred_path_list)))
         print('superimposing %s and %s' % (ref_pdb_id, pdb_pred_path))
-        rmsd, tm_score, ref_pdb_path_aligned, pdb_pred_path_aligned = superimpose_wrapper_monomer(ref_pdb_id, None, 'pdb', 'pred_benchmark', ref_pdb_path, pdb_pred_path, superimposed_structures_save_dir)
+        rmsd, tm_score, ref_pdb_path_aligned, pdb_pred_path_aligned = superimpose_wrapper_monomer(ref_pdb_id, None, 'pdb', 'pred_benchmark', ref_pdb_path, pdb_pred_path, superimposed_structures_save_dir, TMalign_path=TMalign_path)
         rmsd = round(rmsd,2)
         tm_score = round(tm_score,2)
         rmsd_list.append(rmsd)
@@ -465,7 +458,7 @@ def compare_all_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_p
         curr_rmsf_df['template'] = template_str 
         curr_rmsf_df['ref_pdb_id'] = ref_pdb_id
         curr_rmsf_df['pdb_pred_path'] = pdb_pred_path_aligned
-        curr_rmsf_df['pdb_cluster'] = get_cluster_num(pdb_pred_path_named_by_cluster_list[i]) 
+        curr_rmsf_df['pdb_cluster'] = get_cluster_num(pdb_pred_path_openmm_refined_list[i]) 
 
         if len(rmsf_df) == 0:
             rmsf_df = curr_rmsf_df
@@ -492,7 +485,7 @@ def compare_all_conformations_to_reference_multimer(uniprot_id, ref_pdb_id, ref_
     mean_plddt = round(mean_plddt,2)
     os.remove(cif_path)
     pdb_pred_path_list.append(initial_pred_path)
-    pdb_pred_path_named_by_cluster_list.append(initial_pred_path)
+    pdb_pred_path_openmm_refined_list.append(initial_pred_path)
     rmsd_wrt_initial_list.append(0)
     mean_plddt_list.append(mean_plddt)
     ptm_iptm_list.append(0)
@@ -556,7 +549,7 @@ def compare_all_conformations_to_reference_multimer(uniprot_id, ref_pdb_id, ref_
 
 
 
-def get_clustered_conformations_metrics(uniprot_id, ref_pdb_id, conformation_info_dir, initial_pred_path, monomer_or_multimer, method_str, ref_pdb_path=None, save=True):
+def get_clustered_conformations_metrics(uniprot_id, ref_pdb_id, ref_pdb_id_outside_training_set_bool, conformation_info_dir, initial_pred_path, monomer_or_multimer, method_str, ref_pdb_path=None, save=True):
     
     if monomer_or_multimer == 'monomer':
         if ref_pdb_id is not None and len(ref_pdb_id.split('_')) != 2:
@@ -567,7 +560,7 @@ def get_clustered_conformations_metrics(uniprot_id, ref_pdb_id, conformation_inf
 
     superimposed_structures_save_dir = '%s/superimpose-%s' % (conformation_info_dir, ref_pdb_id)
     if monomer_or_multimer == 'monomer':
-        summary_df, rmsf_df, pca_df = compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_pdb_path, initial_pred_path, conformation_info_dir, superimposed_structures_save_dir, method_str)
+        summary_df, rmsf_df = compare_clustered_conformations_to_reference_monomer(uniprot_id, ref_pdb_id, ref_pdb_id_outside_training_set_bool, ref_pdb_path, initial_pred_path, conformation_info_dir, superimposed_structures_save_dir, method_str)
     elif monomer_or_multimer == 'multimer':
         summary_df = compare_clustered_conformations_to_reference_multimer(uniprot_id, ref_pdb_id, ref_pdb_path, initial_pred_path, conformation_info_dir, superimposed_structures_save_dir, method_str)
         
@@ -579,7 +572,6 @@ def get_clustered_conformations_metrics(uniprot_id, ref_pdb_id, conformation_inf
         if monomer_or_multimer == 'monomer':
             print(rmsf_df)
             rmsf_df.to_csv('%s/rmsf_metrics.csv' % superimposed_structures_save_dir, index=False)
-            pca_df.to_csv('%s/pca_metrics.csv' % superimposed_structures_save_dir, index=False)
 
 
     return summary_df

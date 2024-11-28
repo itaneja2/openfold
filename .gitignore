@@ -6,7 +6,32 @@ build
 dist
 
 # files from script downloads
-data
 openfold/resources/
 tests/test_data/
 cutlass/
+openfold/chainmask_params/
+pdb_utils/cif_temp/
+pdb_utils/pdb_temp/
+
+conformational_states_dataset/
+conformational_states_training_data/
+conformational_states_testing_data/
+
+wrapper_scripts/
+
+gen_cvf_training_conformations_batch.py
+
+gen_cvf_training_conformations.py
+
+run_conformation_vectorfield.py
+
+train_conformation_vectorfield.py
+
+rename_cys_cyx.py
+
+run_openfold_biased_template_monomer_testset.py
+
+openfold/model/conformation_module.py
+openfold/model/conformation_vectorfield_model.py
+
+

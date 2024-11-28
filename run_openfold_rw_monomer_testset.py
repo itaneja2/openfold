@@ -301,7 +301,7 @@ def gen_args(alignment_dir, output_dir_base, seed, use_templates=True, use_af_we
 
 def restart_incomplete_iterations(output_dir, args):
 
-    should_run_rw = True 
+    should_run = True 
     total_conformations = args.num_training_conformations*args.num_rw_steps
 
     pdb_files = glob.glob('%s/*/*/*/*.pdb' % output_dir)    
@@ -310,9 +310,46 @@ def restart_incomplete_iterations(output_dir, args):
             logger.info('removing %d pdb files in %s' % (len(pdb_files),output_dir))
             rw_helper_functions.remove_files(pdb_files)
     else:
-        should_run_rw = False 
+        should_run = False 
 
-    return should_run_rw 
+    return should_run 
+
+
+def run_rw_metadynamics_dataset():
+ 
+    conformational_states_df = pd.read_csv('./metadynamics_dataset/metadynamics_dataset_processed.csv')
+
+    conformational_states_df = conformational_states_df.sort_values('seg_len').reset_index(drop=True) 
+    print(conformational_states_df)
+
+    for index,row in conformational_states_df.iterrows():
+
+        logger.info('On row %d of %d' % (index, len(conformational_states_df)))  
+        logger.info(asterisk_line)
+        logger.info(row)
+ 
+        uniprot_id = str(row['uniprot_id'])
+        pdb_id_msa = str(row['pdb_id_msa'])
+
+        use_templates = False
+        template_str = 'template=none' 
+
+        mask_str = 'msa_mask_fraction=15' 
+        
+        alignment_dir = './metadynamics_testset_results/alignment_data/%s/%s' % (uniprot_id,pdb_id_msa)
+        seed = index #keep seed constant per uniprot_id  
+        logger.info(asterisk_line)
+        logger.info('TEMPLATE = %s' % template_str)
+        logger.info(asterisk_line)
+        output_dir_base = './metadynamics_testset_results/rw_predictions/%s' % uniprot_id 
+        args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
+        output_dir = '%s/%s/%s/%s/%s/rw-%s/train-%s' % (output_dir_base, 'alternative_conformations-verbose', template_str, mask_str, args.module_config, args.rw_hp_config, args.train_hp_config)
+        should_run = restart_incomplete_iterations(output_dir, args)
+        if should_run:
+            logger.info("RUNNING %s" % output_dir)
+            run_rw_pipeline(args)
+        else:
+            logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
 
 
 def run_rw_af2sample_dataset():
@@ -332,6 +369,9 @@ def run_rw_af2sample_dataset():
         uniprot_id = str(row['uniprot_id'])
         pdb_id_msa = str(row['pdb_id_msa'])
 
+        if uniprot_id == 'P43005':
+            pdb_id_msa = '6x2l_B' 
+
         use_templates = False
         template_str = 'template=none' 
 
@@ -345,15 +385,25 @@ def run_rw_af2sample_dataset():
         output_dir_base = './conformational_states_testset_results/rw_predictions/%s' % uniprot_id 
         args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
         output_dir = '%s/%s/%s/%s/%s/rw-%s/train-%s' % (output_dir_base, 'alternative_conformations-verbose', template_str, mask_str, args.module_config, args.rw_hp_config, args.train_hp_config)
-        should_run_rw = restart_incomplete_iterations(output_dir, args)
-        if should_run_rw:
+        should_run = restart_incomplete_iterations(output_dir, args)
+        if should_run:
             logger.info("RUNNING %s" % output_dir)
             run_rw_pipeline(args)
         else:
             logger.info("SKIPPING %s BECAUSE ALREADY EVALUATED" % output_dir) 
 
 
+run_rw_metadynamics_dataset() 
 
+#run_rw_af2sample_dataset() 
+
+
+
+
+
+
+
+'''
 def run_rw_custom_dataset():
  
     conformational_states_df = pd.read_csv('./conformational_states_dataset/dataset/conformational_states_filtered_adjudicated_post_AF_training_adjudicated.csv')
@@ -395,8 +445,8 @@ def run_rw_custom_dataset():
         output_dir_base = './conformational_states_testset_results/rw_predictions/%s' % uniprot_id 
         args = gen_args(alignment_dir, output_dir_base, seed, use_templates)
         output_dir = '%s/%s/%s/%s/%s/rw-%s/train-%s' % (output_dir_base, 'alternative_conformations-verbose', template_str, mask_str, args.module_config, args.rw_hp_config, args.train_hp_config)
-        should_run_rw = restart_incomplete_iterations(output_dir, args)
-        if should_run_rw:
+        should_run = restart_incomplete_iterations(output_dir, args)
+        if should_run:
             logger.info("RUNNING %s" % output_dir)
             run_rw_pipeline(args)
         else:
@@ -404,5 +454,5 @@ def run_rw_custom_dataset():
 
 
 
-run_rw_af2sample_dataset() 
-#run_rw_custom_dataset()
+run_rw_custom_dataset()
+'''

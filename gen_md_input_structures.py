@@ -14,8 +14,10 @@ import shutil
 from scipy.spatial.distance import pdist
 from pre_md_refine import refine_multiple_rounds 
 import json 
+from pymol import cmd
 
-from custom_openfold_utils.pdb_utils import get_pdb_path_seq, get_af_disordered_domains, get_af_disordered_residues, get_ca_pairwise_dist
+from custom_openfold_utils.pdb_utils import get_pdb_path_seq, get_af_disordered_domains, get_af_disordered_residues, get_af_nterm_disorder_tail_idx, get_af_cterm_disorder_tail_idx, get_af_disordered_tail_residues, get_ca_pairwise_dist, convert_pdb_to_mmcif, get_bfactor
+
 
 asterisk_line = '******************************************************************************'
 
@@ -41,7 +43,7 @@ def create_clustering_dist_matrix(ca_pdist_all):
     return clustering_dist_matrix
            
 
-def gen_md_input(conformation_info_dir, initial_pred_path, num_clusters, num_md_structures, plddt_threshold, overwrite):
+def gen_md_input(conformation_info_dir, initial_pred_path, num_clusters, num_md_structures, plddt_threshold, remove_disordered_tails, max_candidate_conformations, overwrite, af_disordered_tail_residues_idx_custom=None):
 
     if plddt_threshold is None:
         md_structures_dir = '%s/md_starting_structures/num_clusters=%d/plddt_threshold=None' % (conformation_info_dir, num_clusters)
@@ -50,26 +52,41 @@ def gen_md_input(conformation_info_dir, initial_pred_path, num_clusters, num_md_
 
     os.makedirs(md_structures_dir, exist_ok=True)
 
-    try: 
+    if af_disordered_tail_residues_idx_custom is None:
+        try: 
+            af_seq = get_pdb_path_seq(initial_pred_path, None)
+            af_disordered_domains_idx, _ = get_af_disordered_domains(initial_pred_path)     
+            nterm_disorder_start_idx, nterm_disorder_end_idx = get_af_nterm_disorder_tail_idx(af_disordered_domains_idx)
+            cterm_disorder_start_idx, cterm_disorder_end_idx = get_af_cterm_disorder_tail_idx(af_disordered_domains_idx, len(af_seq))
+            print('nterminal disordered tail idx: %s-%s' % (str(nterm_disorder_start_idx),str(nterm_disorder_end_idx)))
+            print('cterminal disordered tail idx: %s-%s' % (str(cterm_disorder_start_idx),str(cterm_disorder_end_idx)))
+            af_disordered_tail_residues_idx = get_af_disordered_tail_residues(af_disordered_domains_idx, len(af_seq))
+            print('disordered tail residues idx:')
+            print(af_disordered_tail_residues_idx)
+            af_disordered_tail_residues_idx_complement = sorted(list(set(range(len(af_seq))) - set(af_disordered_tail_residues_idx)))
+        except ValueError as e:
+            print('TROUBLE PARSING AF PREDICTION %s' % initial_pred_path) 
+            af_disordered_tail_residues_idx_complement = None
+    else:
         af_seq = get_pdb_path_seq(initial_pred_path, None)
-        af_disordered_domains_idx, _ = get_af_disordered_domains(initial_pred_path)     
-        af_disordered_residues_idx = get_af_disordered_residues(af_disordered_domains_idx)
-        af_disordered_residues_idx_complement = sorted(list(set(range(len(af_seq))) - set(af_disordered_residues_idx)))
-    except ValueError as e:
-        print('TROUBLE PARSING AF PREDICTION %s' % initial_pred_path) 
-        af_disordered_residues_idx_complement = None 
+        af_disordered_tail_residues_idx = af_disordered_tail_residues_idx_custom
+        af_disordered_tail_residues_idx_complement = sorted(list(set(range(len(af_seq))) - set(af_disordered_tail_residues_idx_custom))) 
 
     md_starting_structure_info_fname = '%s/md_starting_structure_info.pkl' % md_structures_dir
-    pdb_files = glob.glob('%s/*.pdb' % md_structures_dir) 
+    pdb_files = glob.glob('%s/openmm_refined_structures/*.pdb' % md_structures_dir)
+    json_files = glob.glob('%s/openmm_refined_structures/*.json' % md_structures_dir) 
+    pdb_files.extend(glob.glob('%s/unrefined_structures/*.pdb' % md_structures_dir))
+
     if os.path.exists(md_starting_structure_info_fname):
         if not(overwrite):
             print("SKIPPING CLUSTERING PROCEDURE, %s ALREADY EXISTS:" % md_starting_structure_info_fname)
             sys.exit(0)
         else:
             remove_files(pdb_files)
+            remove_files(json_files)
     else:
         remove_files(pdb_files)
-
+        remove_files(json_files)
 
     pattern = "%s/conformation_info.pkl" % conformation_info_dir
     files = glob.glob(pattern, recursive=True)
@@ -93,23 +110,30 @@ def gen_md_input(conformation_info_dir, initial_pred_path, num_clusters, num_md_
         else:
             conformation_info.update(curr_conformation_info)
 
+    add_conformations = True 
     conformation_info_all = [] 
     ca_pdist_all = [] 
+
     for key in conformation_info:
         for i,val in enumerate(conformation_info[key]):
             pdb_path = val[0]
             rmsd = val[1]
-            mean_plddt = val[2]
-
-            if plddt_threshold is None:
-                conformation_info_all.append([pdb_path,rmsd,mean_plddt])
-                ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_residues_idx_complement)
-                ca_pdist_all.append(ca_pdist)
-            else:
-                if mean_plddt >= plddt_threshold:
+            mean_plddt = val[2]            
+            if max_candidate_conformations is not None:
+                if len(conformation_info_all) >= max_candidate_conformations:
+                    add_conformations = False
+            if add_conformations:
+                if plddt_threshold is None:
                     conformation_info_all.append([pdb_path,rmsd,mean_plddt])
-                    ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_residues_idx_complement)
+                    ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_tail_residues_idx_complement)
                     ca_pdist_all.append(ca_pdist)
+                else:
+                    if mean_plddt >= plddt_threshold:
+                        conformation_info_all.append([pdb_path,rmsd,mean_plddt])
+                        ca_pdist = get_ca_pairwise_dist(pdb_path, residues_include_idx=af_disordered_tail_residues_idx_complement)
+                        ca_pdist_all.append(ca_pdist)
+
+    print("%d TOTAL CANDIDATE CONFORMATIONS" % len(conformation_info_all))
         
     ca_pdist_all = np.array(ca_pdist_all) 
     clustering_dist_matrix = create_clustering_dist_matrix(ca_pdist_all)
@@ -148,6 +172,13 @@ def gen_md_input(conformation_info_dir, initial_pred_path, num_clusters, num_md_
                 curr_md_structures_count += 1
                 print("Adding structure from cluster %d, index %d" % (cluster_num, cluster_idx_dict[cluster_num]-1)) 
 
+    #add initial pred to md_starting_structure_info_dict
+    cif_path = convert_pdb_to_mmcif(initial_pred_path, './cif_temp')
+    _, mean_plddt = get_bfactor(cif_path)
+    mean_plddt = round(mean_plddt,2)
+    os.remove(cif_path)
+    md_starting_structure_info_dict['initial'] = [[initial_pred_path, 0, mean_plddt]]
+     
     print(asterisk_line)
     print('MD STARTING STRUCTURE INFO:')
     for key, value in md_starting_structure_info_dict.items():
@@ -156,22 +187,60 @@ def gen_md_input(conformation_info_dir, initial_pred_path, num_clusters, num_md_
 
     structural_issues_info_summary = {} 
 
-    for cluster_num in md_starting_structure_info_dict:
-        for i in range(0,len(md_starting_structure_info_dict[cluster_num])):
-            pdb_source_path = md_starting_structure_info_dict[cluster_num][i][0]
-            plddt = md_starting_structure_info_dict[cluster_num][i][2]
-            output_fname = 'cluster_%d_idx_%d_plddt_%s' % (cluster_num, i, str(round(plddt)))
-            pdb_target_path = '%s/%s.pdb' % (md_structures_dir, output_fname)
+    md_starting_structure_info_dict_keys = list(md_starting_structure_info_dict.keys())
+    md_starting_structure_info_dict_keys.remove('initial')
+    md_starting_structure_info_dict_keys.insert(0,'initial')
+
+    unrefined_output_dir = '%s/unrefined_structures' % md_structures_dir
+    refined_output_dir = '%s/openmm_refined_structures' % md_structures_dir
+    os.makedirs(unrefined_output_dir, exist_ok=True)
+    os.makedirs(refined_output_dir, exist_ok=True)         
+
+
+    for cluster_num in md_starting_structure_info_dict_keys:
+
+        for i in range(0,len(md_starting_structure_info_dict[cluster_num])): 
+
+            if cluster_num != 'initial':
+                pdb_source_path = md_starting_structure_info_dict[cluster_num][i][0]
+                plddt = md_starting_structure_info_dict[cluster_num][i][2]
+                output_fname = 'cluster_%d_idx_%d_plddt_%s' % (cluster_num, i, str(round(plddt)))
+            else:
+                pdb_source_path = md_starting_structure_info_dict[cluster_num][i][0]
+                output_fname = 'initial_pred' 
+ 
+            pdb_target_path = '%s/%s.pdb' % (unrefined_output_dir, output_fname)
             shutil.copyfile(pdb_source_path, pdb_target_path)
-            
+    
+            if remove_disordered_tails:
+                cmd.reinitialize()
+                cmd.load(pdb_target_path, 'protein')
+                if len(af_disordered_tail_residues_idx) > 0:
+                    disordered_tail_residues_str = [str(res+1) for res in af_disordered_tail_residues_idx]
+                    residue_selection = '+'.join(disordered_tail_residues_str)
+                    cmd.remove(f"resi {residue_selection}")                
+                    print(f"removed residues: {disordered_tail_residues_str}")
+                    cmd.save(pdb_target_path, 'protein')                      
+                cmd.delete('all')
+               
             md_unrefined_structure_path = os.path.abspath(pdb_target_path)
             md_refined_structure_path = md_unrefined_structure_path.replace('.pdb', '_openmm_refinement.pdb')
+            md_refined_structure_path = md_refined_structure_path.replace('unrefined_structures','openmm_refined_structures')
             print('****************************************')
             print('****************************************')
             print("ATTEMPTING TO RESOLVE ANY STRUCTURAL ISSUES WITH %s" % md_unrefined_structure_path)
             print('****************************************')
             print('****************************************')
-            structural_issues_info = refine_multiple_rounds(md_unrefined_structure_path, md_refined_structure_path)
+            
+            if cluster_num == 'initial':
+                structural_issues_info = refine_multiple_rounds(md_unrefined_structure_path, md_refined_structure_path, add_disulfide_bonds=True, disulfide_bond_residues_idx=None)
+                disulfide_bond_residues_idx_derived_from_initial_pred = structural_issues_info['disulfide_bond_ids']
+            else:
+                if len(disulfide_bond_residues_idx_derived_from_initial_pred) > 0:
+                    structural_issues_info = refine_multiple_rounds(md_unrefined_structure_path, md_refined_structure_path, add_disulfide_bonds=True, disulfide_bond_residues_idx=disulfide_bond_residues_idx_derived_from_initial_pred)
+                else:
+                    structural_issues_info = refine_multiple_rounds(md_unrefined_structure_path, md_refined_structure_path, add_disulfide_bonds=False)
+
             md_starting_structure_info_dict[cluster_num][i].append(md_refined_structure_path)
             structural_issues_info_summary[md_refined_structure_path] = structural_issues_info
 
@@ -181,7 +250,7 @@ def gen_md_input(conformation_info_dir, initial_pred_path, num_clusters, num_md_
     print('saving %s' % output_file)
     with open(output_file, 'w') as json_file:
         json.dump(structural_issues_info_summary, json_file, sort_keys=True, indent=4)
-
+    
     md_starting_structure_info_fname = '%s/md_starting_structure_info.pkl' % md_structures_dir
     with open(md_starting_structure_info_fname, 'wb') as f:
         pickle.dump(md_starting_structure_info_dict, f)
@@ -209,11 +278,22 @@ if __name__ == "__main__":
         help="only clusters conformations whose plddt score is greater than this threshold (which is a value between 0-100)",
     )
     parser.add_argument(
+        "--remove_disordered_tails", action="store_true", default=False
+    )
+    parser.add_argument(
         "--overwrite", action="store_true", default=False
     )
+    parser.add_argument(
+        "--max_candidate_conformations", type=int, default=None, 
+        help="maximum number of conformations to use as candidate pool for selecting MD starting structures"
+    )
+    parser.add_argument('--af_disordered_tail_residues_idx_custom', nargs='+', default=None,
+        help='List of prespecified disordered tail residues indices to remove')
+
+
 
     args = parser.parse_args()
 
-    gen_md_input(args.conformation_info_dir, args.initial_pred_path, args.num_clusters, args.num_md_structures, args.plddt_threshold, args.overwrite)
+    gen_md_input(args.conformation_info_dir, args.initial_pred_path, args.num_clusters, args.num_md_structures, args.plddt_threshold, args.remove_disordered_tails, args.max_candidate_conformations, args.overwrite)
 
 

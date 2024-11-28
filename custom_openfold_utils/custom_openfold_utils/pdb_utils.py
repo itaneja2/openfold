@@ -43,7 +43,6 @@ import urllib.request
 
 from pymol import cmd
 from scipy.spatial.distance import pdist
-from prody import * 
 
 logger = logging.getLogger(__file__)
 logger.setLevel(level=logging.INFO)
@@ -52,7 +51,7 @@ current_file_path = os.path.abspath(__file__)
 current_dir = os.path.dirname(current_file_path)
 
 sifts_script = '%s/parse_sifts.py' % current_dir
-TMalign_path = '../TMalign/TMalign'
+
 
 ##misc. functions##
 
@@ -329,10 +328,9 @@ def get_ca_pairwise_dist(pdb_fname, residues_include_idx=None):
     # Extract CA coordinates
     ca_coordinates = []
     for chain in model:
-        for residue in chain:
+        for residue_idx,residue in enumerate(chain):
             if residue.has_id('CA'):
-                residue_idx = residue.id[1]-1
-                #print(residue_idx) 
+                residue_num = residue.id[1]
                 if residues_include_idx is None:
                     ca_atom = residue['CA']
                     ca_coordinates.append(list(ca_atom.get_coord()))
@@ -368,10 +366,11 @@ def get_bfactor(cif_path: str):
     return b_factor_ca, mean_bfactor_ca
 
 
-def get_af_disordered_domains(pdb_path: str):
+def get_af_disordered_domains(pdb_path: str, disordered_threshold=.31):
     """pdb_path assumes AF structure. for region to be considered disordered domain, must be >=3 residues in length
     """
     #plddt_threshold sourced from https://onlinelibrary.wiley.com/doi/10.1002/pro.4466
+    ###threshold of .31 corresponds to plddt of .69
 
     cif_path = convert_pdb_to_mmcif(pdb_path, './cif_temp')
     plddt_scores, mean_plddt = get_bfactor(cif_path)
@@ -379,7 +378,7 @@ def get_af_disordered_domains(pdb_path: str):
     af_seq = get_pdb_path_seq(pdb_path, None)
 
     af_disordered = 1-plddt_scores/100
-    af_disordered = af_disordered >= .31
+    af_disordered = af_disordered >= disordered_threshold
      
     af_disordered_domains_idx = []
     start_idx = 0
@@ -416,6 +415,38 @@ def get_af_disordered_residues(af_disordered_domains_idx: List[List[int]]):
             af_disordered_residues_idx.append(j)
     return af_disordered_residues_idx
 
+def get_af_disordered_tail_residues(af_disordered_domains_idx: List[List[int]], seq_len: int):
+    
+    af_disordered_tail_residues_idx = []
+    for i in range(0,len(af_disordered_domains_idx)):
+        d = af_disordered_domains_idx[i]
+        af_start_idx = d[0]
+        af_end_idx = d[1]
+        if af_start_idx == 0 or af_end_idx == seq_len-1: 
+            for j in range(af_start_idx,af_end_idx+1):
+                af_disordered_tail_residues_idx.append(j)
+    return af_disordered_tail_residues_idx
+
+
+def get_af_nterm_disorder_tail_idx(af_disordered_domains_idx: List[List[int]]):
+    
+    if len(af_disordered_domains_idx) > 0:
+        d = af_disordered_domains_idx[0]
+        af_start_idx = d[0]
+        af_end_idx = d[1]
+        if af_start_idx == 0:
+            return af_start_idx,af_end_idx
+    return None, None
+
+def get_af_cterm_disorder_tail_idx(af_disordered_domains_idx: List[List[int]], seq_len: int):
+    
+    if len(af_disordered_domains_idx) > 0:
+        d = af_disordered_domains_idx[-1]
+        af_start_idx = d[0]
+        af_end_idx = d[1]
+        if af_end_idx == seq_len-1:
+            return af_start_idx,af_end_idx
+    return None, None
 
 def get_pdb_disordered_residues(af_seq: str, pdb_seq: str, af_disordered_domains_idx: List[List[int]]):
 
@@ -507,21 +538,23 @@ def align_and_get_rmsd(pdb1_path, pdb2_path, pdb1_chain=None, pdb2_chain=None):
     return rmsd 
 
 
-def tmalign_wrapper(pdb1_path, pdb2_path):
+def tmalign_wrapper(pdb1_path, pdb2_path, TMalign_path):
     
-    p = subprocess.Popen(
-        f'{TMalign_path} {pdb1_path} {pdb2_path} | grep -E "RMSD|TM-score=" ',
-        stdout=subprocess.PIPE,
-        shell=True,
-    )
-    
-    output, __ = p.communicate()
-    tm_score = float(str(output)[:-3].split("TM-score=")[-1].split("(if")[0])
+    if TMalign_path is not None:
+        p = subprocess.Popen(
+            f'{TMalign_path} {pdb1_path} {pdb2_path} | grep -E "RMSD|TM-score=" ',
+            stdout=subprocess.PIPE,
+            shell=True,
+        ) 
+        output, __ = p.communicate()
+        tm_score = float(str(output)[:-3].split("TM-score=")[-1].split("(if")[0])
+    else:
+        tm_score = None 
 
     return tm_score
 
 
-def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_source: str, pdb2_source: str, pdb1_path: str, pdb2_path: str, save_dir: str):
+def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_source: str, pdb2_source: str, pdb1_path: str, pdb2_path: str, save_dir: str, TMalign_path: str = None, clean: bool = True, pdb1_chain_id: str = 'A', pdb2_chain_id: str = 'A'):
 
     """
     Args:
@@ -569,7 +602,9 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
         pdb1_path = save_pdb_chain(pdb1_path, pdb1_chain_path, pdb1_chain) 
     else:
         if (pdb1_path is not None) and (pdb1_source == 'pdb'):
-            shutil.copyfile(pdb1_path, '%s/%s.pdb' % (pdb_ref_struc_folder,pdb1_full_id))
+            destination_path = '%s/%s.pdb' % (pdb_ref_struc_folder,pdb1_full_id)
+            if pdb1_path != destination_path:
+                shutil.copyfile(pdb1_path, destination_path)
 
     if (pdb2_path is None) and (pdb2_source == 'pdb'):
         pdb2_path = fetch_pdb(pdb2_full_id, pdb_ref_struc_folder) 
@@ -577,7 +612,10 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
         pdb2_path = save_pdb_chain(pdb2_path, pdb2_chain_path, pdb2_chain) 
     else:
         if (pdb2_path is not None) and (pdb2_source == 'pdb'):
-            shutil.copyfile(pdb2_path, '%s/%s.pdb' % (pdb_ref_struc_folder,pdb2_full_id))
+            destination_path = '%s/%s.pdb' % (pdb_ref_struc_folder,pdb2_full_id)
+            if pdb2_path != destination_path:
+                shutil.copyfile(pdb2_path, destination_path)
+
 
     pdb1_model_name = get_model_name(pdb1_path)
     pdb2_model_name = get_model_name(pdb2_path)
@@ -590,31 +628,30 @@ def superimpose_wrapper_monomer(pdb1_full_id: str, pdb2_full_id: str, pdb1_sourc
     pdb1_input_path = pdb1_path
     pdb2_input_path = pdb2_path 
 
-    pdb1_path_clean = pdb1_path.replace('.pdb', '_clean.pdb') 
-    pdb2_path_clean = pdb2_path.replace('.pdb', '_clean.pdb')
-
-    if (pdb1_path is not None) and (pdb1_source == 'pdb'): 
-        logger.info('Cleaning pdb file %s' % pdb1_path)
-        clean_pdb(pdb1_path_clean, pdb1_str)
-        pdb1_input_path = pdb1_path_clean
-    if (pdb2_path is not None) and (pdb2_source == 'pdb'):
-        logger.info('Cleaning pdb file %s' % pdb2_path)
-        clean_pdb(pdb2_path_clean, pdb2_str)
-        pdb2_input_path = pdb2_path_clean
+    if clean:
+        pdb1_path_clean = pdb1_path.replace('.pdb', '_clean.pdb') 
+        pdb2_path_clean = pdb2_path.replace('.pdb', '_clean.pdb')
+        if (pdb1_path is not None) and (pdb1_source == 'pdb'): 
+            logger.info('Cleaning pdb file %s' % pdb1_path)
+            clean_pdb(pdb1_path_clean, pdb1_str)
+            pdb1_input_path = pdb1_path_clean
+        if (pdb2_path is not None) and (pdb2_source == 'pdb'):
+            logger.info('Cleaning pdb file %s' % pdb2_path)
+            clean_pdb(pdb2_path_clean, pdb2_str)
+            pdb2_input_path = pdb2_path_clean
     
     pdb2_output_path = '%s/%s.pdb' % (pdb_superimposed_folder, pdb2_model_name)
     shutil.copyfile(pdb2_input_path, pdb2_output_path)
 
-    #pdb1_chain and pdb2_chain are set to A because
-    #clean_pdb replaces chain_id with A 
-    rmsd = align_and_get_rmsd(pdb1_input_path, pdb2_output_path, 'A', 'A')
-    tm_score = tmalign_wrapper(pdb1_input_path, pdb2_output_path)
+    #pdb1_chain and pdb2_chain are by default set to A because clean_pdb replaces chain_id with A 
+    rmsd = align_and_get_rmsd(pdb1_input_path, pdb2_output_path, pdb1_chain_id, pdb2_chain_id)
+    tm_score = tmalign_wrapper(pdb1_input_path, pdb2_output_path, TMalign_path)
     logger.info('SAVING ALIGNED PDB AT %s' % pdb2_output_path)
  
     return rmsd, tm_score, pdb1_input_path, pdb2_output_path
 
 
-def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, pdb2_source: str, pdb1_path: str, pdb2_path: str, save_dir: str):
+def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, pdb2_source: str, pdb1_path: str, pdb2_path: str, save_dir: str, clean: bool = True):
 
     """
     Args:
@@ -664,17 +701,17 @@ def superimpose_wrapper_multimer(pdb1_id: str, pdb2_id: str, pdb1_source: str, p
     pdb1_input_path = pdb1_path
     pdb2_input_path = pdb2_path 
 
-    pdb1_path_clean = pdb1_path.replace('.pdb', '_clean.pdb') 
-    pdb2_path_clean = pdb2_path.replace('.pdb', '_clean.pdb')
-
-    if (pdb1_path is not None) and (pdb1_source == 'pdb'): 
-        logger.info('Cleaning pdb file %s' % pdb1_path)
-        clean_pdb(pdb1_path_clean, pdb1_str)
-        pdb1_input_path = pdb1_path_clean
-    if (pdb2_path is not None) and (pdb2_source == 'pdb'):
-        logger.info('Cleaning pdb file %s' % pdb2_path)
-        clean_pdb(pdb2_path_clean, pdb2_str)
-        pdb2_input_path = pdb2_path_clean
+    if clean:
+        pdb1_path_clean = pdb1_path.replace('.pdb', '_clean.pdb') 
+        pdb2_path_clean = pdb2_path.replace('.pdb', '_clean.pdb')
+        if (pdb1_path is not None) and (pdb1_source == 'pdb'): 
+            logger.info('Cleaning pdb file %s' % pdb1_path)
+            clean_pdb(pdb1_path_clean, pdb1_str)
+            pdb1_input_path = pdb1_path_clean
+        if (pdb2_path is not None) and (pdb2_source == 'pdb'):
+            logger.info('Cleaning pdb file %s' % pdb2_path)
+            clean_pdb(pdb2_path_clean, pdb2_str)
+            pdb2_input_path = pdb2_path_clean
  
     pdb2_output_path = '%s/%s.pdb' % (pdb_superimposed_folder, pdb2_model_name)
     shutil.copyfile(pdb2_input_path, pdb2_output_path)
@@ -699,12 +736,6 @@ def save_pdb_chain(pdb_input_path, pdb_output_path, chain):
         cmd.save(pdb_output_path, s)
         cmd.delete('all')
     return pdb_output_path
-
-def save_ca_coords(pdb_input_path, ca_coords, pdb_output_path):
-    ca_atoms = parsePDB(pdb_input_path, subset='ca')
-    ca_atoms.setCoords(ca_coords)
-    print('saving %s' % pdb_output_path)
-    writePDB(pdb_output_path, ca_atoms)
 
 def _get_pdb_string(topology: openmm_app.Topology, positions: unit.Quantity):
     """Returns a pdb string provided OpenMM topology and positions."""
@@ -812,3 +843,10 @@ def assemble_multiple_pdbs_to_single_file(pdb_path_list, output_path_wo_extensio
     os.remove(pdb_output_path)   
     return cif_output_path 
 
+
+#def save_ca_coords(pdb_input_path, ca_coords, pdb_output_path):
+   #from prody import *
+   #ca_atoms = parsePDB(pdb_input_path, subset='ca')
+   #ca_atoms.setCoords(ca_coords)
+   #print('saving %s' % pdb_output_path)
+   #writePDB(pdb_output_path, ca_atoms)
