@@ -128,7 +128,7 @@ def plot_dendrogram(
     rmsd_info_path,
     output_dir, 
     threshold,
-    tlag,
+    lag_steps,
     cut_params,
     hide_labels,
 ):
@@ -344,7 +344,7 @@ def plot_dendrogram(
         n_macrostates=n_macrostates,
         pops=pops,
         traj=traj,
-        tlag=tlag,
+        lag_steps=lag_steps,
     )
 
     print('dyn_corr')
@@ -976,7 +976,7 @@ def mpp_plus_dyn_cor(
     n_macrostates,
     pops,
     traj,
-    tlag,
+    lag_steps,
 ):
     """Apply MPP+ step2: Dynamically correct minor branches."""
     # fix dynamically missassigned single-state branches
@@ -1007,7 +1007,7 @@ def mpp_plus_dyn_cor(
     while len(mstates) > n_macrostates:
         tmat, mstates = mh.msm.estimate_markov_model(
             mh.shift_data(traj, microstates, dyn_corr_macrostates),
-            lagtime=tlag,
+            lagtime=lag_steps,
         )
 
         # sort new states by increasing metastability
@@ -1051,7 +1051,7 @@ if __name__ == "__main__":
         "--color_threshold", type=float, default=1.0
     )
     parser.add_argument(
-        "--tlag", type=int, default=None, help='Lagtime in frames'
+        "--lag_steps", type=int, default=None, help='Lagtime in frames'
     )
     parser.add_argument(
         "--cut_params", type=float, nargs=2
@@ -1062,4 +1062,4 @@ if __name__ == "__main__":
     
     args = parser.parse_args()
 
-    plot_dendrogram(args.linkage_matrix_path, args.microstate_traj_path, args.rmsd_info_path, args.output_dir, args.color_threshold, args.tlag, args.cut_params, args.hide_labels)
+    plot_dendrogram(args.linkage_matrix_path, args.microstate_traj_path, args.rmsd_info_path, args.output_dir, args.color_threshold, args.lag_steps, args.cut_params, args.hide_labels)
